@@ -1,0 +1,86 @@
+name: Auth and Onboarding E2E
+
+on:
+  pull_request:
+    paths: [backend/**, frontend/**, .github/workflows/auth-onboarding-e2e.yml]
+  push:
+    branches: [main]
+    paths: [backend/**, frontend/**, .github/workflows/auth-onboarding-e2e.yml]
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env: { POSTGRES_DB: orvio, POSTGRES_USER: orvio, POSTGRES_PASSWORD: orvio }
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U orvio -d orvio" --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm, cache-dependency-path: frontend/pnpm-lock.yaml }
+      - run: pnpm install --frozen-lockfile
+        working-directory: backend
+      - run: pnpm install --frozen-lockfile
+        working-directory: frontend
+      - run: pnpm prisma:generate && pnpm prisma:migrate:deploy && pnpm prisma:seed
+        working-directory: backend
+        env: { DATABASE_URL: postgresql://orvio:orvio@127.0.0.1:5432/orvio?schema=public }
+      - run: pnpm build
+        working-directory: backend
+      - run: pnpm build
+        working-directory: frontend
+        env: { VITE_API_BASE_URL: http://127.0.0.1:3000/api/v1 }
+      - run: pnpm exec playwright install --with-deps chromium
+        working-directory: frontend
+      - run: pnpm e2e:smoke
+        working-directory: frontend
+        env: { CI: true, DATABASE_URL: postgresql://orvio:orvio@127.0.0.1:5432/orvio?schema=public }
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with: { name: playwright-smoke-artifacts, path: frontend/test-results }
+
+  full:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env: { POSTGRES_DB: orvio, POSTGRES_USER: orvio, POSTGRES_PASSWORD: orvio }
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U orvio -d orvio" --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm, cache-dependency-path: frontend/pnpm-lock.yaml }
+      - run: pnpm install --frozen-lockfile
+        working-directory: backend
+      - run: pnpm install --frozen-lockfile
+        working-directory: frontend
+      - run: pnpm prisma:generate && pnpm prisma:migrate:deploy && pnpm prisma:seed
+        working-directory: backend
+        env: { DATABASE_URL: postgresql://orvio:orvio@127.0.0.1:5432/orvio?schema=public }
+      - run: pnpm build
+        working-directory: backend
+      - run: pnpm build
+        working-directory: frontend
+        env: { VITE_API_BASE_URL: http://127.0.0.1:3000/api/v1 }
+      - run: pnpm exec playwright install --with-deps chromium
+        working-directory: frontend
+      - run: pnpm e2e
+        working-directory: frontend
+        env: { CI: true, DATABASE_URL: postgresql://orvio:orvio@127.0.0.1:5432/orvio?schema=public }
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with: { name: playwright-full-artifacts, path: frontend/test-results }

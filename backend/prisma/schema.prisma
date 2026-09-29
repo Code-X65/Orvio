@@ -1,0 +1,404 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum UserStatus {
+  ACTIVE    @map("active")
+  SUSPENDED @map("suspended")
+  PENDING   @map("pending")
+  DELETED   @map("deleted")
+
+  @@map("user_status")
+}
+
+enum AuthTokenType {
+  EMAIL_VERIFICATION @map("email_verification")
+  PASSWORD_RESET     @map("password_reset")
+
+  @@map("auth_token_type")
+}
+
+enum OAuthProvider {
+  GOOGLE   @map("google")
+  FACEBOOK @map("facebook")
+
+  @@map("oauth_provider")
+}
+
+enum OAuthPurpose {
+  SIGN_IN @map("sign_in")
+  LINK    @map("link")
+
+  @@map("oauth_purpose")
+}
+
+enum OAuthFlow {
+  REDIRECT @map("redirect")
+  POPUP    @map("popup")
+
+  @@map("oauth_flow")
+}
+
+enum OnboardingStage {
+  PROFILE            @map("profile")
+  EMAIL_VERIFICATION @map("email_verification")
+  PHONE_VERIFICATION @map("phone_verification")
+  COMPLETE           @map("complete")
+
+  @@map("onboarding_stage")
+}
+
+enum OrganizationStatus {
+  ACTIVE          @map("active")
+  PENDING_PAYMENT @map("pending_payment")
+  SUSPENDED       @map("suspended")
+  DELETED         @map("deleted")
+
+  @@map("organization_status")
+}
+
+enum MembershipRole {
+  OWNER  @map("owner")
+  MEMBER @map("member")
+
+  @@map("membership_role")
+}
+
+enum MembershipStatus {
+  ACTIVE  @map("active")
+  INVITED @map("invited")
+
+  @@map("membership_status")
+}
+
+enum SubscriptionPlan {
+  INVENTORY @map("inventory")
+  GYM       @map("gym")
+  BUNDLE    @map("bundle")
+  TRIAL     @map("trial")
+
+  @@map("subscription_plan")
+}
+
+enum SubscriptionStatus {
+  PENDING   @map("pending")
+  ACTIVE    @map("active")
+  PAST_DUE  @map("past_due")
+  CANCELLED @map("cancelled")
+  EXPIRED   @map("expired")
+
+  @@map("subscription_status")
+}
+
+enum OrvioApp {
+  INVENTORY @map("inventory")
+  GYM       @map("gym")
+
+  @@map("orvio_app")
+}
+
+enum LegalDocumentType {
+  TERMS   @map("terms")
+  PRIVACY @map("privacy")
+
+  @@map("legal_document_type")
+}
+
+model User {
+  id           String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email        String           @unique
+  firstName    String?          @map("first_name")
+  lastName     String?          @map("last_name")
+  phone        String?          @map("phone_e164") @unique
+  passwordHash String?          @map("password_hash")
+  emailVerifiedAt DateTime?     @map("email_verified_at") @db.Timestamptz(6)
+  phoneVerifiedAt DateTime?     @map("phone_verified_at") @db.Timestamptz(6)
+  passwordSetAt DateTime?       @map("password_set_at") @db.Timestamptz(6)
+  onboardingCompletedAt DateTime? @map("onboarding_completed_at") @db.Timestamptz(6)
+  status       UserStatus       @default(ACTIVE)
+  mfaEnabled   Boolean          @default(false) @map("mfa_enabled")
+  marketingConsent Boolean      @default(false) @map("marketing_consent")
+  signupSource String?          @map("signup_source")
+  createdAt    DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt    DateTime?        @map("deleted_at") @db.Timestamptz(6)
+  sessions     AuthSession[]
+  authTokens   AuthToken[]
+  auditLogs    AuditLog[]
+  oauthIdentities OAuthIdentity[]
+  oauthStates     OAuthState[]
+  onboarding      UserOnboarding?
+  legalAcceptances LegalAcceptance[]
+  phoneVerifications PhoneVerification[]
+  onboardingResponse OnboardingResponse?
+  memberships       OrganizationMembership[]
+  invitations       OrganizationInvitation[] @relation("InvitationRecipient")
+
+  @@index([email, status])
+  @@map("users")
+}
+
+model UserOnboarding {
+  userId              String          @id @map("user_id") @db.Uuid
+  stage               OnboardingStage @default(PROFILE)
+  startedAt           DateTime        @default(now()) @map("started_at") @db.Timestamptz(6)
+  emailVerifiedAt     DateTime?       @map("email_verified_at") @db.Timestamptz(6)
+  phoneVerifiedAt     DateTime?       @map("phone_verified_at") @db.Timestamptz(6)
+  completedAt         DateTime?       @map("completed_at") @db.Timestamptz(6)
+  updatedAt           DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
+  user                User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([stage])
+  @@map("user_onboarding")
+}
+
+model OnboardingResponse {
+  userId                 String   @id @map("user_id") @db.Uuid
+  answersJson            Json?    @map("answers_json")
+  timestamp              DateTime @updatedAt @map("timestamp") @db.Timestamptz(6)
+  completed              Boolean  @default(false)
+  skippedSessionFamilyId String?  @map("skipped_session_family_id") @db.Uuid
+  user                   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([completed])
+  @@map("onboarding_responses")
+}
+
+model LegalDocument {
+  id        String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  type      LegalDocumentType
+  version   String
+  title     String
+  content   String
+  isCurrent Boolean           @default(false) @map("is_current")
+  createdAt DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  acceptances LegalAcceptance[]
+
+  @@unique([type, version])
+  @@index([type, isCurrent])
+  @@map("legal_documents")
+}
+
+model LegalAcceptance {
+  id          String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId      String        @map("user_id") @db.Uuid
+  documentId  String        @map("document_id") @db.Uuid
+  acceptedAt  DateTime      @default(now()) @map("accepted_at") @db.Timestamptz(6)
+  ip          String?
+  userAgent   String?       @map("user_agent")
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  document    LegalDocument @relation(fields: [documentId], references: [id], onDelete: Restrict)
+
+  @@unique([userId, documentId])
+  @@index([userId, acceptedAt])
+  @@map("legal_acceptances")
+}
+
+model PhoneVerification {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId      String   @map("user_id") @db.Uuid
+  phone       String
+  codeHash    String   @map("code_hash")
+  expiresAt   DateTime @map("expires_at") @db.Timestamptz(6)
+  attempts    Int      @default(0)
+  resendCount Int      @default(0) @map("resend_count")
+  usedAt      DateTime? @map("used_at") @db.Timestamptz(6)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, phone, expiresAt])
+  @@map("phone_verifications")
+}
+
+model RateLimitBucket {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  action      String
+  subjectHash String   @map("subject_hash")
+  windowStart DateTime @map("window_start") @db.Timestamptz(6)
+  count       Int      @default(0)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@unique([action, subjectHash, windowStart])
+  @@index([windowStart])
+  @@map("rate_limit_buckets")
+}
+
+model OAuthIdentity {
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId          String        @map("user_id") @db.Uuid
+  provider        OAuthProvider
+  providerSubject String        @map("provider_subject")
+  email           String
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerSubject])
+  @@unique([userId, provider])
+  @@index([userId])
+  @@map("oauth_identities")
+}
+
+model OAuthState {
+  id        String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tokenHash String        @unique @map("token_hash")
+  provider  OAuthProvider
+  purpose   OAuthPurpose
+  userId    String?       @map("user_id") @db.Uuid
+  nonce     String?
+  flow      OAuthFlow     @default(REDIRECT)
+  rememberMe Boolean       @default(true) @map("remember_me")
+  expiresAt DateTime      @map("expires_at") @db.Timestamptz(6)
+  usedAt    DateTime?     @map("used_at") @db.Timestamptz(6)
+  createdAt DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  user      User?         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@map("oauth_states")
+}
+
+model AuthSession {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId            String    @map("user_id") @db.Uuid
+  familyId          String    @default(dbgenerated("gen_random_uuid()")) @map("family_id") @db.Uuid
+  tokenHash         String    @unique @map("token_hash")
+  parentTokenHash   String?   @map("parent_token_hash")
+  expiresAt         DateTime  @map("expires_at") @db.Timestamptz(6)
+  absoluteExpiresAt DateTime  @default(now()) @map("absolute_expires_at") @db.Timestamptz(6)
+  revokedAt         DateTime? @map("revoked_at") @db.Timestamptz(6)
+  rotatedAt         DateTime? @map("rotated_at") @db.Timestamptz(6)
+  rememberMe        Boolean   @default(true) @map("remember_me")
+  ip                String?
+  userAgent         String?   @map("user_agent")
+  lastUsedAt        DateTime  @default(now()) @map("last_used_at") @db.Timestamptz(6)
+  lastActivityAt    DateTime  @default(now()) @map("last_activity_at") @db.Timestamptz(6)
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  activeOrgId       String?   @map("active_org_id") @db.Uuid
+  activeOrganization Organization? @relation(fields: [activeOrgId], references: [id], onDelete: SetNull)
+
+  @@index([userId, expiresAt])
+  @@index([familyId])
+  @@index([parentTokenHash])
+  @@map("auth_sessions")
+}
+
+model Organization {
+  id          String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name        String
+  slug        String             @unique
+  status      OrganizationStatus @default(PENDING_PAYMENT)
+  defaultApp  OrvioApp           @default(INVENTORY) @map("default_app")
+  createdAt   DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt   DateTime?          @map("deleted_at") @db.Timestamptz(6)
+  memberships OrganizationMembership[]
+  invitations OrganizationInvitation[]
+  subscriptions OrganizationSubscription[]
+  entitlements OrganizationEntitlement[]
+  sessions    AuthSession[]
+
+  @@index([status])
+  @@map("organizations")
+}
+
+model OrganizationMembership {
+  id          String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId String         @map("org_id") @db.Uuid
+  userId      String           @map("user_id") @db.Uuid
+  role        MembershipRole   @default(MEMBER)
+  status      MembershipStatus @default(ACTIVE)
+  invitedAt   DateTime?        @map("invited_at") @db.Timestamptz(6)
+  acceptedAt  DateTime?        @map("accepted_at") @db.Timestamptz(6)
+  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId])
+  @@index([userId, status])
+  @@map("user_memberships")
+}
+
+model OrganizationInvitation {
+  id             String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId String       @map("org_id") @db.Uuid
+  email          String
+  tokenHash      String       @unique @map("token_hash")
+  expiresAt      DateTime     @map("expires_at") @db.Timestamptz(6)
+  acceptedAt     DateTime?    @map("accepted_at") @db.Timestamptz(6)
+  invitedByUserId String      @map("invited_by_user_id") @db.Uuid
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invitedBy      User         @relation("InvitationRecipient", fields: [invitedByUserId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, email])
+  @@map("organization_invitations")
+}
+
+model OrganizationSubscription {
+  id               String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId   String             @map("org_id") @db.Uuid
+  plan             SubscriptionPlan
+  status           SubscriptionStatus @default(PENDING)
+  providerReference String?           @unique @map("provider_reference")
+  providerPlanCode String?            @map("provider_plan_code")
+  currentPeriodEnd DateTime?          @map("current_period_end") @db.Timestamptz(6)
+  createdAt        DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
+  organization     Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, status])
+  @@map("organization_subscriptions")
+}
+
+model OrganizationEntitlement {
+  id             String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId String       @map("org_id") @db.Uuid
+  app            OrvioApp
+  enabled        Boolean      @default(true)
+  expiresAt      DateTime?    @map("expires_at") @db.Timestamptz(6)
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, app])
+  @@index([organizationId, enabled, expiresAt])
+  @@map("organization_entitlements")
+}
+
+model AuthToken {
+  id        String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String        @map("user_id") @db.Uuid
+  type      AuthTokenType
+  tokenHash String        @unique @map("token_hash")
+  expiresAt DateTime      @map("expires_at") @db.Timestamptz(6)
+  usedAt    DateTime?     @map("used_at") @db.Timestamptz(6)
+  createdAt DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type, expiresAt])
+  @@map("auth_tokens")
+}
+
+model AuditLog {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String?  @map("user_id") @db.Uuid
+  event     String
+  ip        String?
+  userAgent String?  @map("user_agent")
+  metadata  Json?
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([event, createdAt])
+  @@map("audit_logs")
+}

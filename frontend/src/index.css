@@ -1,0 +1,53 @@
+@import url('https://fonts.googleapis.com/css2?family=Caveat:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", "Odoo Unicode Support Noto", sans-serif;
+  --font-display: "Caveat", cursive;
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+}
+
+:root {
+  --background: 0 0% 0%;
+  --foreground: 210 40% 98%;
+  --card: 330 20% 4%;
+  --card-foreground: 210 40% 98%;
+  --primary: 312 20% 37%;
+  --primary-foreground: 210 40% 98%;
+  --secondary: 330 18% 10%;
+  --secondary-foreground: 210 40% 98%;
+  --muted: 330 12% 13%;
+  --muted-foreground: 215 20% 65%;
+  --destructive: 0 72% 51%;
+  --border: 0 0% 100% / 10%;
+  --input: 330 15% 7%;
+  --ring: 312 22% 43%;
+}
+
+* { border-color: hsl(var(--border)); }
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-family: var(--font-sans);
+}
+
+h1, h2, h3, h4, h5, h6 { font-family: var(--font-display); }
+
+:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }
