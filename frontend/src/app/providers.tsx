@@ -1,13 +1,36 @@
+import * as React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import type { PropsWithChildren } from 'react';
+import { Toaster } from 'sonner';
+import { useAuthStore } from '../stores/auth-store';
 
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: { retry: (count, error) => !(error instanceof Error && 'status' in error && (error as { status: number }).status < 500) && count < 2, staleTime: 30_000 },
-    mutations: { retry: false },
-  },
-});
+interface ProvidersProps {
+  children: React.ReactNode;
+}
 
-export function AppProviders({ children }: PropsWithChildren) {
-  return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+export function Providers({ children }: ProvidersProps) {
+  const [queryClient] = React.useState(
+    () =>
+      new QueryClient({
+        defaultOptions: {
+          queries: {
+            staleTime: 60 * 1000,
+            retry: 1,
+            refetchOnWindowFocus: false,
+          },
+        },
+      })
+  );
+
+  const hydrate = useAuthStore((state) => state.hydrate);
+
+  React.useEffect(() => {
+    hydrate();
+  }, [hydrate]);
+
+  return (
+    <QueryClientProvider client={queryClient}>
+      {children}
+      <Toaster position="top-right" richColors closeButton />
+    </QueryClientProvider>
+  );
 }

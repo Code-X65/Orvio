@@ -1,19 +1,34 @@
-import 'dotenv/config';
-
+import { env } from './config/env.js';
 import { buildApp } from './app.js';
-import { parseEnvironment } from './config/env.js';
-import { createCapturedMailSender, createCapturedSmsSender } from './testing/delivery-capture.js';
+import { prisma } from './infrastructure/database/client.js';
 
-const env = parseEnvironment();
-const app = await buildApp({
-  env,
-  ...(env.E2E_TEST_MODE ? { mailer: createCapturedMailSender(env), sms: createCapturedSmsSender() } : {}),
-});
+const app = buildApp();
 
-try {
-  await app.listen({ host: env.HOST, port: env.PORT });
-} catch (error) {
-  app.log.fatal(error, 'Unable to start server');
-  process.exitCode = 1;
-  await app.close();
+async function start() {
+  try {
+    await app.listen({ host: env.HOST, port: env.PORT });
+    app.log.info(`🚀 Orvio Hub API running on http://${env.HOST}:${env.PORT}`);
+    app.log.info(`📚 Swagger OpenAPI documentation available at http://${env.HOST}:${env.PORT}/docs`);
+  } catch (error) {
+    app.log.error(error);
+    process.exit(1);
+  }
 }
+
+async function shutdown(signal: string) {
+  app.log.info(`Received ${signal}, gracefully shutting down...`);
+  try {
+    await app.close();
+    await prisma.$disconnect();
+    app.log.info('Server and database pool shut down cleanly.');
+    process.exit(0);
+  } catch (err) {
+    app.log.error(err, 'Error during shutdown');
+    process.exit(1);
+  }
+}
+
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+
+start();

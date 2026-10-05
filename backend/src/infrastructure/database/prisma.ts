@@ -1,11 +1,1 @@
-import { PrismaClient } from '@prisma/client';
-
-export type DatabaseClient = PrismaClient;
-
-export function createDatabaseClient(databaseUrl: string): DatabaseClient {
-  return new PrismaClient({
-    datasources: {
-      db: { url: databaseUrl },
-    },
-  });
-}
+export { prisma, type DatabaseClient } from './client.js';

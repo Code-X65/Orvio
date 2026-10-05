@@ -1,0 +1,56 @@
+{
+  "normalizations": [
+    { "input": "Café 101", "expected": "cafe101" },
+    { "input": "Lekki-Fitness & Gym!", "expected": "lekkifitnessgym" },
+    { "input": "  Apex Global Store  ", "expected": "apexglobalstore" },
+    { "input": "A very long organization name that exceeds thirty characters by a lot", "expected": "averylongorganizationnamethate" },
+    { "input": "Élégant Boutique 2026", "expected": "elegantboutique2026" }
+  ],
+  "validFormats": [
+    "abc",
+    "prime123",
+    "fithub",
+    "lekkistore99",
+    "apexco"
+  ],
+  "invalidFormats": [
+    { "input": "", "reason": "TOO_SHORT" },
+    { "input": "ab", "reason": "TOO_SHORT" },
+    { "input": "super-long-subdomain-that-is-way-longer-than-thirty-characters", "reason": "TOO_LONG" },
+    { "input": "lekki-fitness", "reason": "INVALID_CHARACTERS" },
+    { "input": "store_123", "reason": "INVALID_CHARACTERS" },
+    { "input": "store.hub", "reason": "INVALID_CHARACTERS" },
+    { "input": "StoreCapital", "reason": "INVALID_CHARACTERS" }
+  ],
+  "reserved": [
+    "admin",
+    "app",
+    "api",
+    "auth",
+    "accounts",
+    "billing",
+    "mail",
+    "status",
+    "portal",
+    "help",
+    "support",
+    "dashboard",
+    "root",
+    "staging",
+    "dev",
+    "test",
+    "demo",
+    "internal",
+    "cdn",
+    "static",
+    "assets",
+    "webhook",
+    "orvio",
+    "hub",
+    "login",
+    "signup",
+    "register",
+    "docs",
+    "blog"
+  ]
+}

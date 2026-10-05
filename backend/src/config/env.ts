@@ -1,76 +1,70 @@
+import 'dotenv/config';
 import { z } from 'zod';
 
-const environmentSchema = z.object({
-  NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
-  HOST: z.string().min(1).default('0.0.0.0'),
-  PORT: z.coerce.number().int().min(1).max(65_535).default(3000),
-  DATABASE_URL: z.string().url(),
-  CORS_ORIGINS: z
-    .string()
-    .min(1)
-    .transform((value) => value.split(',').map((origin) => origin.trim()).filter(Boolean))
-    .pipe(z.array(z.string().url()).min(1)),
-  RATE_LIMIT_MAX: z.coerce.number().int().positive().default(100),
-  RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
-  TRUST_PROXY_HOPS: z.coerce.number().int().min(0).optional(),
-  LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
-  JWT_SECRET: z.string().min(32),
-  JWT_SECRET_PREVIOUS: z.string().min(32).optional(),
-  EMAIL_LINK_SECRET: z.string().min(32).optional(),
-  COOKIE_SECURE: z.coerce.boolean().optional(),
-  FRONTEND_APP_URL: z.string().url(),
-  BREVO_API_KEY: z.string().min(1),
-  BREVO_SENDER_EMAIL: z.string().email(),
-  BREVO_SENDER_NAME: z.string().min(1).default('Orvio'),
-  AUTH_RATE_LIMIT_LOGIN_MAX: z.coerce.number().int().positive().default(5),
-  AUTH_RATE_LIMIT_LOGIN_WINDOW_MS: z.coerce.number().int().positive().default(900_000),
-  AUTH_RATE_LIMIT_LOGIN_IP_MAX: z.coerce.number().int().positive().default(30),
-  AUTH_RATE_LIMIT_REGISTRATION_MAX: z.coerce.number().int().positive().default(5),
-  AUTH_RATE_LIMIT_REGISTRATION_WINDOW_MS: z.coerce.number().int().positive().default(900_000),
-  AUTH_RATE_LIMIT_REGISTRATION_IP_MAX: z.coerce.number().int().positive().default(30),
-  AUTH_RATE_LIMIT_OTP_MAX: z.coerce.number().int().positive().default(3),
-  AUTH_RATE_LIMIT_OTP_WINDOW_MS: z.coerce.number().int().positive().default(600_000),
-  AUTH_RATE_LIMIT_PASSWORD_MAX: z.coerce.number().int().positive().default(5),
-  AUTH_RATE_LIMIT_PASSWORD_WINDOW_MS: z.coerce.number().int().positive().default(900_000),
-  AUTH_RATE_LIMIT_PASSWORD_IP_MAX: z.coerce.number().int().positive().default(30),
-  AUTH_SESSION_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
-  AUDIT_LOG_RETENTION_DAYS: z.coerce.number().int().min(1825).default(1825),
-  AUTH_CLEANUP_INTERVAL_MS: z.coerce.number().int().positive().default(3_600_000),
-  E2E_TEST_MODE: z.coerce.boolean().default(false),
-  E2E_CAPTURE_SECRET: z.string().min(32).optional(),
-  PUBLIC_API_URL: z.string().url().default('http://localhost:3000'),
-  ORVIO_ROOT_DOMAIN: z.string().min(3).default('orvio.com'),
-  PAYSTACK_SECRET_KEY: z.string().min(1).optional(),
-  PAYSTACK_INVENTORY_PLAN_CODE: z.string().min(1).optional(),
-  PAYSTACK_GYM_PLAN_CODE: z.string().min(1).optional(),
-  PAYSTACK_BUNDLE_PLAN_CODE: z.string().min(1).optional(),
-  GOOGLE_CLIENT_ID: z.string().min(1).optional(),
-  GOOGLE_CLIENT_SECRET: z.string().min(1).optional(),
-  FACEBOOK_APP_ID: z.string().min(1).optional(),
-  FACEBOOK_APP_SECRET: z.string().min(1).optional(),
-  FACEBOOK_GRAPH_API_URL: z.string().url().default('https://graph.facebook.com'),
-  TERMII_API_KEY: z.string().min(1).optional(),
-  TERMII_SENDER_ID: z.string().min(1).optional(),
-  TERMII_BASE_URL: z.string().url().default('https://api.ng.termii.com'),
-});
-
-export type AppEnv = z.output<typeof environmentSchema>;
-
-export function parseEnvironment(source: NodeJS.ProcessEnv = process.env): AppEnv {
-  const env = environmentSchema.parse(source);
-  if (env.NODE_ENV === 'production') {
-    if (env.TRUST_PROXY_HOPS === undefined) throw new Error('TRUST_PROXY_HOPS must be configured in production.');
-    if (env.COOKIE_SECURE === false) throw new Error('COOKIE_SECURE cannot be set to false in production.');
-    const productionUrls = [env.FRONTEND_APP_URL, env.PUBLIC_API_URL, ...env.CORS_ORIGINS];
-    if (productionUrls.some((url) => new URL(url).protocol !== 'https:')) {
-      throw new Error('FRONTEND_APP_URL, PUBLIC_API_URL, and CORS_ORIGINS must use HTTPS in production.');
+const envSchema = z
+  .object({
+    NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+    PORT: z.coerce.number().default(3000),
+    HOST: z.string().default('0.0.0.0'),
+    DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
+    DIRECT_URL: z.string().optional(),
+    JWT_SECRET: z
+      .string()
+      .min(32, 'JWT_SECRET must be at least 32 characters')
+      .default('dev-jwt-secret-min-32-chars-for-safety!!'),
+    JWT_ACCESS_EXPIRY: z.string().default('15m'),
+    JWT_AUDIENCE: z.string().default('orvio-web'),
+    JWT_KEY_ID: z.string().min(1).default('primary'),
+    REFRESH_TOKEN_EXPIRY_DAYS: z.coerce.number().default(30),
+    SESSION_ABSOLUTE_EXPIRY_DAYS: z.coerce.number().min(1).max(365).default(90),
+    COOKIE_SECRET: z
+      .string()
+      .min(32, 'COOKIE_SECRET must be at least 32 characters')
+      .default('dev-cookie-secret-min-32-chars-for-safety!!'),
+    CORS_ORIGIN: z.string().default('http://localhost:4000,http://app.localhost:4000'),
+    EMAIL_TRANSPORT: z.enum(['console', 'brevo']).default('console'),
+    BREVO_API_KEY: z.string().optional(),
+    BREVO_SENDER_EMAIL: z.string().default('support@orvio.com'),
+    BREVO_SENDER_NAME: z.string().default('Orvio Hub'),
+    BREVO_TEMPLATE_ID: z.coerce.number().optional(),
+    FRONTEND_URL: z.string().default('http://localhost:4000'),
+    APP_BASE_DOMAIN: z.string().default('localhost:4000'),
+    COOKIE_DOMAIN: z.string().optional(),
+    TRUST_PROXY: z.enum(['true', 'false']).default('true'),
+    DISPOSABLE_EMAIL_BLOCKLIST_ENABLED: z.coerce.boolean().default(true),
+  })
+  .refine(
+    (data) => {
+      if (data.NODE_ENV === 'production') {
+        return (
+          data.JWT_SECRET !== 'dev-jwt-secret-min-32-chars-for-safety!!' &&
+          data.COOKIE_SECRET !== 'dev-cookie-secret-min-32-chars-for-safety!!'
+        );
+      }
+      return true;
+    },
+    {
+      message: 'Default development secrets must not be used in production',
+      path: ['JWT_SECRET'],
     }
-    if (/^(replace|changeme|your-|secret|test-secret)/i.test(env.JWT_SECRET)) {
-      throw new Error('JWT_SECRET cannot use default or placeholder values in production.');
+  );
+
+export type Env = z.infer<typeof envSchema>;
+
+function parseEnv(): Env {
+  const result = envSchema.safeParse(process.env);
+  if (!result.success) {
+    if (process.env.NODE_ENV !== 'test') {
+      console.error('❌ Invalid environment variables:\n', result.error.format());
+      process.exit(1);
     }
+    // In test environment, fallback with defaults for required test run
+    return envSchema.parse({
+      ...process.env,
+      DATABASE_URL: process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/test',
+    });
   }
-  if (env.E2E_TEST_MODE && (!env.E2E_CAPTURE_SECRET || env.NODE_ENV === 'production')) {
-    throw new Error('E2E_TEST_MODE requires E2E_CAPTURE_SECRET and is not available in production.');
-  }
-  return env;
+  return result.data;
 }
+
+export const env = parseEnv();

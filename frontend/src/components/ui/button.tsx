@@ -1,28 +1,61 @@
+import * as React from 'react';
 import { cva, type VariantProps } from 'class-variance-authority';
-import { forwardRef, type ButtonHTMLAttributes } from 'react';
-
 import { cn } from '../../lib/utils';
 
 const buttonVariants = cva(
-  'inline-flex h-11 items-center justify-center gap-2 rounded-sm px-4 text-sm font-medium transition-colors focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50 active:scale-[0.98]',
+  'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-xl text-sm font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 cursor-pointer select-none active:scale-[0.98]',
   {
     variants: {
       variant: {
-        default: 'bg-primary text-primary-foreground hover:bg-[#86597A]',
-        destructive: 'bg-destructive text-white hover:bg-red-500',
-        outline: 'border border-white/10 bg-transparent text-foreground hover:bg-white/5',
-        secondary: 'bg-secondary text-secondary-foreground hover:bg-white/10',
-        ghost: 'text-foreground hover:bg-white/5',
+        default:
+          'bg-indigo-600 text-white shadow-md shadow-indigo-600/20 hover:bg-indigo-700 hover:shadow-lg hover:shadow-indigo-600/30',
+        primary:
+          'bg-gradient-to-r from-indigo-600 via-indigo-700 to-sky-600 text-white shadow-md shadow-indigo-500/25 hover:from-indigo-500 hover:via-indigo-600 hover:to-sky-500 hover:shadow-lg hover:shadow-indigo-500/40',
+        emerald:
+          'bg-emerald-600 text-white shadow-md shadow-emerald-600/20 hover:bg-emerald-700 hover:shadow-lg hover:shadow-emerald-600/30',
+        destructive:
+          'bg-rose-600 text-white shadow-sm hover:bg-rose-700',
+        outline:
+          'border border-slate-200 bg-white text-slate-700 shadow-sm hover:bg-slate-50 hover:text-slate-900 hover:border-slate-300',
+        secondary:
+          'bg-slate-100 text-slate-900 hover:bg-slate-200',
+        ghost: 'text-slate-600 hover:bg-slate-100 hover:text-slate-900',
+        link: 'text-indigo-600 underline-offset-4 hover:underline',
+        white:
+          'bg-white text-slate-900 shadow-md hover:bg-slate-100 shadow-slate-900/10',
       },
-      size: { sm: 'h-9 px-3 text-xs', default: 'h-11 px-4', lg: 'h-12 px-6 text-base', icon: 'h-11 w-11 px-0' },
+      size: {
+        default: 'h-10 px-4 py-2',
+        sm: 'h-8 rounded-lg px-3 text-xs',
+        lg: 'h-12 rounded-xl px-6 text-base font-semibold',
+        xl: 'h-14 rounded-2xl px-8 text-lg font-semibold',
+        icon: 'h-10 w-10 p-0',
+      },
     },
-    defaultVariants: { variant: 'default', size: 'default' },
-  },
+    defaultVariants: {
+      variant: 'default',
+      size: 'default',
+    },
+  }
 );
 
-export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement>, VariantProps<typeof buttonVariants> {}
+export interface ButtonProps
+  extends React.ButtonHTMLAttributes<HTMLButtonElement>,
+    VariantProps<typeof buttonVariants> {
+  asChild?: boolean;
+}
 
-export const Button = forwardRef<HTMLButtonElement, ButtonProps>(({ className, variant, size, type = 'button', ...props }, ref) => (
-  <button ref={ref} type={type} className={cn(buttonVariants({ variant, size }), className)} {...props} />
-));
+const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
+  ({ className, variant, size, ...props }, ref) => {
+    return (
+      <button
+        className={cn(buttonVariants({ variant, size, className }))}
+        ref={ref}
+        {...props}
+      />
+    );
+  }
+);
 Button.displayName = 'Button';
+
+export { Button, buttonVariants };

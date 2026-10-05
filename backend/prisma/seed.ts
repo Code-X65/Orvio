@@ -1,41 +1,89 @@
-import argon2 from 'argon2';
-import { LegalDocumentType, OnboardingStage, PrismaClient, UserStatus } from '@prisma/client';
+import { PrismaClient } from '@prisma/client';
+import * as argon2 from 'argon2';
 
-export const seedIds = {
-  user: '10000000-0000-4000-8000-000000000001',
-} as const;
+const prisma = new PrismaClient();
 
-export const seedCredentials = {
-  email: 'owner@orvio.test',
-  password: 'orvio-test-password',
-} as const;
+async function main() {
+  console.log('Seeding demo data for Orvio Hub...');
 
-export function assertSeedEnvironment(environment = process.env.NODE_ENV): void {
-  if (environment === 'production') throw new Error('Refusing to seed a production database.');
-}
-
-export async function seedDatabase(prisma: PrismaClient, environment = process.env.NODE_ENV): Promise<void> {
-  assertSeedEnvironment(environment);
-  const passwordHash = await argon2.hash(seedCredentials.password, { type: argon2.argon2id });
-  const user = await prisma.user.upsert({
-    where: { email: seedCredentials.email },
-    update: { passwordHash, passwordSetAt: new Date(), status: UserStatus.ACTIVE, emailVerifiedAt: new Date(), phoneVerifiedAt: new Date(), onboardingCompletedAt: new Date(), deletedAt: null },
-    create: { id: seedIds.user, email: seedCredentials.email, firstName: 'Orvio', lastName: 'Owner', passwordHash, passwordSetAt: new Date(), status: UserStatus.ACTIVE, emailVerifiedAt: new Date(), phoneVerifiedAt: new Date(), onboardingCompletedAt: new Date() },
+  const passwordHash = await argon2.hash('DemoPassword123!', {
+    type: argon2.argon2id,
   });
-  await prisma.userOnboarding.upsert({ where: { userId: user.id }, update: { stage: OnboardingStage.COMPLETE, completedAt: new Date() }, create: { userId: user.id, stage: OnboardingStage.COMPLETE, completedAt: new Date() } });
-  for (const document of [
-    { type: LegalDocumentType.TERMS, version: '2026-09-29', title: 'Orvio Terms of Service', content: 'Development placeholder. Replace with approved Terms of Service before production.' },
-    { type: LegalDocumentType.PRIVACY, version: '2026-09-29', title: 'Orvio Privacy Policy', content: 'Development placeholder. Replace with an approved Privacy Policy before production.' },
-  ]) {
-    await prisma.legalDocument.updateMany({ where: { type: document.type }, data: { isCurrent: false } });
-    await prisma.legalDocument.upsert({ where: { type_version: { type: document.type, version: document.version } }, update: { ...document, isCurrent: true }, create: { ...document, isCurrent: true } });
+
+  // 1. Upsert Demo User
+  const demoUser = await prisma.user.upsert({
+    where: { email: 'demo@orvio.com' },
+    update: {},
+    create: {
+      email: 'demo@orvio.com',
+      password_hash: passwordHash,
+      full_name: 'Demo Merchant',
+      phone: '08012345678',
+      status: 'active',
+      email_verified_at: new Date(),
+    },
+  });
+
+  // 2. Upsert Demo Organization
+  const demoOrg = await prisma.organization.upsert({
+    where: { subdomain: 'demo' },
+    update: {},
+    create: {
+      name: 'Orvio Demo Store',
+      subdomain: 'demo',
+      status: 'active',
+      timezone: 'Africa/Lagos',
+      currency: 'NGN',
+      plan_code: 'bundle',
+    },
+  });
+
+  // 3. Upsert Membership
+  await prisma.membership.upsert({
+    where: {
+      org_id_user_id: {
+        org_id: demoOrg.id,
+        user_id: demoUser.id,
+      },
+    },
+    update: {},
+    create: {
+      org_id: demoOrg.id,
+      user_id: demoUser.id,
+      role: 'owner',
+      status: 'active',
+    },
+  });
+
+  // 4. Ensure default branch exists
+  const existingBranch = await prisma.branch.findFirst({
+    where: { org_id: demoOrg.id, name: 'Main Store' },
+  });
+
+  if (!existingBranch) {
+    await prisma.branch.create({
+      data: {
+        org_id: demoOrg.id,
+        name: 'Main Store',
+        type: 'store',
+        status: 'active',
+        address: {
+          city: 'Lagos',
+          state: 'Lagos State',
+          country: 'Nigeria',
+        },
+      },
+    });
   }
+
+  console.log('Seed completed successfully (idempotent).');
 }
 
-async function main(): Promise<void> {
-  const prisma = new PrismaClient();
-  try { await seedDatabase(prisma); } finally { await prisma.$disconnect(); }
-}
-
-await main();
-console.log('Database seeded successfully.');
+main()
+  .catch((e) => {
+    console.error('Seed error:', e);
+    process.exit(1);
+  })
+  .finally(async () => {
+    await prisma.$disconnect();
+  });

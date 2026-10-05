@@ -1,53 +1,85 @@
-@import url('https://fonts.googleapis.com/css2?family=Caveat:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&display=swap');
 @import "tailwindcss";
 
-@theme {
-  --font-sans: "Inter", "Odoo Unicode Support Noto", sans-serif;
-  --font-display: "Caveat", cursive;
-  --color-background: hsl(var(--background));
-  --color-foreground: hsl(var(--foreground));
-  --color-card: hsl(var(--card));
-  --color-card-foreground: hsl(var(--card-foreground));
-  --color-primary: hsl(var(--primary));
-  --color-primary-foreground: hsl(var(--primary-foreground));
-  --color-secondary: hsl(var(--secondary));
-  --color-secondary-foreground: hsl(var(--secondary-foreground));
-  --color-muted: hsl(var(--muted));
-  --color-muted-foreground: hsl(var(--muted-foreground));
-  --color-destructive: hsl(var(--destructive));
-  --color-border: hsl(var(--border));
-  --color-input: hsl(var(--input));
-  --color-ring: hsl(var(--ring));
+@layer base {
+  :root {
+    --background: 220 20% 98%;
+    --foreground: 222 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+    --primary: 221 83% 53%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 210 40% 96%;
+    --secondary-foreground: 222 47% 11%;
+    --muted: 210 40% 96%;
+    --muted-foreground: 215 16% 47%;
+    --accent: 210 40% 96%;
+    --accent-foreground: 222 47% 11%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 214 32% 91%;
+    --input: 214 32% 91%;
+    --ring: 221 83% 53%;
+    --radius: 0.75rem;
+  }
+
+  * {
+    border-color: hsl(var(--border));
+  }
+
+  html {
+    scroll-behavior: smooth;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  }
+
+  body {
+    background-color: #f8fafc;
+    color: #0f172a;
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    overflow-x: hidden;
+  }
 }
 
-:root {
-  --background: 0 0% 0%;
-  --foreground: 210 40% 98%;
-  --card: 330 20% 4%;
-  --card-foreground: 210 40% 98%;
-  --primary: 312 20% 37%;
-  --primary-foreground: 210 40% 98%;
-  --secondary: 330 18% 10%;
-  --secondary-foreground: 210 40% 98%;
-  --muted: 330 12% 13%;
-  --muted-foreground: 215 20% 65%;
-  --destructive: 0 72% 51%;
-  --border: 0 0% 100% / 10%;
-  --input: 330 15% 7%;
-  --ring: 312 22% 43%;
+/* Glassmorphism & custom utility classes */
+.glass-panel {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(226, 232, 240, 0.8);
 }
 
-* { border-color: hsl(var(--border)); }
-
-body {
-  min-width: 320px;
-  min-height: 100vh;
-  margin: 0;
-  background: hsl(var(--background));
-  color: hsl(var(--foreground));
-  font-family: var(--font-sans);
+.glass-panel-dark {
+  background: rgba(15, 23, 42, 0.85);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(51, 65, 85, 0.5);
 }
 
-h1, h2, h3, h4, h5, h6 { font-family: var(--font-display); }
+.hero-gradient {
+  background: radial-gradient(circle at 50% 0%, rgba(79, 70, 229, 0.12) 0%, rgba(14, 165, 233, 0.06) 45%, transparent 70%);
+}
 
-:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }
+.badge-glow {
+  box-shadow: 0 0 20px -3px rgba(79, 70, 229, 0.35);
+}
+
+.card-glow:hover {
+  box-shadow: 0 20px 35px -10px rgba(15, 23, 42, 0.08), 0 0 20px -5px rgba(99, 102, 241, 0.15);
+  transform: translateY(-2px);
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.gradient-text {
+  background: linear-gradient(135deg, #1e293b 0%, #4338ca 50%, #0284c7 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.gradient-text-emerald {
+  background: linear-gradient(135deg, #0f766e 0%, #059669 50%, #10b981 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}

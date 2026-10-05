@@ -1,82 +1,47 @@
-import { createHash } from 'node:crypto';
-import type { DatabaseClient } from '../../infrastructure/database/prisma.js';
-import { AppError } from '../../lib/app-error.js';
-
-export interface RateLimitOptions {
-  database: DatabaseClient;
-  action: string;
-  ip: string;
-  identity?: string;
-  max: number;
-  ipMax?: number;
-  windowMs: number;
-}
-
-export function hashRateLimitSubject(prefix: string, identifier: string): string {
-  return createHash('sha256').update(`${prefix}:${identifier.trim().toLowerCase()}`).digest('hex');
-}
-
-export async function enforceAuthRateLimit(options: RateLimitOptions): Promise<void> {
-  const { database, action, ip, identity, max, ipMax = max * 6, windowMs } = options;
-  const now = Date.now();
-  const windowStart = new Date(Math.floor(now / windowMs) * windowMs);
-  const retryAfter = Math.max(1, Math.ceil((windowStart.getTime() + windowMs - now) / 1000));
-
-  // 1. IP-level rate limit check & increment
-  const ipHash = hashRateLimitSubject('ip', ip);
-  const ipBucket = await database.rateLimitBucket.upsert({
-    where: {
-      action_subjectHash_windowStart: {
-        action,
-        subjectHash: ipHash,
-        windowStart,
-      },
-    },
-    create: {
-      action,
-      subjectHash: ipHash,
-      windowStart,
-      count: 1,
-    },
-    update: {
-      count: { increment: 1 },
-    },
-  });
-
-  if (ipBucket.count > ipMax) {
-    throw new AppError(429, 'RATE_LIMIT_EXCEEDED', 'Too many requests from this IP address. Please try again later.', {
-      retryAfter,
-      action,
-    });
-  }
-
-  // 2. Identity-level rate limit check & increment (if identity is supplied)
-  if (identity) {
-    const identityHash = hashRateLimitSubject(`id:${action}`, identity);
-    const identityBucket = await database.rateLimitBucket.upsert({
-      where: {
-        action_subjectHash_windowStart: {
-          action,
-          subjectHash: identityHash,
-          windowStart,
-        },
-      },
-      create: {
-        action,
-        subjectHash: identityHash,
-        windowStart,
-        count: 1,
-      },
-      update: {
-        count: { increment: 1 },
-      },
-    });
-
-    if (identityBucket.count > max) {
-      throw new AppError(429, 'RATE_LIMIT_EXCEEDED', 'Too many attempts for this account. Please try again later.', {
-        retryAfter,
-        action,
-      });
-    }
-  }
-}
+export const AUTH_RATE_LIMITS = {
+  // Max 5 account registrations per hour per IP (abuse prevention)
+  register: {
+    max: 5,
+    timeWindow: '1 hour',
+  },
+  // Max 15 token verifications per 15 minutes per IP
+  verifyEmail: {
+    max: 15,
+    timeWindow: '15 minutes',
+  },
+  // Max 5 resend verification requests per 15 minutes per IP
+  resendVerification: {
+    max: 5,
+    timeWindow: '15 minutes',
+  },
+  // Max 10 login attempts per 15 minutes per IP
+  login: {
+    max: 10,
+    timeWindow: '15 minutes',
+  },
+  // Max 30 token refreshes per 15 minutes per IP
+  refresh: {
+    max: 30,
+    timeWindow: '15 minutes',
+  },
+  // Max 60 live subdomain availability checks per minute
+  checkSubdomain: {
+    max: 60,
+    timeWindow: '1 minute',
+  },
+  // Max 30 email availability checks per minute per IP
+  checkEmail: {
+    max: 30,
+    timeWindow: '1 minute',
+  },
+  // Max 5 forgot password requests per 15 minutes per IP
+  forgotPassword: {
+    max: 5,
+    timeWindow: '15 minutes',
+  },
+  // Max 10 password reset attempts per 15 minutes per IP
+  resetPassword: {
+    max: 10,
+    timeWindow: '15 minutes',
+  },
+} as const;
