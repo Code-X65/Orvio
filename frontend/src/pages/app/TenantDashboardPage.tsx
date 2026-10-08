@@ -66,12 +66,29 @@ export function TenantDashboardPage() {
   const [loadingProducts, setLoadingProducts] = React.useState(true);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = React.useState(false);
 
-  // Fetch workspace products when hydrated
+  // Fetch workspace products when hydrated and verified
   React.useEffect(() => {
-    if (isHydrated) {
+    if (!isHydrated) return;
+
+    if (user?.emailVerifiedAt && organization?.status === 'active') {
       loadWorkspaceProducts();
+    } else {
+      // Use local default plan catalog without firing blocked 403 requests
+      const defaultKey = organization?.planCode === 'gym' ? 'gym' : 'inventory';
+      setInstalledProducts([
+        {
+          id: 'initial',
+          org_id: organization?.id || 'org',
+          product_key: defaultKey,
+          status: 'active',
+          is_primary: true,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        },
+      ]);
+      setLoadingProducts(false);
     }
-  }, [isHydrated]);
+  }, [isHydrated, user?.emailVerifiedAt, organization?.status, organization?.planCode]);
 
   // Sync email verification when tab regains focus if user is pending verification
   React.useEffect(() => {
@@ -88,7 +105,10 @@ export function TenantDashboardPage() {
                   state.setSession(
                     state.accessToken,
                     res.user,
-                    state.organization,
+                    {
+                      ...state.organization,
+                      status: 'active',
+                    },
                     'authenticated'
                   );
                 }
@@ -166,24 +186,48 @@ export function TenantDashboardPage() {
     }
   };
 
-  const handleInstallApp = async (productKey: string) => {
-    const updated = await installWorkspaceProduct(productKey);
-    setInstalledProducts(updated);
-  };
-
-  const handleUninstallApp = async (productKey: string) => {
-    const updated = await uninstallWorkspaceProduct(productKey);
-    setInstalledProducts(updated);
-  };
-
-  const handleSetPrimaryApp = async (productKey: string) => {
-    const updated = await setPrimaryWorkspaceProduct(productKey);
-    setInstalledProducts(updated);
-  };
-
   const isEmailUnverified = Boolean(user && !user.emailVerifiedAt);
   const orgName = organization?.name || (currentSubdomain ? currentSubdomain.toUpperCase() : 'Your Workspace');
   const workspaceUrl = getTenantWorkspaceUrl(currentSubdomain);
+
+  const handleInstallApp = async (productKey: string) => {
+    if (isEmailUnverified) {
+      toast.error('Please verify your email address to add workspace applications.');
+      return;
+    }
+    try {
+      const updated = await installWorkspaceProduct(productKey);
+      setInstalledProducts(updated);
+    } catch {
+      toast.error('Failed to install workspace app.');
+    }
+  };
+
+  const handleUninstallApp = async (productKey: string) => {
+    if (isEmailUnverified) {
+      toast.error('Please verify your email address to modify workspace applications.');
+      return;
+    }
+    try {
+      const updated = await uninstallWorkspaceProduct(productKey);
+      setInstalledProducts(updated);
+    } catch {
+      toast.error('Failed to uninstall workspace app.');
+    }
+  };
+
+  const handleSetPrimaryApp = async (productKey: string) => {
+    if (isEmailUnverified) {
+      toast.error('Please verify your email address to set primary applications.');
+      return;
+    }
+    try {
+      const updated = await setPrimaryWorkspaceProduct(productKey);
+      setInstalledProducts(updated);
+    } catch {
+      toast.error('Failed to update primary app.');
+    }
+  };
 
   const handleSignOut = async () => {
     try {

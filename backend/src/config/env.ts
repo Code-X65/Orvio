@@ -1,6 +1,18 @@
 import 'dotenv/config';
 import { z } from 'zod';
 
+/** Parses boolean env vars correctly ("false"/"0"/"no"/"off" => false). */
+function envBoolean(defaultValue: boolean) {
+  return z
+    .union([z.boolean(), z.string()])
+    .optional()
+    .transform((val) => {
+      if (val === undefined || val === '') return defaultValue;
+      if (typeof val === 'boolean') return val;
+      return !['false', '0', 'no', 'off'].includes(val.trim().toLowerCase());
+    });
+}
+
 const envSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -15,6 +27,7 @@ const envSchema = z
     JWT_ACCESS_EXPIRY: z.string().default('15m'),
     JWT_AUDIENCE: z.string().default('orvio-web'),
     JWT_KEY_ID: z.string().min(1).default('primary'),
+    JWT_ROTATION_KEYS: z.string().optional(),
     REFRESH_TOKEN_EXPIRY_DAYS: z.coerce.number().default(30),
     SESSION_ABSOLUTE_EXPIRY_DAYS: z.coerce.number().min(1).max(365).default(90),
     COOKIE_SECRET: z
@@ -31,7 +44,10 @@ const envSchema = z
     APP_BASE_DOMAIN: z.string().default('localhost:4000'),
     COOKIE_DOMAIN: z.string().optional(),
     TRUST_PROXY: z.enum(['true', 'false']).default('true'),
-    DISPOSABLE_EMAIL_BLOCKLIST_ENABLED: z.coerce.boolean().default(true),
+    DISPOSABLE_EMAIL_BLOCKLIST_ENABLED: envBoolean(true),
+    // HaveIBeenPwned k-anonymity check; disabled by default under NODE_ENV=test
+    PASSWORD_BREACH_CHECK_ENABLED: envBoolean(process.env.NODE_ENV !== 'test'),
+    PASSWORD_BREACH_CHECK_TIMEOUT_MS: z.coerce.number().min(100).max(10000).default(1500),
   })
   .refine(
     (data) => {

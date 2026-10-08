@@ -16,6 +16,7 @@ describe('Auth Validation Schemas', () => {
         fullName: '  Alex Adeleke  ',
         organizationName: '  Apex Store  ',
         subdomain: '  apexstore  ',
+        termsAccepted: true,
       });
 
       expect(parsed.email).toBe('alex@example.com');

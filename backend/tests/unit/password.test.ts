@@ -1,8 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   hashPassword,
   verifyPassword,
   assertPasswordPolicy,
+  assertPasswordSecurity,
+  getPwnedCount,
 } from '../../src/lib/password.js';
 import { AppError } from '../../src/lib/errors.js';
 
@@ -47,6 +49,26 @@ describe('Password Utilities (Argon2id)', () => {
 
     it('throws AppError if missing special character', () => {
       expect(() => assertPasswordPolicy('ValidPass12345')).toThrow(AppError);
+    });
+  });
+
+  describe('assertPasswordSecurity', () => {
+    it('rejects password containing user email local part', async () => {
+      await expect(
+        assertPasswordSecurity('SuperAlexander123!', { email: 'alexander@example.com' })
+      ).rejects.toThrow(AppError);
+    });
+
+    it('rejects password containing user name', async () => {
+      await expect(
+        assertPasswordSecurity('JohnsonSecure2026#', { fullName: 'Bob Johnson' })
+      ).rejects.toThrow(AppError);
+    });
+
+    it('allows strong unique password without personal info', async () => {
+      await expect(
+        assertPasswordSecurity('K9#mX2$vL9pQ8wZ!', { email: 'john@example.com', fullName: 'John Doe' })
+      ).resolves.toBeUndefined();
     });
   });
 });

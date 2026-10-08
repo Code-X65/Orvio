@@ -27,13 +27,14 @@ describe('POST /api/v1/auth/verify-email and resend verification', () => {
         password: 'Password123!',
         organizationName: `Verify Org ${timestamp}`,
         subdomain,
+        termsAccepted: true,
       },
     });
 
     // 2. Extract verification token from intercepted email
     const verificationEmail = ctx.emailSender.getLastEmail();
     expect(verificationEmail).toBeDefined();
-    const match = verificationEmail?.html.match(/token=([a-f0-9]+)/);
+    const match = verificationEmail?.html.match(/token=([a-zA-Z0-9_-]+)/);
     expect(match).toBeDefined();
     const token = match![1];
 
@@ -95,6 +96,7 @@ describe('POST /api/v1/auth/verify-email and resend verification', () => {
         password: 'Password123!',
         organizationName: 'Cooldown Org',
         subdomain,
+        termsAccepted: true,
       },
     });
 

@@ -6,21 +6,23 @@ import {
   deriveSubdomain,
   nextAvailableCandidates,
 } from '../organizations/subdomain.js';
-import { hashPassword, verifyPassword, assertPasswordPolicy } from '../../lib/password.js';
+import { hashPassword, verifyPassword, assertPasswordSecurity } from '../../lib/password.js';
 import {
   signAccessToken,
   generateRefreshToken,
   hashToken,
   generateOpaqueToken,
 } from '../../lib/tokens.js';
-import { issueVerificationToken, verifyAndConsumeToken, checkResendCooldown, invalidateUserTokens } from './verification.js';
+import { issueVerificationToken, verifyAndConsumeToken, checkResendCooldown, invalidateUserTokens, buildTokenLink } from './verification.js';
 import { createVerifyEmailTemplate } from './templates/verify-email.js';
 import { createWelcomeEmailTemplate } from './templates/welcome.js';
 import { createResetPasswordTemplate } from './templates/reset-password.js';
+import { createChangeEmailTemplate } from './templates/change-email.js';
+import { recordAuditEvent, listUserAuditLogs } from '../audit/service.js';
 import { env } from '../../config/env.js';
 import { AppError } from '../../lib/errors.js';
 import crypto from 'node:crypto';
-import type { RegisterInput } from './schemas.js';
+import { isDisposableEmail, type RegisterInput, type UpdateProfileInput } from './schemas.js';
 import type { StartTrialInput, SetupPasswordAndVerifyInput } from './trial.schema.js';
 
 export function getTenantUrl(subdomain: string): string {
@@ -52,7 +54,7 @@ export class AuthService {
     private emailSvc: EmailSender = defaultEmailSender
   ) {}
 
-  async startTrial(input: StartTrialInput, ip?: string) {
+  async startTrial(input: StartTrialInput, ip?: string, userAgent?: string) {
     const email = input.email.toLowerCase().trim();
     const cleanPhone = normalizeNigerianPhone(input.phone);
     
@@ -67,7 +69,10 @@ export class AuthService {
     // If password provided, validate policy; otherwise generate secure random placeholder
     const rawPassword = input.password ? input.password : crypto.randomBytes(32).toString('hex');
     if (input.password) {
-      assertPasswordPolicy(input.password);
+      await assertPasswordSecurity(input.password, {
+        email,
+        fullName: input.fullName ?? `${input.firstName ?? ''} ${input.lastName ?? ''}`,
+      });
     }
 
     // 2. Validate email, phone & subdomain uniqueness before transaction
@@ -286,7 +291,7 @@ export class AuthService {
 
     // 6. Compute tenant workspace URL
     const orgUrl = getTenantUrl(result.org.subdomain);
-    const verificationLink = `${env.FRONTEND_URL}/verify-email?token=${rawToken}`;
+    const verificationLink = buildTokenLink(env.FRONTEND_URL, '/verify-email', rawToken);
 
     // 7. Dispatch verification magic setup email
     const emailContent = createVerifyEmailTemplate({
@@ -303,18 +308,19 @@ export class AuthService {
     });
 
     // 8. Sign Access Token & Refresh Token for immediate dashboard access
+    const familyId = generateOpaqueToken().rawToken;
     const accessToken = await signAccessToken({
       sub: result.user.id,
       email: result.user.email,
       org_id: result.org.id,
       role: 'owner',
       membership_id: result.membership.id,
+      session_id: familyId,
     });
 
     const refreshExpiry = new Date(Date.now() + env.REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
     const absoluteExpiry = new Date(Date.now() + env.SESSION_ABSOLUTE_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
     const { rawToken: rawRefreshToken, tokenHash: refreshHash, jti } = generateRefreshToken();
-    const familyId = generateOpaqueToken().rawToken;
 
     await this.db.refreshToken.create({
       data: {
@@ -326,6 +332,7 @@ export class AuthService {
         absolute_expires_at: absoluteExpiry,
         last_used_at: new Date(),
         created_ip: ip,
+        user_agent: userAgent?.slice(0, 512),
         token_hash: refreshHash,
         jti,
         expires_at: refreshExpiry,
@@ -356,12 +363,12 @@ export class AuthService {
     };
   }
 
-  async setupPasswordAndVerify(input: SetupPasswordAndVerifyInput, ip?: string) {
-    // 1. Assert password policy
-    assertPasswordPolicy(input.password);
+  async setupPasswordAndVerify(input: SetupPasswordAndVerifyInput, ip?: string, userAgent?: string) {
+    // 1. Assert password security (before consuming the token, so a rejected password keeps the link usable)
+    await assertPasswordSecurity(input.password);
 
-    // 2. Validate and consume token
-    const tokenRecord = await verifyAndConsumeToken(this.db, input.token, 'email_verification');
+    // 2. Validate and consume token (trial verification link or magic sign-in link)
+    const tokenRecord = await verifyAndConsumeToken(this.db, input.token, ['email_verification', 'magic_login']);
 
     // Invalidate all prior pending verification and reset tokens for this user
     await invalidateUserTokens(this.db, tokenRecord.user_id, ['email_verification', 'magic_login', 'password_reset']);
@@ -402,17 +409,18 @@ export class AuthService {
     const orgUrl = org ? getTenantUrl(org.subdomain) : undefined;
 
     // 5. Sign new tokens
+    const familyId = generateOpaqueToken().rawToken;
     const accessToken = await signAccessToken({
       sub: updatedUser.id,
       email: updatedUser.email,
       org_id: primaryMembership?.org_id,
       role: primaryMembership?.role,
       membership_id: primaryMembership?.id,
+      session_id: familyId,
     });
 
     const refreshExpiry = new Date(Date.now() + env.REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
     const { rawToken: rawRefreshToken, tokenHash: refreshHash, jti } = generateRefreshToken();
-    const familyId = generateOpaqueToken().rawToken;
 
     await this.db.refreshToken.create({
       data: {
@@ -424,6 +432,7 @@ export class AuthService {
         absolute_expires_at: new Date(Date.now() + env.SESSION_ABSOLUTE_EXPIRY_DAYS * 24 * 60 * 60 * 1000),
         last_used_at: new Date(),
         created_ip: ip,
+        user_agent: userAgent?.slice(0, 512),
         token_hash: refreshHash,
         jti,
         expires_at: refreshExpiry,
@@ -461,7 +470,7 @@ export class AuthService {
     const cleanSubdomain = deriveSubdomain(input.subdomain);
 
     // 1. Assert password policy & subdomain format
-    assertPasswordPolicy(input.password);
+    await assertPasswordSecurity(input.password, { email, fullName: input.fullName });
     assertValidSubdomain(cleanSubdomain);
 
     // 2. Validate email & subdomain uniqueness before transaction
@@ -550,7 +559,7 @@ export class AuthService {
 
     // 6. Compute tenant workspace URL
     const orgUrl = getTenantUrl(result.org.subdomain);
-    const verificationLink = `${env.FRONTEND_URL}/verify-email?token=${rawToken}`;
+    const verificationLink = buildTokenLink(env.FRONTEND_URL, '/verify-email', rawToken);
 
     // 7. Dispatch verification email
     const emailContent = createVerifyEmailTemplate({
@@ -581,7 +590,7 @@ export class AuthService {
     };
   }
 
-  async verifyEmail(rawToken: string, ip?: string) {
+  async verifyEmail(rawToken: string, ip?: string, userAgent?: string) {
     // 1. Validate and consume token
     const tokenRecord = await verifyAndConsumeToken(this.db, rawToken, 'email_verification');
 
@@ -619,17 +628,18 @@ export class AuthService {
     }, { maxWait: 15000, timeout: 30000 });
 
     // 3. Issue Session Tokens with family ID
+    const familyId = generateOpaqueToken().rawToken;
     const accessToken = await signAccessToken({
       sub: tokenRecord.user.id,
       email: tokenRecord.user.email,
       org_id: orgId,
       role: primaryMembership?.role,
       membership_id: primaryMembership?.id,
+      session_id: familyId,
     });
 
     const refreshExpiry = new Date(Date.now() + env.REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
     const { rawToken: rawRefreshToken, tokenHash: refreshHash, jti } = generateRefreshToken();
-    const familyId = generateOpaqueToken().rawToken;
 
     await this.db.refreshToken.create({
       data: {
@@ -641,6 +651,7 @@ export class AuthService {
         absolute_expires_at: new Date(Date.now() + env.SESSION_ABSOLUTE_EXPIRY_DAYS * 24 * 60 * 60 * 1000),
         last_used_at: new Date(),
         created_ip: ip,
+        user_agent: userAgent?.slice(0, 512),
         token_hash: refreshHash,
         jti,
         expires_at: refreshExpiry,
@@ -715,12 +726,12 @@ export class AuthService {
     // Check 60s cooldown strictly for email_verification
     await checkResendCooldown(this.db, user.id, 'email_verification', 60);
 
-    // Issue new token
+    // Issue new token (revokes any previously emailed verification link)
     const { rawToken } = await issueVerificationToken(this.db, user.id, 'email_verification', 24);
 
     const primaryOrg = user.memberships[0]?.organization;
     const orgUrl = primaryOrg ? getTenantUrl(primaryOrg.subdomain) : undefined;
-    const verificationLink = `${env.FRONTEND_URL}/verify-email?token=${rawToken}`;
+    const verificationLink = buildTokenLink(env.FRONTEND_URL, '/verify-email', rawToken);
 
     const emailContent = createVerifyEmailTemplate({
       toName: user.full_name,
@@ -752,11 +763,26 @@ export class AuthService {
     });
 
     if (!user) {
+      await recordAuditEvent(this.db, {
+        event: 'login_failed',
+        status: 'failed',
+        ipAddress: ip,
+        userAgent,
+        metadata: { email, reason: 'user_not_found' },
+      });
       throw new AppError('INVALID_CREDENTIALS', 'Invalid email or password', 401);
     }
 
     const isValid = await verifyPassword(user.password_hash, passwordInput);
     if (!isValid) {
+      await recordAuditEvent(this.db, {
+        userId: user.id,
+        event: 'login_failed',
+        status: 'failed',
+        ipAddress: ip,
+        userAgent,
+        metadata: { email, reason: 'invalid_password' },
+      });
       if (!user.email_verified_at) {
         throw new AppError(
           'PASSWORD_NOT_SET',
@@ -804,17 +830,18 @@ export class AuthService {
       },
     });
 
+    const familyId = generateOpaqueToken().rawToken;
     const accessToken = await signAccessToken({
       sub: user.id,
       email: user.email,
       org_id: activeMembership?.org_id,
       role: activeMembership?.role,
       membership_id: activeMembership?.id,
+      session_id: familyId,
     });
 
     const refreshExpiry = new Date(Date.now() + env.REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
     const { rawToken: rawRefreshToken, tokenHash: refreshHash, jti } = generateRefreshToken();
-    const familyId = generateOpaqueToken().rawToken;
 
     await this.db.refreshToken.create({
       data: {
@@ -831,6 +858,15 @@ export class AuthService {
         jti,
         expires_at: refreshExpiry,
       },
+    });
+
+    await recordAuditEvent(this.db, {
+      userId: user.id,
+      orgId: activeMembership?.org_id,
+      event: 'login_success',
+      status: 'success',
+      ipAddress: ip,
+      userAgent,
     });
 
     const org = activeMembership?.organization;
@@ -885,10 +921,10 @@ export class AuthService {
       }
     }
 
-    // Issue magic link token
-    const { rawToken } = await issueVerificationToken(this.db, user.id, 'email_verification', 24);
+    // Issue a dedicated magic sign-in token (short-lived; revokes any earlier magic link)
+    const { rawToken } = await issueVerificationToken(this.db, user.id, 'magic_login', 1);
     const orgUrl = targetOrg ? getTenantUrl(targetOrg.subdomain) : undefined;
-    const verificationLink = `${env.FRONTEND_URL}/verify-email?token=${rawToken}`;
+    const verificationLink = buildTokenLink(env.FRONTEND_URL, '/verify-email', rawToken);
 
     const emailContent = createVerifyEmailTemplate({
       toName: user.full_name,
@@ -956,12 +992,14 @@ export class AuthService {
       throw new AppError('INVALID_REFRESH_TOKEN', 'Refresh session is no longer valid', 401);
     }
 
+    const currentSessionId = tokenRecord.session_id ?? tokenRecord.family_id ?? generateOpaqueToken().rawToken;
     const accessToken = await signAccessToken({
       sub: user.id,
       email: user.email,
       org_id: primaryMembership?.org_id,
       role: primaryMembership?.role,
       membership_id: primaryMembership?.id,
+      session_id: currentSessionId,
     });
 
     const refreshExpiry = new Date(Date.now() + env.REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
@@ -1028,15 +1066,140 @@ export class AuthService {
     };
   }
 
-  async logout(rawRefreshToken?: string) {
+  async logout(
+    rawRefreshToken?: string,
+    options?: { sessionId?: string; userId?: string; allSessions?: boolean }
+  ) {
+    const now = new Date();
+
+    if (options?.allSessions && options?.userId) {
+      await this.db.refreshToken.updateMany({
+        where: { user_id: options.userId, revoked_at: null },
+        data: { revoked_at: now },
+      });
+      return { success: true, message: 'All sessions logged out successfully' };
+    }
+
+    let tokenSessionId = options?.sessionId;
+
     if (rawRefreshToken) {
       const tokenHash = hashToken(rawRefreshToken);
+      const tokenRecord = await this.db.refreshToken.findUnique({
+        where: { token_hash: tokenHash },
+      });
+      if (tokenRecord) {
+        tokenSessionId = tokenRecord.session_id || tokenRecord.family_id || undefined;
+      }
       await this.db.refreshToken.updateMany({
         where: { token_hash: tokenHash },
-        data: { revoked_at: new Date() },
+        data: { revoked_at: now },
       });
     }
+
+    if (tokenSessionId) {
+      await this.db.refreshToken.updateMany({
+        where: {
+          OR: [{ session_id: tokenSessionId }, { family_id: tokenSessionId }],
+          revoked_at: null,
+        },
+        data: { revoked_at: now },
+      });
+    }
+
     return { success: true, message: 'Logged out successfully' };
+  }
+
+  async listSessions(userId: string, currentSessionId?: string) {
+    const tokens = await this.db.refreshToken.findMany({
+      where: {
+        user_id: userId,
+        revoked_at: null,
+        expires_at: { gt: new Date() },
+      },
+      orderBy: { last_used_at: 'desc' },
+    });
+
+    const sessionMap = new Map<
+      string,
+      {
+        id: string;
+        ipAddress: string | null;
+        userAgent: string | null;
+        createdAt: string;
+        lastActiveAt: string | null;
+        expiresAt: string;
+        isCurrent: boolean;
+      }
+    >();
+
+    for (const token of tokens) {
+      const sId = token.session_id || token.family_id || token.id;
+      if (!sessionMap.has(sId)) {
+        sessionMap.set(sId, {
+          id: sId,
+          ipAddress: token.created_ip,
+          userAgent: token.user_agent,
+          createdAt: token.created_at.toISOString(),
+          lastActiveAt: token.last_used_at ? token.last_used_at.toISOString() : null,
+          expiresAt: (token.absolute_expires_at ?? token.expires_at).toISOString(),
+          isCurrent: Boolean(currentSessionId && sId === currentSessionId),
+        });
+      }
+    }
+
+    return Array.from(sessionMap.values());
+  }
+
+  async revokeSession(userId: string, targetSessionId: string) {
+    const result = await this.db.refreshToken.updateMany({
+      where: {
+        user_id: userId,
+        OR: [
+          { session_id: targetSessionId },
+          { family_id: targetSessionId },
+          { id: targetSessionId },
+        ],
+        revoked_at: null,
+      },
+      data: { revoked_at: new Date() },
+    });
+
+    if (result.count === 0) {
+      throw new AppError('NOT_FOUND', 'Session not found or already revoked', 404);
+    }
+
+    return {
+      success: true,
+      message: 'Session revoked successfully',
+      revokedCount: result.count,
+    };
+  }
+
+  async revokeAllSessions(userId: string, options?: { keepSessionId?: string }) {
+    const whereClause: any = {
+      user_id: userId,
+      revoked_at: null,
+    };
+
+    if (options?.keepSessionId) {
+      whereClause.NOT = [
+        { session_id: options.keepSessionId },
+        { family_id: options.keepSessionId },
+      ];
+    }
+
+    const result = await this.db.refreshToken.updateMany({
+      where: whereClause,
+      data: { revoked_at: new Date() },
+    });
+
+    return {
+      success: true,
+      message: options?.keepSessionId
+        ? 'All other sessions have been revoked'
+        : 'All active sessions have been revoked',
+      revokedCount: result.count,
+    };
   }
 
   async checkEmailAvailability(emailInput: string) {
@@ -1067,7 +1230,7 @@ export class AuthService {
     await checkResendCooldown(this.db, user.id, 'password_reset', 60);
 
     const { rawToken } = await issueVerificationToken(this.db, user.id, 'password_reset', 2);
-    const resetLink = `${env.FRONTEND_URL}/reset-password?token=${rawToken}`;
+    const resetLink = buildTokenLink(env.FRONTEND_URL, '/reset-password', rawToken);
 
     const emailContent = createResetPasswordTemplate({
       toName: user.full_name,
@@ -1084,9 +1247,11 @@ export class AuthService {
   }
 
   async resetPassword(rawToken: string, newPassword: string) {
-    assertPasswordPolicy(newPassword);
+    await assertPasswordSecurity(newPassword);
 
     const tokenRecord = await verifyAndConsumeToken(this.db, rawToken, 'password_reset');
+    // Kill any other outstanding sign-in capable links once the password changes
+    await invalidateUserTokens(this.db, tokenRecord.user_id, ['password_reset', 'magic_login']);
     const password_hash = await hashPassword(newPassword);
 
     await this.db.$transaction([
@@ -1136,6 +1301,7 @@ export class AuthService {
         phone: user.phone,
         status: user.status,
         emailVerifiedAt: user.email_verified_at ? user.email_verified_at.toISOString() : null,
+        phoneVerifiedAt: user.phone_verified_at ? user.phone_verified_at.toISOString() : null,
         lastLoginAt: user.last_login_at ? user.last_login_at.toISOString() : null,
       },
       organization: org
@@ -1159,6 +1325,458 @@ export class AuthService {
       })),
     };
   }
+
+  // C1: Update User Profile
+  async updateProfile(
+    userId: string,
+    input: UpdateProfileInput,
+    ip?: string,
+    userAgent?: string
+  ) {
+    const user = await this.db.user.findUnique({ where: { id: userId } });
+    if (!user || user.status === 'deleted') {
+      throw new AppError('NOT_FOUND', 'User not found', 404);
+    }
+
+    let cleanPhone: string | null | undefined = undefined;
+    if (input.phone !== undefined) {
+      if (input.phone === null || input.phone === '') {
+        cleanPhone = null;
+      } else {
+        cleanPhone = normalizeNigerianPhone(input.phone);
+        // Check uniqueness if changed
+        if (cleanPhone !== user.phone) {
+          const existingPhone = await this.db.user.findFirst({
+            where: { phone: cleanPhone, id: { not: userId } },
+          });
+          if (existingPhone) {
+            throw new AppError('DUPLICATE_PHONE', 'This phone number is already in use by another account', 409);
+          }
+        }
+      }
+    }
+
+    const updated = await this.db.user.update({
+      where: { id: userId },
+      data: {
+        ...(input.fullName ? { full_name: input.fullName.trim() } : {}),
+        ...(cleanPhone !== undefined ? { phone: cleanPhone, phone_verified_at: cleanPhone === user.phone ? user.phone_verified_at : null } : {}),
+      },
+    });
+
+    await recordAuditEvent(this.db, {
+      userId,
+      event: 'profile_update',
+      status: 'success',
+      ipAddress: ip,
+      userAgent,
+      metadata: { fullName: input.fullName, phone: cleanPhone },
+    });
+
+    return {
+      id: updated.id,
+      email: updated.email,
+      fullName: updated.full_name,
+      phone: updated.phone,
+      emailVerifiedAt: updated.email_verified_at ? updated.email_verified_at.toISOString() : null,
+      phoneVerifiedAt: updated.phone_verified_at ? updated.phone_verified_at.toISOString() : null,
+    };
+  }
+
+  // C2: Request Email Change
+  async requestEmailChange(
+    userId: string,
+    input: { newEmail: string; password: string },
+    ip?: string,
+    userAgent?: string
+  ) {
+    const user = await this.db.user.findUnique({ where: { id: userId } });
+    if (!user) throw new AppError('NOT_FOUND', 'User not found', 404);
+
+    // Verify current password
+    const isPasswordValid = await verifyPassword(user.password_hash, input.password);
+    if (!isPasswordValid) {
+      throw new AppError('INVALID_CREDENTIALS', 'Incorrect password. Identity verification failed.', 401);
+    }
+
+    const newEmail = input.newEmail.toLowerCase().trim();
+    if (newEmail === user.email.toLowerCase()) {
+      throw new AppError('VALIDATION_ERROR', 'New email address must be different from current email', 400);
+    }
+
+    if (isDisposableEmail(newEmail)) {
+      throw new AppError('VALIDATION_ERROR', 'Disposable email addresses are not permitted', 400);
+    }
+
+    const existing = await this.db.user.findUnique({ where: { email: newEmail } });
+    if (existing) {
+      throw new AppError('DUPLICATE_EMAIL', 'An account with this email address already exists', 409);
+    }
+
+    await checkResendCooldown(this.db, userId, 'email_change', 60);
+
+    const { rawToken } = await issueVerificationToken(this.db, userId, 'email_change', 24, {
+      new_email: newEmail,
+      old_email: user.email,
+    });
+
+    const confirmationLink = buildTokenLink(env.FRONTEND_URL, '/verify-email-change', rawToken);
+    const emailContent = createChangeEmailTemplate({
+      toName: user.full_name,
+      newEmail,
+      confirmationLink,
+    });
+
+    await this.emailSvc.send({
+      to: [{ email: newEmail, name: user.full_name }],
+      subject: `Confirm email change for Orvio Hub`,
+      htmlContent: emailContent.html,
+    });
+
+    await recordAuditEvent(this.db, {
+      userId,
+      event: 'email_change_requested',
+      status: 'success',
+      ipAddress: ip,
+      userAgent,
+      metadata: { oldEmail: user.email, newEmail },
+    });
+
+    return {
+      success: true,
+      message: `Confirmation link has been sent to ${newEmail}. Please click the link to confirm.`,
+    };
+  }
+
+  // C2: Confirm Email Change
+  async confirmEmailChange(rawToken: string, ip?: string, userAgent?: string) {
+    const tokenRecord = await verifyAndConsumeToken(this.db, rawToken, 'email_change');
+    const newEmail = (tokenRecord.metadata as any)?.new_email;
+
+    if (!newEmail || typeof newEmail !== 'string') {
+      throw new AppError('INVALID_TOKEN', 'Email change payload is missing or invalid', 400);
+    }
+
+    // Double check email hasn't been claimed in the meantime
+    const existing = await this.db.user.findUnique({ where: { email: newEmail } });
+    if (existing && existing.id !== tokenRecord.user_id) {
+      throw new AppError('DUPLICATE_EMAIL', 'This email address was claimed by another account', 409);
+    }
+
+    await this.db.$transaction([
+      this.db.user.update({
+        where: { id: tokenRecord.user_id },
+        data: {
+          email: newEmail,
+          email_verified_at: new Date(),
+        },
+      }),
+      // Revoke all other sessions on email change for security
+      this.db.refreshToken.updateMany({
+        where: { user_id: tokenRecord.user_id, revoked_at: null },
+        data: { revoked_at: new Date() },
+      }),
+    ]);
+
+    await recordAuditEvent(this.db, {
+      userId: tokenRecord.user_id,
+      event: 'email_change_completed',
+      status: 'success',
+      ipAddress: ip,
+      userAgent,
+      metadata: { newEmail },
+    });
+
+    return {
+      success: true,
+      message: 'Your email address has been updated and verified successfully. Please sign in.',
+    };
+  }
+
+  // C2: Request Phone Verification OTP
+  async requestPhoneOtp(
+    userId: string,
+    input: { phone?: string },
+    ip?: string,
+    userAgent?: string
+  ) {
+    const user = await this.db.user.findUnique({ where: { id: userId } });
+    if (!user) throw new AppError('NOT_FOUND', 'User not found', 404);
+
+    let targetPhone = user.phone;
+    if (input.phone) {
+      targetPhone = normalizeNigerianPhone(input.phone);
+      if (targetPhone !== user.phone) {
+        const existing = await this.db.user.findFirst({
+          where: { phone: targetPhone, id: { not: userId } },
+        });
+        if (existing) {
+          throw new AppError('DUPLICATE_PHONE', 'This phone number is already registered to another account', 409);
+        }
+        await this.db.user.update({
+          where: { id: userId },
+          data: { phone: targetPhone, phone_verified_at: null },
+        });
+      }
+    }
+
+    if (!targetPhone) {
+      throw new AppError('VALIDATION_ERROR', 'Please provide a phone number to verify', 400);
+    }
+
+    await checkResendCooldown(this.db, userId, 'phone_verification', 60);
+
+    // Generate 6-digit numeric OTP
+    const otp = crypto.randomInt(100000, 999999).toString();
+    const tokenHash = hashToken(otp);
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+    // Invalidate existing unused phone verification tokens
+    await this.db.verificationToken.updateMany({
+      where: { user_id: userId, purpose: 'phone_verification', consumed_at: null },
+      data: { consumed_at: new Date() },
+    });
+
+    await this.db.verificationToken.create({
+      data: {
+        user_id: userId,
+        token_hash: tokenHash,
+        purpose: 'phone_verification',
+        metadata: { phone: targetPhone, otpPreview: env.NODE_ENV === 'development' ? otp : undefined },
+        expires_at: expiresAt,
+      },
+    });
+
+    // Send notification email fallback with OTP
+    await this.emailSvc.send({
+      to: [{ email: user.email, name: user.full_name }],
+      subject: `Your 6-digit verification code: ${otp}`,
+      htmlContent: `<p>Hello ${user.full_name},</p><p>Your 6-digit verification code for phone ${targetPhone} is: <strong style="font-size:20px;letter-spacing:2px;">${otp}</strong>.</p><p>This code expires in 10 minutes.</p>`,
+    });
+
+    await recordAuditEvent(this.db, {
+      userId,
+      event: 'phone_otp_requested',
+      status: 'success',
+      ipAddress: ip,
+      userAgent,
+      metadata: { phone: targetPhone },
+    });
+
+    return {
+      success: true,
+      message: `A 6-digit verification code has been sent to ${targetPhone} and your email address.`,
+      ...(env.NODE_ENV !== 'production' ? { devOtp: otp } : {}),
+    };
+  }
+
+  // C2: Verify Phone OTP
+  async verifyPhoneOtp(
+    userId: string,
+    input: { otp: string },
+    ip?: string,
+    userAgent?: string
+  ) {
+    const tokenHash = hashToken(input.otp.trim());
+    const tokenRecord = await this.db.verificationToken.findFirst({
+      where: {
+        user_id: userId,
+        token_hash: tokenHash,
+        purpose: 'phone_verification',
+        consumed_at: null,
+        expires_at: { gt: new Date() },
+      },
+    });
+
+    if (!tokenRecord) {
+      throw new AppError('INVALID_TOKEN', 'The verification code entered is invalid or has expired', 400);
+    }
+
+    await this.db.$transaction([
+      this.db.verificationToken.update({
+        where: { id: tokenRecord.id },
+        data: { consumed_at: new Date() },
+      }),
+      this.db.user.update({
+        where: { id: userId },
+        data: { phone_verified_at: new Date() },
+      }),
+    ]);
+
+    await recordAuditEvent(this.db, {
+      userId,
+      event: 'phone_verified',
+      status: 'success',
+      ipAddress: ip,
+      userAgent,
+    });
+
+    return {
+      success: true,
+      message: 'Phone number has been verified successfully.',
+    };
+  }
+
+  // C3: GDPR Data Export
+  async exportUserData(userId: string, ip?: string, userAgent?: string) {
+    const user = await this.db.user.findUnique({
+      where: { id: userId },
+      include: {
+        memberships: {
+          include: {
+            organization: {
+              include: {
+                branches: true,
+                products: true,
+              },
+            },
+          },
+        },
+        audit_logs: {
+          orderBy: { created_at: 'desc' },
+          take: 100,
+        },
+      },
+    });
+
+    if (!user) throw new AppError('NOT_FOUND', 'User not found', 404);
+
+    await recordAuditEvent(this.db, {
+      userId,
+      event: 'data_exported',
+      status: 'success',
+      ipAddress: ip,
+      userAgent,
+    });
+
+    return {
+      exportDate: new Date().toISOString(),
+      user: {
+        id: user.id,
+        email: user.email,
+        fullName: user.full_name,
+        phone: user.phone,
+        status: user.status,
+        emailVerifiedAt: user.email_verified_at,
+        phoneVerifiedAt: user.phone_verified_at,
+        createdAt: user.created_at,
+        updatedAt: user.updated_at,
+        lastLoginAt: user.last_login_at,
+        lastLoginIp: user.last_login_ip,
+      },
+      organizations: user.memberships.map((m) => ({
+        organizationId: m.org_id,
+        organizationName: m.organization.name,
+        subdomain: m.organization.subdomain,
+        role: m.role,
+        membershipStatus: m.status,
+        timezone: m.organization.timezone,
+        currency: m.organization.currency,
+        branches: m.organization.branches.map((b) => ({
+          id: b.id,
+          name: b.name,
+          type: b.type,
+          status: b.status,
+        })),
+        products: m.organization.products.map((p) => ({
+          productKey: p.product_key,
+          status: p.status,
+        })),
+      })),
+      recentSecurityEvents: user.audit_logs.map((log) => ({
+        event: log.event,
+        status: log.status,
+        ipAddress: log.ip_address,
+        userAgent: log.user_agent,
+        timestamp: log.created_at,
+      })),
+    };
+  }
+
+  // C3: Soft Account Deletion
+  async deleteAccount(
+    userId: string,
+    input: { password: string; reason?: string },
+    ip?: string,
+    userAgent?: string
+  ) {
+    const user = await this.db.user.findUnique({
+      where: { id: userId },
+      include: {
+        memberships: {
+          include: {
+            organization: {
+              include: {
+                memberships: { where: { role: 'owner', status: 'active' } },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!user) throw new AppError('NOT_FOUND', 'User not found', 404);
+
+    // Verify password
+    const isPasswordValid = await verifyPassword(user.password_hash, input.password);
+    if (!isPasswordValid) {
+      throw new AppError('INVALID_CREDENTIALS', 'Incorrect password. Deletion cancelled.', 401);
+    }
+
+    const anonymizedEmail = `deleted_${user.id}_${Date.now()}@anonymized.orvio.com`;
+
+    // Suspend organizations where user is the sole active owner
+    const orgsToSuspend: string[] = [];
+    for (const membership of user.memberships) {
+      if (
+        membership.role === 'owner' &&
+        membership.organization.memberships.length === 1 &&
+        membership.organization.memberships[0].user_id === userId
+      ) {
+        orgsToSuspend.push(membership.org_id);
+      }
+    }
+
+    await this.db.$transaction([
+      this.db.user.update({
+        where: { id: userId },
+        data: {
+          status: 'deleted',
+          email: anonymizedEmail,
+          phone: null,
+          full_name: 'Deleted User',
+        },
+      }),
+      this.db.organization.updateMany({
+        where: { id: { in: orgsToSuspend } },
+        data: { status: 'suspended' },
+      }),
+      this.db.refreshToken.updateMany({
+        where: { user_id: userId, revoked_at: null },
+        data: { revoked_at: new Date() },
+      }),
+    ]);
+
+    await recordAuditEvent(this.db, {
+      userId,
+      event: 'account_deleted',
+      status: 'success',
+      ipAddress: ip,
+      userAgent,
+      metadata: { reason: input.reason },
+    });
+
+    return {
+      success: true,
+      message: 'Your account has been deleted and all active sessions have been revoked.',
+    };
+  }
+
+  // C4: List Audit Logs
+  async listAuditLogs(userId: string, options?: { page?: number; limit?: number }) {
+    return listUserAuditLogs(this.db, userId, options);
+  }
 }
 
 export const authService = new AuthService();
+

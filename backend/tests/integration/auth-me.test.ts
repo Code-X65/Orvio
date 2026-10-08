@@ -36,6 +36,7 @@ describe('GET /api/v1/auth/me (User Profile & Hydration)', () => {
         fullName: 'Profile Tester',
         organizationName: 'Profile Org',
         subdomain,
+        termsAccepted: true,
       },
     });
 

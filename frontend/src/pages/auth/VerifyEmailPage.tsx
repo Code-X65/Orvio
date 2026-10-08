@@ -13,7 +13,10 @@ import { getTenantWorkspaceUrl } from '../../app/config/authUrls';
 
 export function VerifyEmailPage() {
   const [searchParams] = useSearchParams();
-  const token = searchParams.get('token');
+  const hashToken = typeof window !== 'undefined'
+    ? new URLSearchParams(window.location.hash.replace(/^#/, '')).get('token')
+    : null;
+  const token = searchParams.get('token') || hashToken;
   const navigate = useNavigate();
 
   const [tokenStatus, setTokenStatus] = React.useState<'idle' | 'already_used' | 'expired' | 'invalid'>('idle');

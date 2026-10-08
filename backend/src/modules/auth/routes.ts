@@ -8,15 +8,27 @@ import {
   resendVerificationSchema,
   loginSchema,
   magicLoginSchema,
+  refreshSchema,
   checkEmailSchema,
   forgotPasswordSchema,
   resetPasswordSchema,
+  logoutSchema,
+  revokeSessionParamsSchema,
+  revokeAllSessionsQuerySchema,
+  updateProfileSchema,
+  changeEmailRequestSchema,
+  changeEmailConfirmSchema,
+  requestPhoneOtpSchema,
+  verifyPhoneOtpSchema,
+  deleteAccountSchema,
+  auditLogQuerySchema,
 } from './schemas.js';
 import { startTrialSchema, setupPasswordAndVerifySchema } from './trial.schema.js';
 import { AUTH_RATE_LIMITS } from './rate-limiter.js';
 import { sendData } from '../../lib/envelope.js';
 import { AppError } from '../../lib/errors.js';
 import { env } from '../../config/env.js';
+import { verifyAccessToken, getPublicJwks } from '../../lib/tokens.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { requireIdempotency } from '../../middleware/idempotency.js';
 
@@ -100,6 +112,7 @@ export async function authRoutes(app: FastifyInstance) {
   app.post(
     '/register',
     {
+      preHandler: [requireIdempotency()],
       config: {
         rateLimit: AUTH_RATE_LIMITS.register,
       },
@@ -423,12 +436,11 @@ export async function authRoutes(app: FastifyInstance) {
     async (request: FastifyRequest, reply: FastifyReply) => {
       const authService = getAuthService(request);
       const cookieToken = request.cookies?.refreshToken;
-      const bodyToken = (request.body as { refreshToken?: string })?.refreshToken;
-      const headerToken = request.headers['x-refresh-token'] as string | undefined;
-      const token = cookieToken || bodyToken || headerToken;
+      const body = refreshSchema.safeParse(request.body || {}).data;
+      const token = cookieToken || body?.refreshToken;
 
       if (!token) {
-        throw new AppError('MISSING_REFRESH_TOKEN', 'No refresh token provided', 401);
+        throw new AppError('MISSING_REFRESH_TOKEN', 'No refresh token provided in session cookie or request body', 401);
       }
 
       const result = await authService.refresh(token);
@@ -456,15 +468,43 @@ export async function authRoutes(app: FastifyInstance) {
       schema: {
         tags: ['Auth'],
         summary: 'Revoke refresh token and clear session cookie',
-        description: 'Revokes active refresh token from database and clears the refreshToken httpOnly cookie.',
+        description: 'Revokes active refresh token and session from database, invalidating the session immediately.',
+        body: {
+          type: 'object',
+          nullable: true,
+          properties: {
+            refreshToken: { type: 'string' },
+            allSessions: { type: 'boolean' },
+          },
+        },
       },
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const authService = getAuthService(request);
       const cookieToken = request.cookies?.refreshToken;
-      const token = cookieToken;
+      const body = logoutSchema.safeParse(request.body || {}).data;
+      const token = body?.refreshToken || cookieToken;
 
-      const result = await authService.logout(token);
+      let sessionId: string | undefined;
+      let userId: string | undefined;
+      const authHeader = request.headers.authorization;
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        const rawBearer = authHeader.slice(7).trim();
+        const claims = await verifyAccessToken(rawBearer);
+        if (claims) {
+          sessionId = claims.session_id;
+          userId = claims.sub;
+        }
+      }
+
+      const queryAll = (request.query as { all?: string })?.all === 'true';
+      const allSessions = body?.allSessions || queryAll;
+
+      const result = await authService.logout(token, {
+        sessionId,
+        userId,
+        allSessions,
+      });
 
       reply.clearCookie('refreshToken', getAuthCookieOptions());
       reply.clearCookie('refreshToken', getAuthCookieOptions({ path: '/api/v1/auth' }));
@@ -595,6 +635,300 @@ export async function authRoutes(app: FastifyInstance) {
         throw new AppError('UNAUTHORIZED', 'User not authenticated', 401);
       }
       const result = await authService.getCurrentUser(userId);
+      return sendData(reply, result, 200);
+    }
+  );
+
+  // 11. Active Sessions Management
+  app.get(
+    '/sessions',
+    {
+      preHandler: [requireAuth],
+      schema: {
+        tags: ['Auth'],
+        summary: 'List active login sessions / devices',
+        description: 'Returns all active device sessions for the authenticated user.',
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const authService = getAuthService(request);
+      const userId = request.auth!.user.id;
+      const currentSessionId = request.auth!.claims.session_id;
+
+      const sessions = await authService.listSessions(userId, currentSessionId);
+      return sendData(reply, { sessions }, 200);
+    }
+  );
+
+  app.delete(
+    '/sessions/:sessionId',
+    {
+      preHandler: [requireAuth],
+      schema: {
+        tags: ['Auth'],
+        summary: 'Revoke a specific active session / device',
+        description: 'Revokes the specified session ID, invalidating all associated refresh and access tokens.',
+        security: [{ bearerAuth: [] }],
+        params: {
+          type: 'object',
+          required: ['sessionId'],
+          properties: {
+            sessionId: { type: 'string' },
+          },
+        },
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const authService = getAuthService(request);
+      const userId = request.auth!.user.id;
+      const { sessionId } = revokeSessionParamsSchema.parse(request.params);
+
+      const result = await authService.revokeSession(userId, sessionId);
+
+      if (sessionId === request.auth?.claims.session_id) {
+        reply.clearCookie('refreshToken', getAuthCookieOptions());
+        reply.clearCookie('refreshToken', getAuthCookieOptions({ path: '/api/v1/auth' }));
+      }
+
+      return sendData(reply, result, 200);
+    }
+  );
+
+  app.delete(
+    '/sessions',
+    {
+      preHandler: [requireAuth],
+      schema: {
+        tags: ['Auth'],
+        summary: 'Revoke active sessions (all or all other sessions)',
+        description: 'Revokes active sessions. Pass ?keepCurrent=true to keep the current session and revoke all other devices.',
+        security: [{ bearerAuth: [] }],
+        querystring: {
+          type: 'object',
+          properties: {
+            keepCurrent: { type: 'boolean' },
+            all: { type: 'boolean' },
+          },
+        },
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const authService = getAuthService(request);
+      const userId = request.auth!.user.id;
+      const query = revokeAllSessionsQuerySchema.parse(request.query || request.body || {});
+
+      const keepSessionId = query.keepCurrent ? request.auth?.claims.session_id : undefined;
+      const result = await authService.revokeAllSessions(userId, { keepSessionId });
+
+      if (!keepSessionId) {
+        reply.clearCookie('refreshToken', getAuthCookieOptions());
+        reply.clearCookie('refreshToken', getAuthCookieOptions({ path: '/api/v1/auth' }));
+      }
+
+      return sendData(reply, result, 200);
+    }
+  );
+
+  // 12. JWKS Endpoint (JSON Web Key Set)
+  app.get(
+    '/.well-known/jwks.json',
+    {
+      schema: {
+        tags: ['Auth'],
+        summary: 'Get JSON Web Key Set (JWKS) public keys metadata',
+        description: 'Returns the active cryptographic keys and key IDs used for JWT signing and verification.',
+      },
+    },
+    async (_request: FastifyRequest, reply: FastifyReply) => {
+      const jwks = getPublicJwks();
+      return reply.code(200).header('Cache-Control', 'public, max-age=3600').send(jwks);
+    }
+  );
+
+  // 13. Update Profile (C1)
+  app.patch(
+    '/profile',
+    {
+      preHandler: [requireAuth],
+      schema: {
+        tags: ['Auth'],
+        summary: 'Update authenticated user profile (full name, phone)',
+        description: 'Updates profile fields and creates an audit log entry.',
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const authService = getAuthService(request);
+      const userId = request.auth!.user.id;
+      const body = updateProfileSchema.parse(request.body);
+      const userAgent = request.headers['user-agent'];
+
+      const result = await authService.updateProfile(userId, body, request.ip, userAgent);
+      return sendData(reply, result, 200);
+    }
+  );
+
+  // 14. Email Change Flow (C2)
+  app.post(
+    '/change-email',
+    {
+      preHandler: [requireAuth],
+      config: {
+        rateLimit: AUTH_RATE_LIMITS.register,
+      },
+      schema: {
+        tags: ['Auth'],
+        summary: 'Request email address change with password verification',
+        description: 'Verifies current password, creates an email change token, and sends confirmation link to the new address.',
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const authService = getAuthService(request);
+      const userId = request.auth!.user.id;
+      const body = changeEmailRequestSchema.parse(request.body);
+      const userAgent = request.headers['user-agent'];
+
+      const result = await authService.requestEmailChange(userId, body, request.ip, userAgent);
+      return sendData(reply, result, 200);
+    }
+  );
+
+  app.post(
+    '/change-email/confirm',
+    {
+      schema: {
+        tags: ['Auth'],
+        summary: 'Confirm email address change via verification token',
+        description: 'Applies new email address to the user account upon verifying the token.',
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const authService = getAuthService(request);
+      const body = changeEmailConfirmSchema.parse(request.body);
+      const userAgent = request.headers['user-agent'];
+
+      const result = await authService.confirmEmailChange(body.token, request.ip, userAgent);
+      return sendData(reply, result, 200);
+    }
+  );
+
+  // 15. Phone Verification (OTP) (C2)
+  app.post(
+    '/phone/verify/request',
+    {
+      preHandler: [requireAuth],
+      config: {
+        rateLimit: AUTH_RATE_LIMITS.register,
+      },
+      schema: {
+        tags: ['Auth'],
+        summary: 'Request 6-digit phone verification OTP code',
+        description: 'Generates and sends a 6-digit OTP code to the user phone or registered email.',
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const authService = getAuthService(request);
+      const userId = request.auth!.user.id;
+      const body = requestPhoneOtpSchema.parse(request.body || {});
+      const userAgent = request.headers['user-agent'];
+
+      const result = await authService.requestPhoneOtp(userId, body, request.ip, userAgent);
+      return sendData(reply, result, 200);
+    }
+  );
+
+  app.post(
+    '/phone/verify/confirm',
+    {
+      preHandler: [requireAuth],
+      schema: {
+        tags: ['Auth'],
+        summary: 'Confirm phone number with 6-digit OTP code',
+        description: 'Validates OTP code and marks phone number as verified.',
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const authService = getAuthService(request);
+      const userId = request.auth!.user.id;
+      const body = verifyPhoneOtpSchema.parse(request.body);
+      const userAgent = request.headers['user-agent'];
+
+      const result = await authService.verifyPhoneOtp(userId, body, request.ip, userAgent);
+      return sendData(reply, result, 200);
+    }
+  );
+
+  // 16. GDPR Data Export (C3)
+  app.get(
+    '/me/export',
+    {
+      preHandler: [requireAuth],
+      schema: {
+        tags: ['Auth'],
+        summary: 'Export personal data (GDPR portability)',
+        description: 'Returns all personal data, memberships, and active sessions in JSON format.',
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const authService = getAuthService(request);
+      const userId = request.auth!.user.id;
+      const userAgent = request.headers['user-agent'];
+
+      const result = await authService.exportUserData(userId, request.ip, userAgent);
+      return sendData(reply, result, 200);
+    }
+  );
+
+  // 17. Account Deletion (GDPR Right to Erasure) (C3)
+  app.delete(
+    '/account',
+    {
+      preHandler: [requireAuth],
+      schema: {
+        tags: ['Auth'],
+        summary: 'Soft-delete user account (GDPR Right to Erasure)',
+        description: 'Verifies password, marks account as deleted, revokes all sessions, and clears auth cookies.',
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const authService = getAuthService(request);
+      const userId = request.auth!.user.id;
+      const body = deleteAccountSchema.parse(request.body);
+      const userAgent = request.headers['user-agent'];
+
+      const result = await authService.deleteAccount(userId, body, request.ip, userAgent);
+
+      reply.clearCookie('refreshToken', getAuthCookieOptions());
+      reply.clearCookie('refreshToken', getAuthCookieOptions({ path: '/api/v1/auth' }));
+
+      return sendData(reply, result, 200);
+    }
+  );
+
+  // 18. Audit Logs (C4)
+  app.get(
+    '/audit-logs',
+    {
+      preHandler: [requireAuth],
+      schema: {
+        tags: ['Auth'],
+        summary: 'List user security audit logs',
+        description: 'Returns paginated security events for the authenticated user.',
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const authService = getAuthService(request);
+      const userId = request.auth!.user.id;
+      const query = auditLogQuerySchema.parse(request.query || {});
+
+      const result = await authService.listAuditLogs(userId, query);
       return sendData(reply, result, 200);
     }
   );

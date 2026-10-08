@@ -137,6 +137,12 @@ export function buildApp(deps?: AppDeps): FastifyInstance {
     timestamp: new Date().toISOString(),
   }));
 
+  // Well-Known OpenID JWKS Endpoint
+  app.get('/.well-known/jwks.json', async (_req, reply) => {
+    const { getPublicJwks } = await import('./lib/tokens.js');
+    return reply.code(200).header('Cache-Control', 'public, max-age=3600').send(getPublicJwks());
+  });
+
   // API v1 Routes
   app.register(authRoutes, { prefix: '/api/v1/auth' });
   app.register(orgRoutes, { prefix: '/api/v1/orgs' });

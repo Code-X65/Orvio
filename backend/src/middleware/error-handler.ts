@@ -83,15 +83,15 @@ export function errorHandler(
       : typeof pError.meta?.target === 'string'
       ? [pError.meta.target]
       : [];
-    const targetStr = targetArray.join(', ').toLowerCase();
+    const targetStr = (targetArray.join(', ') + ' ' + (pError.message || '')).toLowerCase();
 
     if (targetStr.includes('subdomain')) {
       const suggestions = nextAvailableCandidates('org', 3);
       return reply.status(409).send(
         toErrorResponse(
           {
-            code: 'RESOURCE_CONFLICT',
-            message: 'This subdomain is already taken by another organization',
+            code: 'SUBDOMAIN_TAKEN',
+            message: 'This organization subdomain is already taken',
             details: {
               field: 'subdomain',
               resource: 'subdomain',
@@ -148,7 +148,7 @@ export function errorHandler(
       );
     }
 
-    const target = targetArray.length > 0 ? targetArray.join(', ') : 'field';
+    const target = targetArray.length > 0 ? targetArray.join(', ') : 'resource';
     return reply.status(409).send(
       toErrorResponse(
         {

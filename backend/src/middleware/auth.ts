@@ -54,6 +54,23 @@ export async function requireAuth(request: FastifyRequest): Promise<void> {
     throw new AppError('UNAUTHORIZED', 'User account not found or suspended', 401);
   }
 
+  // Check if session has been revoked (instant JWT access token revocation on logout/session revoke)
+  if (claims.session_id) {
+    const activeSession = await db.refreshToken.findFirst({
+      where: {
+        user_id: claims.sub,
+        OR: [{ session_id: claims.session_id }, { family_id: claims.session_id }],
+        revoked_at: null,
+        expires_at: { gt: new Date() },
+      },
+      select: { id: true },
+    });
+
+    if (!activeSession) {
+      throw new AppError('UNAUTHORIZED', 'Session has been revoked or logged out', 401);
+    }
+  }
+
   const primaryMembership = user.memberships[0] ?? null;
   if (!primaryMembership) {
     if (claims.membership_id) {

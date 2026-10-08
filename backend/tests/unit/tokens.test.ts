@@ -42,4 +42,30 @@ describe('JWT & Token Utilities', () => {
     expect(tokenHash).toBe(hashToken(rawToken));
     expect(jti).toBeDefined();
   });
+
+  it('supports JWT key rotation with multiple key IDs', async () => {
+    const { registerJwtKey, getPublicJwks } = await import('../../src/lib/tokens.js');
+    
+    // Register rotated key
+    const rotatedKid = 'rotation_2026_q4';
+    const rotatedSecret = 'a_very_secure_32_character_rotated_secret_key!!';
+    registerJwtKey(rotatedKid, rotatedSecret);
+
+    // Sign with rotated key
+    const token = await signAccessToken(
+      { sub: 'usr_rot', email: 'rot@example.com' },
+      { keyId: rotatedKid, secret: rotatedSecret }
+    );
+
+    // Verify automatically using key registry
+    const decoded = await verifyAccessToken(token);
+    expect(decoded).not.toBeNull();
+    expect(decoded?.sub).toBe('usr_rot');
+
+    // Verify JWKS contains both keys
+    const jwks = getPublicJwks();
+    expect(jwks.keys.length).toBeGreaterThanOrEqual(2);
+    expect(jwks.keys.some((k) => k.kid === rotatedKid)).toBe(true);
+    expect(jwks.keys.some((k) => k.kid === 'primary')).toBe(true);
+  });
 });

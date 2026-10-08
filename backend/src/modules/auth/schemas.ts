@@ -15,27 +15,13 @@ export const SUPPORTED_CURRENCIES = [
 
 export type SupportedCurrency = (typeof SUPPORTED_CURRENCIES)[number];
 
-export const DISPOSABLE_EMAIL_DOMAINS = new Set([
-  'mailinator.com',
-  'guerrillamail.com',
-  '10minutemail.com',
-  'tempmail.com',
-  'throwawaymail.com',
-  'yopmail.com',
-  'trashmail.com',
-  'sharklasers.com',
-  'dispostable.com',
-  'fakeinbox.com',
-  'getairmail.com',
-  'burnermail.io',
-]);
+import { isDisposableDomain, DISPOSABLE_EMAIL_DOMAINS } from './disposable-domains.js';
+
+export { DISPOSABLE_EMAIL_DOMAINS };
 
 export function isDisposableEmail(email: string): boolean {
   if (!env.DISPOSABLE_EMAIL_BLOCKLIST_ENABLED) return false;
-  const parts = email.split('@');
-  if (parts.length !== 2) return false;
-  const domain = parts[1].toLowerCase().trim();
-  return DISPOSABLE_EMAIL_DOMAINS.has(domain);
+  return isDisposableDomain(email);
 }
 
 export function isValidTimezone(tz: string): boolean {
@@ -87,7 +73,9 @@ export const registerSchema = z
         message: 'Invalid IANA timezone identifier',
       }),
     currency: z.enum(SUPPORTED_CURRENCIES).default('NGN'),
-    termsAccepted: z.literal(true).optional(),
+    termsAccepted: z.literal(true, {
+      errorMap: () => ({ message: 'You must accept the Terms of Service and Privacy Policy to continue' }),
+    }),
     marketingOptIn: z.boolean().optional(),
   })
   .strict()
@@ -179,8 +167,99 @@ export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>;
 export const logoutSchema = z
   .object({
     refreshToken: z.string().trim().optional(),
+    allSessions: z.boolean().optional(),
   })
   .strict();
 
 export type LogoutInput = z.infer<typeof logoutSchema>;
+
+export const revokeSessionParamsSchema = z
+  .object({
+    sessionId: z.string().trim().min(1, 'Session ID is required'),
+  })
+  .strict();
+
+export type RevokeSessionParamsInput = z.infer<typeof revokeSessionParamsSchema>;
+
+export const revokeAllSessionsQuerySchema = z
+  .object({
+    keepCurrent: z
+      .union([z.boolean(), z.enum(['true', 'false'])])
+      .transform((val) => (typeof val === 'string' ? val === 'true' : val))
+      .optional(),
+    all: z
+      .union([z.boolean(), z.enum(['true', 'false'])])
+      .transform((val) => (typeof val === 'string' ? val === 'true' : val))
+      .optional(),
+  })
+  .strict();
+
+export type RevokeAllSessionsQueryInput = z.infer<typeof revokeAllSessionsQuerySchema>;
+
+export const updateProfileSchema = z
+  .object({
+    fullName: z.string().trim().min(2, 'Full name must be at least 2 characters').max(100).optional(),
+    phone: z.string().trim().min(10, 'Phone number must be at least 10 characters').optional().nullable(),
+  })
+  .strict();
+
+export type UpdateProfileInput = z.infer<typeof updateProfileSchema>;
+
+export const changeEmailRequestSchema = z
+  .object({
+    newEmail: z
+      .string()
+      .trim()
+      .toLowerCase()
+      .email('Please enter a valid email address')
+      .refine((email) => !isDisposableEmail(email), {
+        message: 'Disposable or temporary email addresses are not permitted',
+      }),
+    password: z.string().min(1, 'Current password is required to verify your identity'),
+  })
+  .strict();
+
+export type ChangeEmailRequestInput = z.infer<typeof changeEmailRequestSchema>;
+
+export const changeEmailConfirmSchema = z
+  .object({
+    token: z.string().trim().min(1, 'Email change confirmation token is required'),
+  })
+  .strict();
+
+export type ChangeEmailConfirmInput = z.infer<typeof changeEmailConfirmSchema>;
+
+export const requestPhoneOtpSchema = z
+  .object({
+    phone: z.string().trim().min(10, 'Valid phone number is required').optional(),
+  })
+  .strict();
+
+export type RequestPhoneOtpInput = z.infer<typeof requestPhoneOtpSchema>;
+
+export const verifyPhoneOtpSchema = z
+  .object({
+    otp: z.string().trim().regex(/^\d{6}$/, 'OTP must be a 6-digit numeric code'),
+  })
+  .strict();
+
+export type VerifyPhoneOtpInput = z.infer<typeof verifyPhoneOtpSchema>;
+
+export const deleteAccountSchema = z
+  .object({
+    password: z.string().min(1, 'Password is required to confirm account deletion'),
+    reason: z.string().trim().max(500).optional(),
+  })
+  .strict();
+
+export type DeleteAccountInput = z.infer<typeof deleteAccountSchema>;
+
+export const auditLogQuerySchema = z
+  .object({
+    page: z.coerce.number().min(1).default(1),
+    limit: z.coerce.number().min(1).max(100).default(20),
+  })
+  .strict();
+
+export type AuditLogQueryInput = z.infer<typeof auditLogQuerySchema>;
 

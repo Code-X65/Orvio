@@ -32,7 +32,10 @@ type ResetPasswordFormData = z.infer<typeof ResetPasswordSchema>;
 
 export function ResetPasswordPage() {
   const [searchParams] = useSearchParams();
-  const token = searchParams.get('token');
+  const hashToken = typeof window !== 'undefined'
+    ? new URLSearchParams(window.location.hash.replace(/^#/, '')).get('token')
+    : null;
+  const token = searchParams.get('token') || hashToken;
   const navigate = useNavigate();
 
   const [showPassword, setShowPassword] = React.useState(false);

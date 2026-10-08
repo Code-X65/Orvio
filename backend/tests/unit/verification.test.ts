@@ -13,6 +13,7 @@ describe('Verification Token Service', () => {
     let createdPayload: unknown = null;
     const mockDb = {
       verificationToken: {
+        updateMany: async () => ({ count: 0 }),
         create: async ({ data }: { data: unknown }) => {
           createdPayload = data;
           return data;

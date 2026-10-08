@@ -2,26 +2,50 @@ import type { PrismaClient } from '@prisma/client';
 import { generateOpaqueToken, hashToken } from '../../lib/tokens.js';
 import { AppError } from '../../lib/errors.js';
 
+export type TokenPurpose =
+  | 'email_verification'
+  | 'magic_login'
+  | 'password_reset'
+  | 'email_change'
+  | 'phone_verification';
+
 export interface IssuedToken {
   rawToken: string;
   tokenHash: string;
   expiresAt: Date;
 }
 
+/**
+ * Builds an emailed link carrying the token in the URL fragment (#token=...).
+ * Fragments are never sent to servers, so the token does not leak via
+ * Referer headers, proxy/CDN access logs, or server request logs.
+ */
+export function buildTokenLink(baseUrl: string, path: string, rawToken: string): string {
+  return `${baseUrl}${path}#token=${encodeURIComponent(rawToken)}`;
+}
+
+/**
+ * Issues a new single-use token. Any still-pending token for the same user and
+ * purpose is revoked first, so only the most recently emailed link works.
+ */
 export async function issueVerificationToken(
   db: PrismaClient,
   userId: string,
-  purpose = 'email_verification',
-  expiryHours = 24
+  purpose: TokenPurpose = 'email_verification',
+  expiryHours = 24,
+  metadata?: Record<string, unknown>
 ): Promise<IssuedToken> {
   const { rawToken, tokenHash } = generateOpaqueToken();
   const expiresAt = new Date(Date.now() + expiryHours * 60 * 60 * 1000);
+
+  await invalidateUserTokens(db, userId, [purpose]);
 
   await db.verificationToken.create({
     data: {
       user_id: userId,
       token_hash: tokenHash,
       purpose,
+      metadata: metadata ? (metadata as any) : undefined,
       expires_at: expiresAt,
     },
   });
@@ -57,8 +81,9 @@ export async function checkResendCooldown(
 export async function verifyAndConsumeToken(
   db: PrismaClient,
   rawToken: string,
-  expectedPurpose = 'email_verification'
+  expectedPurpose: TokenPurpose | TokenPurpose[] = 'email_verification'
 ) {
+  const acceptedPurposes: string[] = Array.isArray(expectedPurpose) ? expectedPurpose : [expectedPurpose];
   const tokenHash = hashToken(rawToken);
 
   const tokenRecord = await db.verificationToken.findUnique({
@@ -76,7 +101,7 @@ export async function verifyAndConsumeToken(
     },
   });
 
-  if (!tokenRecord || tokenRecord.purpose !== expectedPurpose) {
+  if (!tokenRecord || !acceptedPurposes.includes(tokenRecord.purpose)) {
     throw new AppError('INVALID_TOKEN', 'Verification token is invalid or expired', 400);
   }
 
@@ -88,11 +113,14 @@ export async function verifyAndConsumeToken(
     throw new AppError('TOKEN_EXPIRED', 'This verification token has expired. Please request a new one.', 400);
   }
 
-  // Mark token consumed
-  await db.verificationToken.update({
-    where: { id: tokenRecord.id },
+  // Atomically mark consumed (guards against two concurrent redemptions of the same link)
+  const consumed = await db.verificationToken.updateMany({
+    where: { id: tokenRecord.id, consumed_at: null },
     data: { consumed_at: new Date() },
   });
+  if (consumed.count === 0) {
+    throw new AppError('TOKEN_ALREADY_USED', 'This verification token has already been used', 400);
+  }
 
   return tokenRecord;
 }
@@ -100,7 +128,7 @@ export async function verifyAndConsumeToken(
 export async function invalidateUserTokens(
   db: PrismaClient,
   userId: string,
-  purposes: string[] = ['email_verification', 'password_reset', 'magic_login']
+  purposes: TokenPurpose[] = ['email_verification', 'password_reset', 'magic_login']
 ): Promise<number> {
   const result = await db.verificationToken.updateMany({
     where: {

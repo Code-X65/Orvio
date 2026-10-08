@@ -54,6 +54,7 @@ model User {
   phone             String?
   status            user_status         @default(active)
   email_verified_at DateTime?
+  phone_verified_at DateTime?
   last_login_at     DateTime?
   last_login_ip     String?
   created_at        DateTime            @default(now())
@@ -62,6 +63,7 @@ model User {
   memberships       Membership[]
   verification_tokens VerificationToken[]
   refresh_tokens    RefreshToken[]
+  audit_logs        AuditLog[]
 
   @@index([phone])
   @@map("users")
@@ -92,6 +94,7 @@ model Organization {
   products        WorkspaceProduct[]
   invitations     WorkspaceInvitation[]
   onboarding_flow OnboardingFlow?
+  audit_logs      AuditLog[]
 
   @@map("organizations")
 }
@@ -192,6 +195,7 @@ model VerificationToken {
   user_id     String
   token_hash  String    @unique
   purpose     String    @default("email_verification")
+  metadata    Json?
   expires_at  DateTime
   consumed_at DateTime?
   created_at  DateTime  @default(now())
@@ -245,4 +249,25 @@ model IdempotencyKey {
   @@index([key])
   @@index([expires_at])
   @@map("idempotency_keys")
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  user_id    String?
+  org_id     String?
+  event      String
+  status     String   @default("success") // success | failed
+  ip_address String?
+  user_agent String?
+  metadata   Json?
+  created_at DateTime @default(now())
+
+  user         User?         @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  organization Organization? @relation(fields: [org_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
+  @@index([org_id])
+  @@index([event])
+  @@index([created_at])
+  @@map("audit_logs")
 }

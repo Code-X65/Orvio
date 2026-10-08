@@ -29,6 +29,7 @@ describe('POST /api/v1/auth/logout (Session Revocation)', () => {
         fullName: 'Logout Tester',
         organizationName: 'Logout Org',
         subdomain,
+        termsAccepted: true,
       },
     });
     expect(regRes.statusCode).toBe(201);
