@@ -156,16 +156,25 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
         // 3. Background refresh via HttpOnly cookie
         const { refreshSession } = await import('../lib/api/auth');
-        const response = await refreshSession();
-        if (response.accessToken && response.user && response.organization) {
-          get().setSession(
-            response.accessToken,
-            response.user,
-            response.organization,
-            response.user.emailVerifiedAt ? 'authenticated' : 'pending-verification'
-          );
-        } else if (!get().accessToken) {
-          get().clearSession();
+        try {
+          const response = await refreshSession();
+          if (response.accessToken && response.user && response.organization) {
+            get().setSession(
+              response.accessToken,
+              response.user,
+              response.organization,
+              response.user.emailVerifiedAt ? 'authenticated' : 'pending-verification'
+            );
+          } else if (!get().accessToken) {
+            get().clearSession();
+          }
+          // If we already hold an in-memory access token (e.g. the user just
+          // verified their email and the page rehydrates), keep it. Never
+          // downgrade an authenticated session to pending-verification.
+        } catch {
+          if (!get().accessToken) {
+            get().clearSession();
+          }
         }
       } catch {
         if (!get().accessToken) {

@@ -66,6 +66,8 @@ export const registerSchema = z
       .regex(/^[a-z0-9]+$/, 'Subdomain must contain only lowercase letters and digits'),
     plan: z.enum(['inventory', 'gym', 'bundle']).optional(),
     planCode: z.enum(['inventory', 'gym', 'bundle']).optional().default('bundle'),
+    selectedApps: z.array(z.string()).optional(),
+    primaryApp: z.string().optional(),
     timezone: z
       .string()
       .default('Africa/Lagos')
@@ -81,10 +83,15 @@ export const registerSchema = z
   .strict()
   .transform((data) => {
     const code = data.planCode || data.plan || 'bundle';
+    const apps = data.selectedApps && data.selectedApps.length > 0
+      ? data.selectedApps
+      : [code === 'gym' ? 'gym' : 'inventory'];
     return {
       ...data,
       plan: code,
       planCode: code,
+      selectedApps: apps,
+      primaryApp: data.primaryApp || apps[0] || 'inventory',
     };
   });
 

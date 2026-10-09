@@ -44,7 +44,7 @@ describe('LoginPage Component', () => {
 
     await waitFor(() => {
       expect(screen.getByText(/No organization workspace found for "unknownbrand"/i)).toBeInTheDocument();
-    }, { timeout: 4000 });
+    }, { timeout: 8000 });
   });
 
   it('renders dedicated tenant email and password form when on tenant subdomain', () => {

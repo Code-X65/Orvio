@@ -31,11 +31,12 @@ describe('Workspace Application Management (Integration)', () => {
       url: '/api/v1/auth/register',
       payload: {
         email,
-        password: 'Password123!',
+        password: 'SecurePassword123#',
         fullName: 'Test App Owner',
         organizationName: 'App Test Org',
         subdomain,
         planCode: 'inventory',
+        termsAccepted: true,
       },
     });
 
@@ -60,7 +61,7 @@ describe('Workspace Application Management (Integration)', () => {
       url: '/api/v1/auth/login',
       payload: {
         email,
-        password: 'Password123!',
+        password: 'SecurePassword123#',
         subdomain,
       },
     });

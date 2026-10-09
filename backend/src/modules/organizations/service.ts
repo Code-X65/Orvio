@@ -286,6 +286,45 @@ export class OrgService {
     });
   }
 
+  async listMembers(orgId: string): Promise<{
+    members: Array<{
+      id: string;
+      fullName: string;
+      email: string;
+      role: string;
+      status: string;
+      createdAt: string;
+    }>;
+    count: number;
+  }> {
+    const memberships = await this.db.membership.findMany({
+      where: { org_id: orgId },
+      include: {
+        user: {
+          select: {
+            id: true,
+            full_name: true,
+            email: true,
+            status: true,
+          },
+        },
+      },
+      orderBy: { created_at: 'asc' },
+    });
+
+    return {
+      count: memberships.length,
+      members: memberships.map((m) => ({
+        id: m.id,
+        fullName: m.user.full_name,
+        email: m.user.email,
+        role: m.role,
+        status: m.status,
+        createdAt: m.created_at.toISOString(),
+      })),
+    };
+  }
+
   async createOrganizationWithOwner(params: CreateOrgWithOwnerParams): Promise<Organization> {
     assertValidSubdomain(params.subdomain);
 

@@ -12,6 +12,12 @@ export interface WorkspaceProductItem {
 }
 
 export interface WorkspaceDetailsResponse {
+  user?: {
+    id: string;
+    email: string;
+    fullName: string;
+    emailVerifiedAt: string | null;
+  } | null;
   organization: {
     id: string;
     name: string;
@@ -70,4 +76,18 @@ export async function updateWorkspaceProductSettings(
     { settings }
   );
   return res.product;
+}
+
+export interface TeamMember {
+  id: string;
+  fullName: string;
+  email: string;
+  role: string;
+  status: string;
+  createdAt: string;
+}
+
+export async function fetchWorkspaceMembers(): Promise<TeamMember[]> {
+  const res = await api.get<{ members: TeamMember[]; count: number }>('/orgs/members');
+  return res.members;
 }

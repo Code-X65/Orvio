@@ -27,6 +27,7 @@ describe('Start Free Trial & Organization Onboarding Integration Tests', () => {
       email,
       phone,
       password: 'StrongPassword123!',
+      termsAccepted: true,
     };
 
     const response = await ctx.app.inject({
@@ -109,6 +110,7 @@ describe('Start Free Trial & Organization Onboarding Integration Tests', () => {
         phone: `+23470${String(timestamp).slice(-8)}`,
         organizationName: `Apex Supermarket ${timestamp}`,
         subdomain,
+        termsAccepted: true,
       },
     });
     expect(regRes.statusCode).toBe(201);

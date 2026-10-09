@@ -12,7 +12,7 @@ describe('Full Registration & Verification Flow (Integration)', () => {
   const uniqueId = Math.floor(100000 + Math.random() * 900000);
   const testEmail = `user${uniqueId}@example.com`;
   const testSubdomain = `testorg${uniqueId}`;
-  const testPassword = 'Password123!';
+  const testPassword = 'SecurePassword123#';
 
   it('performs full signup -> email verification -> login cycle', async () => {
     // 1. Check subdomain availability
@@ -35,6 +35,7 @@ describe('Full Registration & Verification Flow (Integration)', () => {
         organizationName: `Org ${uniqueId}`,
         subdomain: testSubdomain,
         planCode: 'bundle',
+        termsAccepted: true,
       },
     });
 

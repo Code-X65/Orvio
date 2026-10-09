@@ -375,7 +375,10 @@ export class OnboardingService {
   async completeFlow(userId: string) {
     const membership = await this.db.membership.findFirst({
       where: { user_id: userId, role: 'owner' },
-      include: { organization: { include: { onboarding_flow: true, products: true, branches: true } } },
+      include: {
+        user: true,
+        organization: { include: { onboarding_flow: true, products: true, branches: true } },
+      },
     });
 
     if (!membership || !membership.organization) {
@@ -383,15 +386,37 @@ export class OnboardingService {
     }
 
     const org = membership.organization;
+    const flowData = (org.onboarding_flow?.step_data as Record<string, any>) ?? {};
 
-    // Verify required steps: organization_basics and application_selection
+    // 1. Verify organization basics milestone
+    if (!org.name || !org.subdomain) {
+      throw new AppError('INCOMPLETE_ONBOARDING', 'Organization basics step has not been completed', 400);
+    }
+
+    // 2. Verify active products milestone
     const activeProducts = org.products.filter((p) => p.status === 'active');
     if (activeProducts.length === 0) {
       throw new AppError('INCOMPLETE_ONBOARDING', 'Please select and activate at least one primary application', 400);
     }
 
-    // Update flow & organization
+    // 3. Verify primary branch milestone
+    const primaryBranch = org.branches.find((b) => b.is_primary && b.status === 'active');
+    if (!primaryBranch) {
+      throw new AppError('INCOMPLETE_ONBOARDING', 'Please configure your primary store or studio branch', 400);
+    }
+
+    // 4. Track unsubmitted optional steps as skipped if not explicitly provided
+    const finalStepData = {
+      ...flowData,
+      business_details: flowData.business_details ?? { skipped: true },
+      team_invites: flowData.team_invites ?? { skipped: true },
+    };
+
+    // 5. Determine organization status based on email verification state
+    const isEmailVerified = Boolean(membership.user.email_verified_at);
+    const targetOrgStatus = isEmailVerified ? 'active' : org.status;
     const completedAt = new Date();
+
     await this.db.$transaction([
       this.db.onboardingFlow.upsert({
         where: { org_id: org.id },
@@ -399,18 +424,20 @@ export class OnboardingService {
           org_id: org.id,
           current_step: 'completed',
           status: 'completed',
+          step_data: finalStepData,
           completed_at: completedAt,
         },
         update: {
           current_step: 'completed',
           status: 'completed',
+          step_data: finalStepData,
           completed_at: completedAt,
         },
       }),
       this.db.organization.update({
         where: { id: org.id },
         data: {
-          status: 'active',
+          status: targetOrgStatus,
         },
       }),
     ]);
@@ -422,7 +449,7 @@ export class OnboardingService {
         id: org.id,
         name: org.name,
         subdomain: org.subdomain,
-        status: 'active',
+        status: targetOrgStatus,
       },
     };
   }

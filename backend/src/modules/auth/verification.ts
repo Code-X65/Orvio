@@ -38,7 +38,12 @@ export async function issueVerificationToken(
   const { rawToken, tokenHash } = generateOpaqueToken();
   const expiresAt = new Date(Date.now() + expiryHours * 60 * 60 * 1000);
 
-  await invalidateUserTokens(db, userId, [purpose]);
+  const purposesToRevoke: TokenPurpose[] =
+    purpose === 'email_verification' || purpose === 'magic_login'
+      ? ['email_verification', 'magic_login']
+      : [purpose];
+
+  await invalidateUserTokens(db, userId, purposesToRevoke);
 
   await db.verificationToken.create({
     data: {

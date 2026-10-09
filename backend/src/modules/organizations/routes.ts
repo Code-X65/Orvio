@@ -101,120 +101,17 @@ export async function orgRoutes(app: FastifyInstance) {
     }
   );
 
-  // Authenticated tenant details endpoint behind requireAuth and requireActiveOrg
+  // Authenticated workspace bootstrap & tenant details endpoint
   app.get(
     '/me',
     {
-      preHandler: [requireAuth, requireActiveOrg],
+      preHandler: [requireAuth],
       schema: {
         tags: ['Organizations'],
-        summary: 'Get current organization, membership, and branch details',
+        summary: 'Get current workspace bootstrap details',
         description:
-          'Returns current user active organization, role membership, and primary default store branch. Requires active organization and verified email.',
+          'Returns current user, active organization, role membership, products, and primary default store branch.',
         security: [{ bearerAuth: [] }],
-        response: {
-          200: {
-            type: 'object',
-            properties: {
-              status: { type: 'string', examples: ['success'] },
-              data: {
-                type: 'object',
-                properties: {
-                  organization: {
-                    type: 'object',
-                    properties: {
-                      id: { type: 'string' },
-                      name: { type: 'string', examples: ['Apex Store'] },
-                      subdomain: { type: 'string', examples: ['apexstore'] },
-                      status: { type: 'string', examples: ['active'] },
-                      timezone: { type: 'string', examples: ['Africa/Lagos'] },
-                      currency: { type: 'string', examples: ['NGN'] },
-                      plan_code: { type: 'string', examples: ['bundle'] },
-                      url: { type: 'string', examples: ['http://apexstore.localhost:4000'] },
-                      created_at: { type: 'string' },
-                      updated_at: { type: 'string' },
-                    },
-                  },
-                  membership: {
-                    type: 'object',
-                    nullable: true,
-                    properties: {
-                      id: { type: 'string' },
-                      role: { type: 'string', examples: ['owner'] },
-                      status: { type: 'string', examples: ['active'] },
-                      created_at: { type: 'string' },
-                    },
-                  },
-                  branch: {
-                    type: 'object',
-                    nullable: true,
-                    properties: {
-                      id: { type: 'string' },
-                      name: { type: 'string', examples: ['Main Store'] },
-                      type: { type: 'string', examples: ['store'] },
-                      status: { type: 'string', examples: ['active'] },
-                    },
-                  },
-                  branches: {
-                    type: 'array',
-                    items: {
-                      type: 'object',
-                      properties: {
-                        id: { type: 'string' },
-                        name: { type: 'string' },
-                        type: { type: 'string' },
-                        status: { type: 'string' },
-                      },
-                    },
-                  },
-                  products: {
-                    type: 'array',
-                    items: {
-                      type: 'object',
-                      properties: {
-                        id: { type: 'string' },
-                        org_id: { type: 'string' },
-                        product_key: { type: 'string' },
-                        status: { type: 'string' },
-                        is_primary: { type: 'boolean' },
-                        settings: { type: 'object', nullable: true },
-                        created_at: { type: 'string' },
-                        updated_at: { type: 'string' },
-                      },
-                    },
-                  },
-                },
-              },
-              requestId: { type: 'string' },
-            },
-          },
-          401: {
-            type: 'object',
-            properties: {
-              status: { type: 'string', examples: ['error'] },
-              error: {
-                type: 'object',
-                properties: {
-                  code: { type: 'string', examples: ['UNAUTHORIZED'] },
-                  message: { type: 'string' },
-                },
-              },
-            },
-          },
-          403: {
-            type: 'object',
-            properties: {
-              status: { type: 'string', examples: ['error'] },
-              error: {
-                type: 'object',
-                properties: {
-                  code: { type: 'string', examples: ['ORG_PENDING'] },
-                  message: { type: 'string' },
-                },
-              },
-            },
-          },
-        },
       },
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
@@ -232,6 +129,14 @@ export async function orgRoutes(app: FastifyInstance) {
       return sendData(
         reply,
         {
+          user: auth?.user
+            ? {
+                id: auth.user.id,
+                email: auth.user.email,
+                fullName: auth.user.full_name,
+                emailVerifiedAt: auth.user.email_verified_at,
+              }
+            : null,
           organization: details.organization,
           membership: details.membership,
           branch: details.branch,
@@ -357,6 +262,59 @@ export async function orgRoutes(app: FastifyInstance) {
       const orgService = new OrgService(db);
       const updatedProduct = await orgService.updateProductSettings(orgId, productKey, settings);
       return sendData(reply, { product: updatedProduct }, 200);
+    }
+  );
+
+  // GET /members: List all team members in the current workspace
+  app.get(
+    '/members',
+    {
+      preHandler: [requireAuth, requireActiveOrg],
+      schema: {
+        tags: ['Organizations'],
+        summary: 'List all team members in the current workspace',
+        security: [{ bearerAuth: [] }],
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              status: { type: 'string', examples: ['success'] },
+              data: {
+                type: 'object',
+                properties: {
+                  members: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        id: { type: 'string' },
+                        fullName: { type: 'string' },
+                        email: { type: 'string' },
+                        role: { type: 'string', examples: ['owner', 'admin', 'cashier'] },
+                        status: { type: 'string', examples: ['active'] },
+                        createdAt: { type: 'string' },
+                      },
+                    },
+                  },
+                  count: { type: 'integer', examples: [3] },
+                },
+              },
+              requestId: { type: 'string' },
+            },
+          },
+        },
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const orgId = request.auth?.organization?.id ?? request.auth?.claims?.org_id;
+      if (!orgId) {
+        throw new AppError('ORGANIZATION_NOT_FOUND', 'Organization not found', 404);
+      }
+
+      const db = (request.server as { prisma?: typeof defaultPrisma }).prisma ?? defaultPrisma;
+      const orgService = new OrgService(db);
+      const result = await orgService.listMembers(orgId);
+      return sendData(reply, result, 200);
     }
   );
 }

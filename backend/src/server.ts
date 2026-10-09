@@ -1,12 +1,14 @@
 import { env } from './config/env.js';
 import { buildApp } from './app.js';
 import { prisma } from './infrastructure/database/client.js';
+import { startTokenCleanupJob, stopTokenCleanupJob } from './modules/auth/cleanup.js';
 
 const app = buildApp();
 
 async function start() {
   try {
     await app.listen({ host: env.HOST, port: env.PORT });
+    startTokenCleanupJob(prisma);
     app.log.info(`🚀 Orvio Hub API running on http://${env.HOST}:${env.PORT}`);
     app.log.info(`📚 Swagger OpenAPI documentation available at http://${env.HOST}:${env.PORT}/docs`);
   } catch (error) {
@@ -18,6 +20,7 @@ async function start() {
 async function shutdown(signal: string) {
   app.log.info(`Received ${signal}, gracefully shutting down...`);
   try {
+    stopTokenCleanupJob();
     await app.close();
     await prisma.$disconnect();
     app.log.info('Server and database pool shut down cleanly.');

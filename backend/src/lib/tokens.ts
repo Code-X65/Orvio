@@ -91,7 +91,10 @@ export async function signAccessToken(
     ? new TextEncoder().encode(options.secret)
     : keyRegistry.get(kid) || new TextEncoder().encode(env.JWT_SECRET);
 
-  return new SignJWT({ ...claims, typ: 'access' })
+  const jti = claims.jti || crypto.randomUUID();
+
+  return new SignJWT({ ...claims, typ: 'access', jti })
+    .setJti(jti)
     .setProtectedHeader({ alg: 'HS256', kid })
     .setIssuedAt()
     .setExpirationTime(env.JWT_ACCESS_EXPIRY)

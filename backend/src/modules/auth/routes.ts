@@ -35,11 +35,18 @@ import { requireIdempotency } from '../../middleware/idempotency.js';
 export async function authRoutes(app: FastifyInstance) {
   function getAuthCookieOptions(overrides: Record<string, any> = {}) {
     const domain = env.COOKIE_DOMAIN || undefined;
+    // SameSite=Lax is the robust, secure standard for first-party multi-subdomain architectures.
+    // Secure flag is enabled in production (or when explicitly configured via COOKIE_SECURE),
+    // and safely disabled on plain HTTP development/staging/tests to prevent silent browser rejections.
+    const isProd = env.NODE_ENV === 'production';
+    const secure = env.COOKIE_SECURE !== undefined ? env.COOKIE_SECURE : isProd;
+    const sameSite: 'strict' | 'lax' | 'none' = env.COOKIE_SAMESITE || 'lax';
+
     return {
-      path: '/',
+      path: '/api/v1/auth',
       httpOnly: true,
-      secure: env.NODE_ENV === 'production',
-      sameSite: 'lax' as const,
+      secure,
+      sameSite,
       ...(domain ? { domain } : {}),
       ...overrides,
     };
@@ -171,8 +178,16 @@ export async function authRoutes(app: FastifyInstance) {
     async (request: FastifyRequest, reply: FastifyReply) => {
       const authService = getAuthService(request);
       const body = registerSchema.parse(request.body);
-      const result = await authService.register(body);
-      return sendData(reply, result, 201);
+      const result = await authService.register(body, request.ip);
+
+      if (result.refreshToken) {
+        reply.setCookie('refreshToken', result.refreshToken, getAuthCookieOptions({
+          maxAge: env.REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60,
+        }));
+      }
+
+      const { refreshToken: _refreshToken, ...response } = result;
+      return sendData(reply, response, 201);
     }
   );
 
@@ -507,7 +522,6 @@ export async function authRoutes(app: FastifyInstance) {
       });
 
       reply.clearCookie('refreshToken', getAuthCookieOptions());
-      reply.clearCookie('refreshToken', getAuthCookieOptions({ path: '/api/v1/auth' }));
 
       return sendData(reply, result, 200);
     }
@@ -688,7 +702,6 @@ export async function authRoutes(app: FastifyInstance) {
 
       if (sessionId === request.auth?.claims.session_id) {
         reply.clearCookie('refreshToken', getAuthCookieOptions());
-        reply.clearCookie('refreshToken', getAuthCookieOptions({ path: '/api/v1/auth' }));
       }
 
       return sendData(reply, result, 200);
@@ -723,7 +736,6 @@ export async function authRoutes(app: FastifyInstance) {
 
       if (!keepSessionId) {
         reply.clearCookie('refreshToken', getAuthCookieOptions());
-        reply.clearCookie('refreshToken', getAuthCookieOptions({ path: '/api/v1/auth' }));
       }
 
       return sendData(reply, result, 200);
@@ -820,7 +832,7 @@ export async function authRoutes(app: FastifyInstance) {
     {
       preHandler: [requireAuth],
       config: {
-        rateLimit: AUTH_RATE_LIMITS.register,
+        rateLimit: AUTH_RATE_LIMITS.requestPhoneOtp,
       },
       schema: {
         tags: ['Auth'],
@@ -844,6 +856,9 @@ export async function authRoutes(app: FastifyInstance) {
     '/phone/verify/confirm',
     {
       preHandler: [requireAuth],
+      config: {
+        rateLimit: AUTH_RATE_LIMITS.verifyPhoneOtp,
+      },
       schema: {
         tags: ['Auth'],
         summary: 'Confirm phone number with 6-digit OTP code',
@@ -905,7 +920,6 @@ export async function authRoutes(app: FastifyInstance) {
       const result = await authService.deleteAccount(userId, body, request.ip, userAgent);
 
       reply.clearCookie('refreshToken', getAuthCookieOptions());
-      reply.clearCookie('refreshToken', getAuthCookieOptions({ path: '/api/v1/auth' }));
 
       return sendData(reply, result, 200);
     }

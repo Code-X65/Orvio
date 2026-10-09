@@ -100,6 +100,20 @@ const mockPrisma = {
           ],
         };
       }
+      if (where.id === 'org_pending') {
+        return {
+          id: 'org_pending',
+          name: 'Pending Store',
+          subdomain: 'pendingstore',
+          status: 'pending',
+          plan_code: 'bundle',
+          timezone: 'Africa/Lagos',
+          currency: 'NGN',
+          created_at: new Date(),
+          updated_at: new Date(),
+          branches: [],
+        };
+      }
       return null;
     },
   },
@@ -110,6 +124,17 @@ const mockPrisma = {
           id: 'mem_1',
           org_id: 'org_active',
           user_id: 'usr_active',
+          role: 'owner',
+          status: 'active',
+          created_at: new Date(),
+          updated_at: new Date(),
+        };
+      }
+      if (where.org_id === 'org_pending') {
+        return {
+          id: 'mem_2',
+          org_id: 'org_pending',
+          user_id: where.user_id,
           role: 'owner',
           status: 'active',
           created_at: new Date(),
@@ -141,7 +166,7 @@ describe('GET /api/v1/orgs/me Endpoint', () => {
     expect(response.json().error.code).toBe('UNAUTHORIZED');
   });
 
-  it('returns 403 EMAIL_NOT_VERIFIED when user email is unverified', async () => {
+  it('returns 200 with unverified email status in preview mode when user email is unverified', async () => {
     const token = await signAccessToken({
       sub: 'usr_unverified',
       email: 'unverified@company.com',
@@ -156,11 +181,13 @@ describe('GET /api/v1/orgs/me Endpoint', () => {
       },
     });
 
-    expect(response.statusCode).toBe(403);
-    expect(response.json().error.code).toBe('EMAIL_NOT_VERIFIED');
+    expect(response.statusCode).toBe(200);
+    const body = response.json().data;
+    expect(body.user.emailVerifiedAt).toBeNull();
+    expect(body.organization.status).toBe('pending');
   });
 
-  it('returns 403 ORG_PENDING when organization is pending activation', async () => {
+  it('returns 200 with pending organization status in preview mode when organization is pending activation', async () => {
     const token = await signAccessToken({
       sub: 'usr_pending_org',
       email: 'verified_pending_org@company.com',
@@ -175,8 +202,10 @@ describe('GET /api/v1/orgs/me Endpoint', () => {
       },
     });
 
-    expect(response.statusCode).toBe(403);
-    expect(response.json().error.code).toBe('ORG_PENDING');
+    expect(response.statusCode).toBe(200);
+    const body = response.json().data;
+    expect(body.organization.status).toBe('pending');
+    expect(body.user.emailVerifiedAt).toBeDefined();
   });
 
   it('returns 200 with organization, membership, and branch details for active verified tenant', async () => {

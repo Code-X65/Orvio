@@ -15,6 +15,7 @@ export interface StartTrialPayload {
   organizationSize?: string;
   primaryInterest?: string;
   password?: string;
+  termsAccepted: true;
 }
 
 export interface StartTrialResponse {

@@ -92,6 +92,13 @@ export async function requireAuth(request: FastifyRequest): Promise<void> {
     throw new AppError('FORBIDDEN', 'Your membership permissions have changed. Please sign in again.', 403);
   }
 
+  if (
+    primaryMembership.organization &&
+    (primaryMembership.organization.status === 'suspended' || primaryMembership.organization.status === 'deactivated')
+  ) {
+    throw new AppError('ORGANIZATION_ACCESS_DENIED', 'This workspace is not active', 403);
+  }
+
   request.auth = {
     claims,
     user,

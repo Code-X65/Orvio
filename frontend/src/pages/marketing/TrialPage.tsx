@@ -436,6 +436,7 @@ export function TrialPage() {
         language,
         organizationSize,
         primaryInterest,
+        termsAccepted: true,
       });
 
       useAuthStore.getState().setSession(

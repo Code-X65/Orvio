@@ -5,6 +5,7 @@ export type AuditEventType =
   | 'login_success'
   | 'login_failed'
   | 'logout'
+  | 'token_refresh'
   | 'password_change'
   | 'password_reset_requested'
   | 'session_revoked'
