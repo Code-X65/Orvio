@@ -460,9 +460,11 @@ export async function authRoutes(app: FastifyInstance) {
 
       const result = await authService.refresh(token);
 
-      reply.setCookie('refreshToken', result.refreshToken, getAuthCookieOptions({
-        maxAge: env.REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60,
-      }));
+      if (result.refreshToken) {
+        reply.setCookie('refreshToken', result.refreshToken, getAuthCookieOptions({
+          maxAge: env.REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60,
+        }));
+      }
 
       return sendData(
         reply,

@@ -61,6 +61,24 @@ export function getBaseUrl(): string {
   return DEFAULT_BASE_URL;
 }
 
+function isJwtValid(token: string): boolean {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return false;
+    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const jsonPayload = decodeURIComponent(
+      atob(base64)
+        .split('')
+        .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+        .join('')
+    );
+    const payload = JSON.parse(jsonPayload);
+    return typeof payload.exp === 'number' && payload.exp * 1000 > Date.now() + 10000;
+  } catch {
+    return false;
+  }
+}
+
 // Single-flight refresh mutex
 let refreshPromise: Promise<string | null> | null = null;
 
@@ -69,7 +87,7 @@ async function executeTokenRefresh(): Promise<string | null> {
     return refreshPromise;
   }
 
-  refreshPromise = (async () => {
+  const runNetworkRefresh = async (): Promise<string | null> => {
     try {
       const baseUrl = getBaseUrl();
       const currentSub = getSubdomainFromHostname();
@@ -109,6 +127,23 @@ async function executeTokenRefresh(): Promise<string | null> {
     } catch {
       useAuthStore.getState().clearSession();
       return null;
+    }
+  };
+
+  refreshPromise = (async () => {
+    try {
+      // Enterprise Web Locks API: coordinates across all open browser tabs
+      if (typeof navigator !== 'undefined' && 'locks' in navigator) {
+        return await navigator.locks.request('orvio_auth_refresh_lock', async () => {
+          // If another tab refreshed while we waited for the cross-tab lock, reuse that token
+          const currentToken = useAuthStore.getState().accessToken;
+          if (currentToken && isJwtValid(currentToken)) {
+            return currentToken;
+          }
+          return await runNetworkRefresh();
+        });
+      }
+      return await runNetworkRefresh();
     } finally {
       refreshPromise = null;
     }

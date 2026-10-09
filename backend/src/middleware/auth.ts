@@ -94,7 +94,7 @@ export async function requireAuth(request: FastifyRequest): Promise<void> {
 
   if (
     primaryMembership.organization &&
-    (primaryMembership.organization.status === 'suspended' || primaryMembership.organization.status === 'deactivated')
+    (primaryMembership.organization.status === 'suspended' || primaryMembership.organization.status === 'deleted')
   ) {
     throw new AppError('ORGANIZATION_ACCESS_DENIED', 'This workspace is not active', 403);
   }

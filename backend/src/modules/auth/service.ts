@@ -762,7 +762,7 @@ export class AuthService {
       throw new AppError('ORGANIZATION_ACCESS_DENIED', 'Your membership for this workspace is not active', 403);
     }
 
-    if (activeMembership.organization.status === 'suspended' || activeMembership.organization.status === 'deactivated') {
+    if (activeMembership.organization.status === 'suspended' || activeMembership.organization.status === 'deleted') {
       throw new AppError('ORGANIZATION_ACCESS_DENIED', 'This workspace is not active', 403);
     }
 
@@ -910,8 +910,72 @@ export class AuthService {
       throw new AppError('INVALID_REFRESH_TOKEN', 'Refresh token is invalid', 401);
     }
 
-    // Reuse detection: token already revoked -> revoke full family!
+    // Multi-tab concurrency grace period (15 seconds) to prevent race conditions across parallel tabs
+    const ROTATION_GRACE_PERIOD_MS = 15000;
     if (tokenRecord.revoked_at) {
+      const timeSinceRevocation = Date.now() - new Date(tokenRecord.revoked_at).getTime();
+      if (timeSinceRevocation <= ROTATION_GRACE_PERIOD_MS && tokenRecord.family_id) {
+        // Find the active child token generated during the recent rotation
+        const activeSibling = await this.db.refreshToken.findFirst({
+          where: {
+            family_id: tokenRecord.family_id,
+            revoked_at: null,
+            expires_at: { gt: new Date() },
+          },
+          orderBy: { created_at: 'desc' },
+        });
+
+        if (activeSibling) {
+          const user = tokenRecord.user;
+          const primaryMembership = user.memberships.find(
+            (membership) => membership.id === tokenRecord.membership_id && membership.org_id === tokenRecord.org_id
+          );
+
+          if (
+            primaryMembership &&
+            primaryMembership.status === 'active' &&
+            user.status !== 'deleted' &&
+            user.status !== 'suspended' &&
+            primaryMembership.organization &&
+            primaryMembership.organization.status !== 'suspended' &&
+            primaryMembership.organization.status !== 'deleted'
+          ) {
+            const currentSessionId = activeSibling.session_id ?? activeSibling.family_id ?? generateOpaqueToken().rawToken;
+            const accessToken = await signAccessToken({
+              sub: user.id,
+              email: user.email,
+              org_id: primaryMembership.org_id,
+              role: primaryMembership.role,
+              membership_id: primaryMembership.id,
+              session_id: currentSessionId,
+            });
+
+            const org = primaryMembership.organization;
+            const orgUrl = org ? getTenantUrl(org.subdomain) : undefined;
+
+            return {
+              accessToken,
+              refreshToken: null, // Sibling tab already rotated cookie
+              user: {
+                id: user.id,
+                email: user.email,
+                fullName: user.full_name,
+                emailVerifiedAt: user.email_verified_at ? user.email_verified_at.toISOString() : null,
+              },
+              organization: {
+                id: org.id,
+                name: org.name,
+                subdomain: org.subdomain,
+                status: org.status,
+                planCode: org.plan_code,
+                url: orgUrl,
+              },
+            };
+          }
+        }
+      }
+
+      // Beyond grace period: true token reuse theft attempt -> invalidate family
       if (tokenRecord.family_id) {
         await this.db.refreshToken.updateMany({
           where: { family_id: tokenRecord.family_id },
@@ -943,7 +1007,7 @@ export class AuthService {
       throw new AppError('UNAUTHORIZED', 'Account is not active', 401);
     }
 
-    if (primaryMembership.organization && (primaryMembership.organization.status === 'suspended' || primaryMembership.organization.status === 'deactivated')) {
+    if (primaryMembership.organization && (primaryMembership.organization.status === 'suspended' || primaryMembership.organization.status === 'deleted')) {
       throw new AppError('ORGANIZATION_ACCESS_DENIED', 'Organization is not active', 403);
     }
 
@@ -989,10 +1053,45 @@ export class AuthService {
     });
 
     if (!rotated) {
-      await this.db.refreshToken.updateMany({
-        where: { family_id: tokenRecord.family_id },
-        data: { revoked_at: new Date() },
-      });
+      // Another tab rotated this exact token inside the same millisecond transaction window
+      if (tokenRecord.family_id) {
+        const activeSibling = await this.db.refreshToken.findFirst({
+          where: {
+            family_id: tokenRecord.family_id,
+            revoked_at: null,
+            expires_at: { gt: new Date() },
+          },
+          orderBy: { created_at: 'desc' },
+        });
+
+        if (activeSibling) {
+          const org = primaryMembership.organization;
+          const orgUrl = org ? getTenantUrl(org.subdomain) : undefined;
+          return {
+            accessToken,
+            refreshToken: null,
+            user: {
+              id: user.id,
+              email: user.email,
+              fullName: user.full_name,
+              emailVerifiedAt: user.email_verified_at ? user.email_verified_at.toISOString() : null,
+            },
+            organization: {
+              id: org.id,
+              name: org.name,
+              subdomain: org.subdomain,
+              status: org.status,
+              planCode: org.plan_code,
+              url: orgUrl,
+            },
+          };
+        }
+
+        await this.db.refreshToken.updateMany({
+          where: { family_id: tokenRecord.family_id },
+          data: { revoked_at: new Date() },
+        });
+      }
       throw new AppError('INVALID_REFRESH_TOKEN', 'Refresh token reuse detected. Session invalidated.', 401);
     }
 
