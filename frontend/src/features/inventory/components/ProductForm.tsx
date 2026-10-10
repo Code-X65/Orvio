@@ -487,7 +487,11 @@ export function ProductForm({
       setIsSubmitting(true);
       setError(null);
       const newFiles = uploadedImages.filter((img) => img.file).map((img) => img.file!);
-      await onSubmit(payload, newFiles, uploadedImages);
+      if (newFiles.length > 0 || uploadedImages.length > 0) {
+        await onSubmit(payload, newFiles, uploadedImages);
+      } else {
+        await onSubmit(payload);
+      }
       triggerClose();
     } catch (err: any) {
       setError(err?.message || 'Failed to save product. Please check the fields and try again.');

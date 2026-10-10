@@ -33,7 +33,6 @@ import { Badge } from '../../../components/ui/badge';
 import { toast } from 'sonner';
 import {
   productApi,
-  getVariantDisplayName,
   type Product,
   type ProductListItem,
   type ProductVariant,
@@ -50,6 +49,14 @@ import { ProductGallery } from './ProductGallery';
 import { VariantSwatchSelector } from './VariantSwatchSelector';
 import type { UploadedImage } from '../../../components/ui/ImageUploader';
 import { flattenCategoriesForSelection } from './CategoryForm';
+
+function getVariantDisplayName(v: { name?: string; attributes?: Record<string, any>; sku?: string }): string {
+  if (v.name) return v.name;
+  if (v.attributes && Object.keys(v.attributes).length > 0) {
+    return Object.entries(v.attributes).map(([k, val]) => `${k}: ${val}`).join(', ');
+  }
+  return v.sku || 'Variant';
+}
 
 interface ProductsPageProps {
   organization?: {

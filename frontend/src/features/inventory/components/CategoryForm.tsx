@@ -172,16 +172,18 @@ export function CategoryForm({
     try {
       setIsSubmitting(true);
       setError(null);
-      await onSubmit(
-        {
-          name: trimmedName,
-          description: description.trim(),
-          parentId: parentId || null,
-          isActive,
-        },
-        imageFile,
-        shouldRemoveImage
-      );
+      const payload = {
+        name: trimmedName,
+        description: description.trim(),
+        parentId: parentId || null,
+        isActive,
+      };
+
+      if (imageFile || shouldRemoveImage) {
+        await onSubmit(payload, imageFile, shouldRemoveImage);
+      } else {
+        await onSubmit(payload);
+      }
       triggerClose();
     } catch (err: any) {
       setError(err?.message || 'Failed to save category. Please check details and try again.');
