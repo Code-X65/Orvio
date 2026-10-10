@@ -18,6 +18,9 @@ import {
   Filter,
   Copy,
   Check,
+  History,
+  ArrowRight,
+  TrendingUp,
 } from 'lucide-react';
 import { Button } from '../../../components/ui/button';
 import { Input } from '../../../components/ui/input';
@@ -28,6 +31,7 @@ import {
   type Product,
   type ProductListItem,
   type ProductVariant,
+  type ProductPriceHistory,
   type CreateProductPayload,
   type UpdateProductPayload,
   type CreateVariantPayload,
@@ -83,6 +87,11 @@ export function ProductsPage({ organization }: ProductsPageProps) {
   // Delete Modal State
   const [productToDelete, setProductToDelete] = React.useState<ProductListItem | null>(null);
   const [isDeletingProduct, setIsDeletingProduct] = React.useState(false);
+
+  // Price History Modal State
+  const [historyProduct, setHistoryProduct] = React.useState<ProductListItem | null>(null);
+  const [priceHistoryList, setPriceHistoryList] = React.useState<ProductPriceHistory[]>([]);
+  const [loadingHistory, setLoadingHistory] = React.useState(false);
 
   // Copy feedback
   const [copiedText, setCopiedText] = React.useState<string | null>(null);
@@ -228,6 +237,21 @@ export function ProductsPage({ organization }: ProductsPageProps) {
       toast.error(err?.message || 'Failed to delete product');
     } finally {
       setIsDeletingProduct(false);
+    }
+  };
+
+  // View price history handler
+  const handleViewPriceHistory = async (product: ProductListItem) => {
+    setHistoryProduct(product);
+    setLoadingHistory(true);
+    try {
+      const res = await productApi.getPriceHistory(product.id);
+      setPriceHistoryList(res.history || []);
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to load price revision history');
+      setPriceHistoryList([]);
+    } finally {
+      setLoadingHistory(false);
     }
   };
 
@@ -589,7 +613,21 @@ export function ProductsPage({ organization }: ProductsPageProps) {
 
                           {/* Selling Price */}
                           <td className="py-3 px-4 text-right font-semibold text-white">
-                            {currency} {Number(item.selling_price).toLocaleString()}
+                            <div className="flex flex-col items-end">
+                              <div className="flex items-center gap-1.5 font-semibold text-white">
+                                <span>{currency} {Number(item.selling_price).toLocaleString()}</span>
+                                {item.compare_at_price && Number(item.compare_at_price) > Number(item.selling_price) && (
+                                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                                    -{Math.round(((Number(item.compare_at_price) - Number(item.selling_price)) / Number(item.compare_at_price)) * 100)}%
+                                  </span>
+                                )}
+                              </div>
+                              {item.compare_at_price && Number(item.compare_at_price) > Number(item.selling_price) && (
+                                <span className="text-[10px] text-slate-400 line-through">
+                                  {currency} {Number(item.compare_at_price).toLocaleString()}
+                                </span>
+                              )}
+                            </div>
                           </td>
 
                           {/* Stock Level */}
@@ -623,6 +661,14 @@ export function ProductsPage({ organization }: ProductsPageProps) {
                                   Variant
                                 </Button>
                               )}
+                              <button
+                                type="button"
+                                onClick={() => handleViewPriceHistory(item)}
+                                className="p-1.5 text-slate-400 hover:text-[#fbb945] hover:bg-[#2d3139] rounded transition-colors"
+                                title="View price revision history"
+                              >
+                                <History className="w-3.5 h-3.5" />
+                              </button>
                               <button
                                 type="button"
                                 onClick={() => handleEditProduct(item)}
@@ -716,9 +762,25 @@ export function ProductsPage({ organization }: ProductsPageProps) {
                                               : `${currency} ${Number(item.cost_price).toLocaleString()} (inherited)`}
                                           </td>
                                           <td className="py-2 px-3 text-right font-semibold text-slate-200">
-                                            {v.selling_price !== null && v.selling_price !== undefined
-                                              ? `${currency} ${Number(v.selling_price).toLocaleString()}`
-                                              : `${currency} ${Number(item.selling_price).toLocaleString()} (inherited)`}
+                                            <div className="flex flex-col items-end">
+                                              <div className="flex items-center gap-1.5 font-semibold text-slate-200">
+                                                <span>
+                                                  {v.selling_price !== null && v.selling_price !== undefined
+                                                    ? `${currency} ${Number(v.selling_price).toLocaleString()}`
+                                                    : `${currency} ${Number(item.selling_price).toLocaleString()} (inherited)`}
+                                                </span>
+                                                {v.compare_at_price && Number(v.compare_at_price) > Number(v.selling_price) && (
+                                                  <span className="text-[9px] font-medium px-1 py-0.2 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                                                    -{Math.round(((Number(v.compare_at_price) - Number(v.selling_price)) / Number(v.compare_at_price)) * 100)}%
+                                                  </span>
+                                                )}
+                                              </div>
+                                              {v.compare_at_price && Number(v.compare_at_price) > Number(v.selling_price) && (
+                                                <span className="text-[10px] text-slate-500 line-through">
+                                                  {currency} {Number(v.compare_at_price).toLocaleString()}
+                                                </span>
+                                              )}
+                                            </div>
                                           </td>
                                           <td className="py-2 px-3 text-center">
                                             {v.is_active ? (
@@ -845,6 +907,154 @@ export function ProductsPage({ organization }: ProductsPageProps) {
               >
                 {isDeletingProduct && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
                 Archive Product
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Price Revision History Modal */}
+      {historyProduct && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs animate-in fade-in"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="bg-[#181a20] border border-[#2d3139] rounded-xl max-w-xl w-full p-6 shadow-2xl text-slate-100 animate-in zoom-in-95 max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between pb-4 border-b border-[#2d3139]">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-lg bg-[#985184]/20 border border-[#985184]/30 flex items-center justify-center text-[#fbb945]">
+                  <History className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    <span>Price Revision History</span>
+                    <Badge variant="outline" className="bg-[#202229] border-[#2d3139] text-xs font-mono text-[#fbb945]">
+                      {historyProduct.sku}
+                    </Badge>
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">{historyProduct.name}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setHistoryProduct(null)}
+                className="p-1 rounded-md text-slate-400 hover:text-white hover:bg-[#252830] transition-colors"
+                title="Close"
+              >
+                <XCircle className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="overflow-y-auto py-4 flex-1 space-y-3 pr-1">
+              {loadingHistory ? (
+                <div className="py-12 flex flex-col items-center justify-center text-slate-400 gap-2">
+                  <Loader2 className="w-6 h-6 animate-spin text-[#985184]" />
+                  <p className="text-xs">Loading price revision logs...</p>
+                </div>
+              ) : priceHistoryList.length === 0 ? (
+                <div className="py-12 text-center text-slate-400 flex flex-col items-center justify-center">
+                  <div className="w-10 h-10 rounded-full bg-[#202229] flex items-center justify-center text-slate-500 mb-2">
+                    <History className="w-5 h-5" />
+                  </div>
+                  <p className="text-xs font-medium text-slate-300">No price adjustments recorded yet</p>
+                  <p className="text-[11px] text-slate-500 max-w-xs mt-1">
+                    Any modifications to cost price or selling price will automatically create an audit record here with justifications.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {priceHistoryList.map((entry) => {
+                    const oldCost = Number(entry.old_cost_price);
+                    const newCost = Number(entry.new_cost_price);
+                    const oldSelling = Number(entry.old_selling_price);
+                    const newSelling = Number(entry.new_selling_price);
+
+                    const oldMargin = oldSelling > 0 ? (((oldSelling - oldCost) / oldSelling) * 100).toFixed(1) : '0';
+                    const newMargin = newSelling > 0 ? (((newSelling - newCost) / newSelling) * 100).toFixed(1) : '0';
+                    const marginDelta = (Number(newMargin) - Number(oldMargin)).toFixed(1);
+
+                    return (
+                      <div
+                        key={entry.id}
+                        className="bg-[#141519] border border-[#2d3139] rounded-lg p-3.5 space-y-2.5 text-xs hover:border-[#383d47] transition-colors"
+                      >
+                        <div className="flex items-center justify-between text-[11px] text-slate-400">
+                          <span className="font-mono text-slate-300">
+                            {new Date(entry.created_at).toLocaleString(undefined, {
+                              dateStyle: 'medium',
+                              timeStyle: 'short',
+                            })}
+                          </span>
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#252830] text-slate-400 border border-[#2d3139]">
+                            Audit Log
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-3 pt-1">
+                          {/* Cost price change */}
+                          <div className="bg-[#181a20] p-2.5 rounded border border-[#2d3139]">
+                            <div className="text-[10px] text-slate-400 font-medium">Cost Price</div>
+                            <div className="flex items-center gap-2 mt-1">
+                              <span className="line-through text-slate-400 font-medium">
+                                {currency} {oldCost.toLocaleString()}
+                              </span>
+                              <ArrowRight className="w-3 h-3 text-slate-500" />
+                              <span className="font-bold text-white">
+                                {currency} {newCost.toLocaleString()}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Selling price change */}
+                          <div className="bg-[#181a20] p-2.5 rounded border border-[#2d3139]">
+                            <div className="text-[10px] text-slate-400 font-medium">Selling Price</div>
+                            <div className="flex items-center gap-2 mt-1">
+                              <span className="line-through text-slate-400 font-medium">
+                                {currency} {oldSelling.toLocaleString()}
+                              </span>
+                              <ArrowRight className="w-3 h-3 text-slate-500" />
+                              <span className="font-bold text-emerald-400">
+                                {currency} {newSelling.toLocaleString()}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Margin & Profit Delta */}
+                        <div className="flex items-center justify-between text-[11px] px-1 text-slate-400">
+                          <div className="flex items-center gap-1.5">
+                            <TrendingUp className="w-3.5 h-3.5 text-[#fbb945]" />
+                            <span>Margin Shift:</span>
+                            <span className="text-slate-300 font-medium">{oldMargin}%</span>
+                            <ArrowRight className="w-3 h-3 text-slate-500" />
+                            <span className={`font-semibold ${Number(marginDelta) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                              {newMargin}% ({Number(marginDelta) >= 0 ? `+${marginDelta}%` : `${marginDelta}%`})
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Reason justification */}
+                        {entry.reason && (
+                          <div className="mt-1 bg-[#1c1e24] border border-[#2d3139] p-2 rounded text-[11px] text-slate-300">
+                            <span className="text-slate-400 font-medium mr-1.5">Reason:</span>
+                            <span className="italic">"{entry.reason}"</span>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div className="pt-3 border-t border-[#2d3139] flex justify-end">
+              <Button
+                size="sm"
+                onClick={() => setHistoryProduct(null)}
+                className="bg-[#252830] hover:bg-[#2d3139] text-white text-xs h-8 px-4"
+              >
+                Close
               </Button>
             </div>
           </div>

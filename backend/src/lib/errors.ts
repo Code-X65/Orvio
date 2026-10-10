@@ -37,6 +37,7 @@ export type ErrorCode =
   | 'PRODUCT_NOT_FOUND'
   | 'PRODUCT_SKU_DUPLICATE'
   | 'PRODUCT_BARCODE_DUPLICATE'
+  | 'PRODUCT_PRICE_INVALID'
   | 'INTERNAL_SERVER_ERROR';
 
 export interface ErrorResponseEnvelope {

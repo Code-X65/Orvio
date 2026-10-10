@@ -128,8 +128,31 @@ export async function productRoutes(app: FastifyInstance) {
       const db = (request.server as { prisma?: typeof defaultPrisma }).prisma ?? defaultPrisma;
       const service = new ProductService(db);
 
-      const product = await service.updateProduct(orgId, id, body);
+      const userId = request.auth?.user?.id ?? null;
+      const product = await service.updateProduct(orgId, id, { ...body, ...(userId ? { userId } : {}) });
       return sendData(reply, { product }, 200);
+    }
+  );
+
+  // GET /products/:id/price-history — get price change audit trail
+  app.get(
+    '/:id/price-history',
+    {
+      preHandler: [requireAuth],
+      schema: {
+        tags: ['Inventory Products'],
+        summary: 'Get chronological price change history log for a product',
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const orgId = getOrgId(request);
+      const { id } = z.object({ id: z.string().min(1) }).parse(request.params);
+      const db = (request.server as { prisma?: typeof defaultPrisma }).prisma ?? defaultPrisma;
+      const service = new ProductService(db);
+
+      const history = await service.getPriceHistory(orgId, id);
+      return sendData(reply, { history }, 200);
     }
   );
 

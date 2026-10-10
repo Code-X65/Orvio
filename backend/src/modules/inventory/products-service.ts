@@ -21,6 +21,7 @@ export interface ProductListItem {
   description: string | null;
   cost_price: number;
   selling_price: number;
+  compare_at_price: number | null;
   unit_of_measure: measurement_unit;
   track_quantity: boolean;
   low_stock_threshold: number;
@@ -143,7 +144,16 @@ export class ProductService {
       }
     }
 
-    // 4. Retrieve org business_type for snapshot
+    // 4. Validate Selling Price >= Cost Price
+    if (input.sellingPrice < input.costPrice) {
+      throw new AppError(
+        'PRODUCT_PRICE_INVALID',
+        'Selling price must not be less than cost price (no loss sales permitted)',
+        400
+      );
+    }
+
+    // 5. Retrieve org business_type for snapshot
     const org = await this.db.organization.findUnique({
       where: { id: orgId },
       select: { business_type: true },
@@ -159,6 +169,10 @@ export class ProductService {
         barcode,
         cost_price: new Decimal(input.costPrice),
         selling_price: new Decimal(input.sellingPrice),
+        compare_at_price:
+          input.compareAtPrice !== undefined && input.compareAtPrice !== null
+            ? new Decimal(input.compareAtPrice)
+            : null,
         unit_of_measure: input.unitOfMeasure,
         track_quantity: input.trackQuantity,
         low_stock_threshold: input.lowStockThreshold,
@@ -295,6 +309,7 @@ export class ProductService {
             description: p.description,
             cost_price: Number(p.cost_price),
             selling_price: Number(p.selling_price),
+            compare_at_price: p.compare_at_price ? Number(p.compare_at_price) : null,
             unit_of_measure: p.unit_of_measure,
             track_quantity: p.track_quantity,
             low_stock_threshold: p.low_stock_threshold,
@@ -456,6 +471,37 @@ export class ProductService {
       }
     }
 
+    // Price validation: Selling price must not be less than cost price
+    const newCost = input.costPrice !== undefined ? input.costPrice : Number(existing.cost_price);
+    const newSelling = input.sellingPrice !== undefined ? input.sellingPrice : Number(existing.selling_price);
+    if (newSelling < newCost) {
+      throw new AppError(
+        'PRODUCT_PRICE_INVALID',
+        'Selling price must not be less than cost price (no loss sales permitted)',
+        400
+      );
+    }
+
+    const oldCost = Number(existing.cost_price);
+    const oldSelling = Number(existing.selling_price);
+    const costChanged = input.costPrice !== undefined && input.costPrice !== oldCost;
+    const sellingChanged = input.sellingPrice !== undefined && input.sellingPrice !== oldSelling;
+
+    if (costChanged || sellingChanged) {
+      await this.db.productPriceHistory.create({
+        data: {
+          org_id: orgId,
+          product_id: productId,
+          old_cost_price: existing.cost_price,
+          new_cost_price: new Decimal(newCost),
+          old_selling_price: existing.selling_price,
+          new_selling_price: new Decimal(newSelling),
+          reason: input.priceChangeReason?.trim() || null,
+          changed_by_user_id: (input as any).userId || null,
+        },
+      });
+    }
+
     const updateData: any = {
       sku,
       barcode,
@@ -465,6 +511,9 @@ export class ProductService {
     if (input.categoryId !== undefined) updateData.category_id = input.categoryId || null;
     if (input.costPrice !== undefined) updateData.cost_price = new Decimal(input.costPrice);
     if (input.sellingPrice !== undefined) updateData.selling_price = new Decimal(input.sellingPrice);
+    if (input.compareAtPrice !== undefined) {
+      updateData.compare_at_price = input.compareAtPrice !== null ? new Decimal(input.compareAtPrice) : null;
+    }
     if (input.unitOfMeasure !== undefined) updateData.unit_of_measure = input.unitOfMeasure;
     if (input.trackQuantity !== undefined) updateData.track_quantity = input.trackQuantity;
     if (input.lowStockThreshold !== undefined) updateData.low_stock_threshold = input.lowStockThreshold;
@@ -480,6 +529,23 @@ export class ProductService {
 
     this.invalidateCache(orgId);
     return updated;
+  }
+
+  async getPriceHistory(orgId: string, productId: string) {
+    const product = await this.db.product.findFirst({
+      where: { id: productId, org_id: orgId, is_deleted: false },
+      select: { id: true },
+    });
+
+    if (!product) {
+      throw new AppError('PRODUCT_NOT_FOUND', 'Product not found', 404);
+    }
+
+    return await this.db.productPriceHistory.findMany({
+      where: { org_id: orgId, product_id: productId },
+      orderBy: { created_at: 'desc' },
+      take: 50,
+    });
   }
 
   async deleteProduct(orgId: string, productId: string): Promise<{ success: true }> {
@@ -566,6 +632,14 @@ export class ProductService {
       }
     }
 
+    if (input.sellingPrice < input.costPrice) {
+      throw new AppError(
+        'PRODUCT_PRICE_INVALID',
+        'Selling price must not be less than cost price (no loss sales permitted)',
+        400
+      );
+    }
+
     const variant = await this.db.productVariant.create({
       data: {
         org_id: orgId,
@@ -574,6 +648,10 @@ export class ProductService {
         barcode,
         cost_price: new Decimal(input.costPrice),
         selling_price: new Decimal(input.sellingPrice),
+        compare_at_price:
+          input.compareAtPrice !== undefined && input.compareAtPrice !== null
+            ? new Decimal(input.compareAtPrice)
+            : null,
         attributes: input.attributes,
         is_active: input.isActive ?? true,
       },

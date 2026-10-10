@@ -409,4 +409,73 @@ describe('Inventory Product Management (Integration Tests)', { timeout: 120000 }
     expect(results[0].sku).toBe('NOODLE-IND-70G');
     expect(results[0].available_stock).toBe(100);
   });
+
+  it('enforces selling >= cost validation, compare-at price, and price revision history logging', async () => {
+    const { token } = await registerAndSetupTenant('prdhst');
+
+    // 1. Attempt creating product where sellingPrice < costPrice (Must be rejected)
+    const invalidPriceRes = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/inventory/products',
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        name: 'Loss Leader Beverage',
+        costPrice: 500,
+        sellingPrice: 300, // Selling < Cost
+      },
+    });
+    expect(invalidPriceRes.statusCode).toBe(400);
+    const errorBody = invalidPriceRes.json();
+    expect(['VALIDATION_ERROR', 'PRODUCT_PRICE_INVALID']).toContain(errorBody.error.code);
+    expect(JSON.stringify(errorBody)).toContain('Selling price must not be less than cost price');
+
+    // 2. Create product with valid price and compare-at promotional price
+    const createRes = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/inventory/products',
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        name: 'Premium Dark Chocolate',
+        costPrice: 800,
+        sellingPrice: 1200,
+        compareAtPrice: 1500,
+        unitOfMeasure: 'pcs',
+      },
+    });
+    expect(createRes.statusCode).toBe(201);
+    const product = createRes.json().data.product;
+    expect(Number(product.selling_price)).toBe(1200);
+    expect(Number(product.compare_at_price)).toBe(1500);
+
+    // 3. Update product price and verify sensitive revision is logged
+    const updateRes = await ctx.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/inventory/products/${product.id}`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        costPrice: 950,
+        sellingPrice: 1400,
+        priceChangeReason: 'Vendor raw cocoa price surge',
+      },
+    });
+    expect(updateRes.statusCode).toBe(200);
+    const updated = updateRes.json().data.product;
+    expect(Number(updated.cost_price)).toBe(950);
+    expect(Number(updated.selling_price)).toBe(1400);
+
+    // 4. Retrieve price history endpoint
+    const historyRes = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/inventory/products/${product.id}/price-history`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(historyRes.statusCode).toBe(200);
+    const historyList = historyRes.json().data.history;
+    expect(historyList).toHaveLength(1);
+    expect(Number(historyList[0].old_cost_price)).toBe(800);
+    expect(Number(historyList[0].new_cost_price)).toBe(950);
+    expect(Number(historyList[0].old_selling_price)).toBe(1200);
+    expect(Number(historyList[0].new_selling_price)).toBe(1400);
+    expect(historyList[0].reason).toBe('Vendor raw cocoa price surge');
+  });
 });

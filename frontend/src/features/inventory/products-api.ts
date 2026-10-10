@@ -19,11 +19,14 @@ export interface ProductVariant {
   barcode: string | null;
   cost_price: number;
   selling_price: number;
+  compare_at_price?: number | null;
   attributes: Record<string, string>;
   is_active: boolean;
   created_at: string;
   updated_at: string;
 }
+
+export type ProductListItem = Product;
 
 export interface BranchStockItem {
   branch_id: string;
@@ -44,6 +47,7 @@ export interface Product {
   barcode: string | null;
   cost_price: number;
   selling_price: number;
+  compare_at_price?: number | null;
   unit_of_measure: MeasurementUnit;
   track_quantity: boolean;
   low_stock_threshold: number;
@@ -71,6 +75,7 @@ export interface CreateProductPayload {
   categoryId?: string | null;
   costPrice: number;
   sellingPrice: number;
+  compareAtPrice?: number | null;
   unitOfMeasure?: MeasurementUnit;
   trackQuantity?: boolean;
   lowStockThreshold?: number;
@@ -90,6 +95,7 @@ export interface UpdateProductPayload {
   categoryId?: string | null;
   costPrice?: number;
   sellingPrice?: number;
+  compareAtPrice?: number | null;
   unitOfMeasure?: MeasurementUnit;
   trackQuantity?: boolean;
   lowStockThreshold?: number;
@@ -97,6 +103,7 @@ export interface UpdateProductPayload {
   isActive?: boolean;
   imageUrl?: string | null;
   metadata?: Record<string, any> | null;
+  priceChangeReason?: string;
 }
 
 export interface CreateVariantPayload {
@@ -104,6 +111,7 @@ export interface CreateVariantPayload {
   barcode?: string | null;
   costPrice: number;
   sellingPrice: number;
+  compareAtPrice?: number | null;
   attributes: Record<string, string>;
   isActive?: boolean;
   initialStock?: number;
@@ -142,6 +150,22 @@ export interface SearchProductsResponse {
     is_active: boolean;
     available_stock: number;
   }>;
+export interface ProductPriceHistory {
+  id: string;
+  org_id: string;
+  product_id: string;
+  variant_id: string | null;
+  old_cost_price: number;
+  new_cost_price: number;
+  old_selling_price: number;
+  new_selling_price: number;
+  reason: string | null;
+  changed_by_user_id: string | null;
+  created_at: string;
+}
+
+export interface PriceHistoryResponse {
+  history: ProductPriceHistory[];
 }
 
 export const productApi = {
@@ -198,5 +222,8 @@ export const productApi = {
     return await api.get<SearchProductsResponse>('/inventory/products/search', {
       params: { q, branchId },
     });
+  },
+  getPriceHistory: async (productId: string) => {
+    return await api.get<PriceHistoryResponse>(`/inventory/products/${productId}/price-history`);
   },
 };

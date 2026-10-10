@@ -12,39 +12,81 @@ export const measurementUnitEnum = z.enum([
   'dozen',
 ]);
 
-export const createProductSchema = z.object({
-  name: z.string().trim().min(1, 'Product name is required').max(200, 'Cannot exceed 200 characters'),
-  description: z.string().max(1000, 'Description cannot exceed 1000 characters').nullable().optional().or(z.literal('')),
-  sku: z.string().trim().max(50, 'SKU cannot exceed 50 characters').optional().or(z.literal('')),
-  barcode: z.string().trim().max(50, 'Barcode cannot exceed 50 characters').nullable().optional().or(z.literal('')),
-  categoryId: z.string().trim().nullable().optional(),
-  costPrice: z.number().min(0, 'Cost price must be >= 0'),
-  sellingPrice: z.number().min(0, 'Selling price must be >= 0'),
-  unitOfMeasure: measurementUnitEnum.default('pcs'),
-  trackQuantity: z.boolean().default(true),
-  lowStockThreshold: z.number().int().min(0).default(0),
-  hasVariants: z.boolean().default(false),
-  isActive: z.boolean().default(true),
-  imageUrl: z.string().url('Must be a valid URL').nullable().optional().or(z.literal('')),
-  initialStock: z.number().min(0).optional().default(0),
-  branchId: z.string().trim().optional(),
-  metadata: z.record(z.any()).optional().nullable(),
-});
+export const createProductSchema = z
+  .object({
+    name: z.string().trim().min(1, 'Product name is required').max(200, 'Cannot exceed 200 characters'),
+    description: z.string().max(1000, 'Description cannot exceed 1000 characters').nullable().optional().or(z.literal('')),
+    sku: z.string().trim().max(50, 'SKU cannot exceed 50 characters').optional().or(z.literal('')),
+    barcode: z.string().trim().max(50, 'Barcode cannot exceed 50 characters').nullable().optional().or(z.literal('')),
+    categoryId: z.string().trim().nullable().optional(),
+    costPrice: z.number().min(0, 'Cost price must be >= 0'),
+    sellingPrice: z.number().min(0, 'Selling price must be >= 0'),
+    compareAtPrice: z.number().min(0, 'Compare-at price must be >= 0').nullable().optional(),
+    unitOfMeasure: measurementUnitEnum.default('pcs'),
+    trackQuantity: z.boolean().default(true),
+    lowStockThreshold: z.number().int().min(0).default(0),
+    hasVariants: z.boolean().default(false),
+    isActive: z.boolean().default(true),
+    imageUrl: z.string().url('Must be a valid URL').nullable().optional().or(z.literal('')),
+    initialStock: z.number().min(0).optional().default(0),
+    branchId: z.string().trim().optional(),
+    metadata: z.record(z.any()).optional().nullable(),
+  })
+  .refine((data) => data.sellingPrice >= data.costPrice, {
+    message: 'Selling price must not be less than cost price (no loss sales permitted)',
+    path: ['sellingPrice'],
+  });
 
-export const updateProductSchema = createProductSchema.partial();
+export const updateProductSchema = z
+  .object({
+    name: z.string().trim().min(1).max(200).optional(),
+    description: z.string().max(1000).nullable().optional(),
+    sku: z.string().trim().max(50).optional(),
+    barcode: z.string().trim().max(50).nullable().optional(),
+    categoryId: z.string().trim().nullable().optional(),
+    costPrice: z.number().min(0).optional(),
+    sellingPrice: z.number().min(0).optional(),
+    compareAtPrice: z.number().min(0).nullable().optional(),
+    unitOfMeasure: measurementUnitEnum.optional(),
+    trackQuantity: z.boolean().optional(),
+    lowStockThreshold: z.number().int().min(0).optional(),
+    hasVariants: z.boolean().optional(),
+    isActive: z.boolean().optional(),
+    imageUrl: z.string().url().nullable().optional(),
+    metadata: z.record(z.any()).optional().nullable(),
+    priceChangeReason: z.string().trim().max(500).optional(),
+  })
+  .refine(
+    (data) => {
+      if (data.sellingPrice !== undefined && data.costPrice !== undefined) {
+        return data.sellingPrice >= data.costPrice;
+      }
+      return true;
+    },
+    {
+      message: 'Selling price must not be less than cost price (no loss sales permitted)',
+      path: ['sellingPrice'],
+    }
+  );
 
-export const createVariantSchema = z.object({
-  sku: z.string().trim().max(50, 'Variant SKU cannot exceed 50 characters').optional().or(z.literal('')),
-  barcode: z.string().trim().max(50, 'Barcode cannot exceed 50 characters').nullable().optional().or(z.literal('')),
-  costPrice: z.number().min(0, 'Cost price must be >= 0'),
-  sellingPrice: z.number().min(0, 'Selling price must be >= 0'),
-  attributes: z.record(z.string()).refine((obj) => Object.keys(obj).length > 0, {
-    message: 'At least one variant attribute (e.g. size, color) is required',
-  }),
-  isActive: z.boolean().default(true),
-  initialStock: z.number().min(0).optional().default(0),
-  branchId: z.string().trim().optional(),
-});
+export const createVariantSchema = z
+  .object({
+    sku: z.string().trim().max(50, 'Variant SKU cannot exceed 50 characters').optional().or(z.literal('')),
+    barcode: z.string().trim().max(50, 'Barcode cannot exceed 50 characters').nullable().optional().or(z.literal('')),
+    costPrice: z.number().min(0, 'Cost price must be >= 0'),
+    sellingPrice: z.number().min(0, 'Selling price must be >= 0'),
+    compareAtPrice: z.number().min(0, 'Compare-at price must be >= 0').nullable().optional(),
+    attributes: z.record(z.string()).refine((obj) => Object.keys(obj).length > 0, {
+      message: 'At least one variant attribute (e.g. size, color) is required',
+    }),
+    isActive: z.boolean().default(true),
+    initialStock: z.number().min(0).optional().default(0),
+    branchId: z.string().trim().optional(),
+  })
+  .refine((data) => data.sellingPrice >= data.costPrice, {
+    message: 'Selling price must not be less than cost price (no loss sales permitted)',
+    path: ['sellingPrice'],
+  });
 
 export const listProductsQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),

@@ -12,6 +12,7 @@ vi.mock('../products-api', () => ({
     updateProduct: vi.fn(),
     deleteProduct: vi.fn(),
     createVariant: vi.fn(),
+    getPriceHistory: vi.fn(),
   },
 }));
 
@@ -34,6 +35,7 @@ describe('ProductsPage Component', () => {
         description: '500g durum wheat pasta',
         cost_price: 350,
         selling_price: 550,
+        compare_at_price: 700,
         unit_of_measure: 'pcs' as const,
         track_quantity: true,
         low_stock_threshold: 10,
@@ -132,5 +134,55 @@ describe('ProductsPage Component', () => {
       expect(screen.getByText('Small Pack')).toBeInTheDocument();
       expect(screen.getByText('GPS-500G-SM')).toBeInTheDocument();
     });
+  });
+
+  it('displays promotional compare-at price and discount pill in table row', async () => {
+    render(<ProductsPage organization={{ name: 'Test Market', currency: 'NGN' }} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Golden Penny Spaghetti')).toBeInTheDocument();
+    });
+
+    // Compare at price is 700, selling is 550, discount is -21%
+    expect(screen.getByText('NGN 700')).toBeInTheDocument();
+    expect(screen.getByText('-21%')).toBeInTheDocument();
+  });
+
+  it('opens price history modal and displays revision audit logs', async () => {
+    const mockHistory = {
+      history: [
+        {
+          id: 'hist-1',
+          org_id: 'org-1',
+          product_id: 'p-1',
+          variant_id: null,
+          old_cost_price: 300,
+          new_cost_price: 350,
+          old_selling_price: 500,
+          new_selling_price: 550,
+          reason: 'Supplier inflation hike',
+          changed_by_user_id: 'user-1',
+          created_at: new Date().toISOString(),
+        },
+      ],
+    };
+    (productApi.getPriceHistory as any).mockResolvedValue(mockHistory);
+
+    render(<ProductsPage organization={{ name: 'Test Market', currency: 'NGN' }} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Golden Penny Spaghetti')).toBeInTheDocument();
+    });
+
+    // Click Price History button
+    const historyBtn = screen.getByTitle('View price revision history');
+    fireEvent.click(historyBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText('Price Revision History')).toBeInTheDocument();
+      expect(screen.getByText('Supplier inflation hike', { exact: false })).toBeInTheDocument();
+    });
+
+    expect(productApi.getPriceHistory).toHaveBeenCalledWith('p-1');
   });
 });

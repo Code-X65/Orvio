@@ -156,4 +156,126 @@ describe('ProductForm Component', () => {
       })
     );
   });
+
+  it('displays real-time profit and margin % as prices are entered', async () => {
+    render(
+      <ProductForm
+        isOpen={true}
+        onClose={vi.fn()}
+        onSubmit={vi.fn()}
+        categories={mockCategories}
+        currency="NGN"
+      />
+    );
+
+    const [costInput, sellingInput] = screen.getAllByPlaceholderText('0.00');
+
+    // Type Cost 1000 and Selling 2000
+    fireEvent.change(costInput, { target: { value: '1,000' } });
+    fireEvent.change(sellingInput, { target: { value: '2,000' } });
+
+    // Profit should be 1000 and Margin 50.0%
+    expect(screen.getByText('Projected Gross Gain per Unit')).toBeInTheDocument();
+    expect(screen.getByText('+NGN 1,000.00')).toBeInTheDocument();
+    expect(screen.getByText(/50\.0% margin/i)).toBeInTheDocument();
+  });
+
+  it('prevents submission when selling price is less than cost price', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <ProductForm
+        isOpen={true}
+        onClose={vi.fn()}
+        onSubmit={onSubmit}
+        categories={mockCategories}
+        currency="NGN"
+      />
+    );
+
+    const nameInput = screen.getByPlaceholderText(/Golden Penny Spaghetti/i);
+    fireEvent.change(nameInput, { target: { value: 'Test Product' } });
+
+    const categorySelect = screen.getAllByRole('combobox')[0];
+    fireEvent.change(categorySelect, { target: { value: 'cat-1' } });
+
+    const [costInput, sellingInput] = screen.getAllByPlaceholderText('0.00');
+    // Selling price less than cost price (Cost 5000, Selling 3000)
+    fireEvent.change(costInput, { target: { value: '5000' } });
+    fireEvent.change(sellingInput, { target: { value: '3000' } });
+
+    // Card should show blocked warning and submit button must be disabled
+    expect(screen.getByText(/Submission blocked: You cannot sell below cost price/i)).toBeInTheDocument();
+    const submitBtn = screen.getByRole('button', { name: /Create Product/i });
+    expect(submitBtn).toBeDisabled();
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it('opens sensitive price change confirmation modal when editing existing product prices', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+
+    const existingProduct = {
+      id: 'prod-1',
+      org_id: 'org-1',
+      category_id: 'cat-1',
+      name: 'Cornflakes',
+      description: null,
+      sku: 'CFL-001',
+      barcode: null,
+      cost_price: 1000,
+      selling_price: 1500,
+      unit_of_measure: 'box' as const,
+      track_quantity: true,
+      low_stock_threshold: 5,
+      has_variants: false,
+      is_active: true,
+      is_deleted: false,
+      business_type: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    render(
+      <ProductForm
+        isOpen={true}
+        onClose={vi.fn()}
+        onSubmit={onSubmit}
+        editingProduct={existingProduct}
+        categories={mockCategories}
+        currency="NGN"
+      />
+    );
+
+    // Edit selling price from 1500 to 2000
+    const [costInput, sellingInput] = screen.getAllByPlaceholderText('0.00');
+    fireEvent.change(sellingInput, { target: { value: '2000' } });
+
+    // Submit
+    const submitBtn = screen.getByRole('button', { name: /Save Changes/i });
+    fireEvent.click(submitBtn);
+
+    // Should open sensitive price revision modal
+    await waitFor(() => {
+      expect(screen.getByText('Sensitive Price Change Detected')).toBeInTheDocument();
+    });
+
+    // Provide reason
+    const reasonInput = screen.getByPlaceholderText(/Vendor price increase/i);
+    fireEvent.change(reasonInput, { target: { value: 'Supplier raw material adjustment' } });
+
+    // Confirm button
+    const confirmBtn = screen.getByRole('button', { name: /Confirm & Apply Price Change/i });
+    fireEvent.click(confirmBtn);
+
+    await waitFor(() => {
+      expect(onSubmit).toHaveBeenCalledTimes(1);
+    });
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sellingPrice: 2000,
+        priceChangeReason: 'Supplier raw material adjustment',
+      })
+    );
+  });
 });
