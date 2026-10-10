@@ -105,7 +105,12 @@ export const listCategoriesQuerySchema = z.object({
     .transform((val) => val === 'true'),
 });
 
+export const deleteCategoryQuerySchema = z.object({
+  reassignToCategoryId: z.string().trim().min(1).optional(),
+});
+
 export type CreateCategoryInput = z.infer<typeof createCategorySchema>;
 export type UpdateCategoryInput = z.infer<typeof updateCategorySchema>;
 export type ReorderCategoriesInput = z.infer<typeof reorderCategoriesSchema>;
 export type ListCategoriesQueryInput = z.infer<typeof listCategoriesQuerySchema>;
+export type DeleteCategoryQueryInput = z.infer<typeof deleteCategoryQuerySchema>;

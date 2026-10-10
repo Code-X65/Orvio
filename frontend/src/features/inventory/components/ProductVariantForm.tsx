@@ -13,23 +13,31 @@ import {
   Tag,
   ShieldAlert,
   ArrowRight,
+  ImageIcon,
 } from 'lucide-react';
 import { Button } from '../../../components/ui/button';
 import { Input } from '../../../components/ui/input';
-import type {
-  Product,
-  ProductVariant,
-  CreateVariantPayload,
+import {
+  productApi,
+  type Product,
+  type ProductVariant,
+  type CreateVariantPayload,
 } from '../products-api';
 import { formatPriceInput, formatInitialPrice } from './ProductForm';
+import { ImageUploader, type UploadedImage } from '../../../components/ui/ImageUploader';
 
 export interface ProductVariantFormProps {
   isOpen: boolean;
   onClose: () => void;
-  onSubmit: (data: CreateVariantPayload) => Promise<void>;
+  onSubmit: (
+    data: CreateVariantPayload,
+    newFiles?: File[],
+    reorderedImages?: UploadedImage[]
+  ) => Promise<void>;
   parentProduct: Product | null;
   editingVariant?: ProductVariant | null;
   currency?: string;
+  maxVariantImages?: number;
 }
 
 interface AttributeRow {
@@ -44,6 +52,7 @@ export function ProductVariantForm({
   parentProduct,
   editingVariant,
   currency = 'NGN',
+  maxVariantImages = 5,
 }: ProductVariantFormProps) {
   const [mounted, setMounted] = React.useState(isOpen);
   const [animating, setAnimating] = React.useState(false);
@@ -64,12 +73,17 @@ export function ProductVariantForm({
   ]);
   const [isActive, setIsActive] = React.useState(true);
 
+  // Variant Image State
+  const [uploadedImages, setUploadedImages] = React.useState<UploadedImage[]>([]);
+  const [isInherited, setIsInherited] = React.useState(false);
+
   const [error, setError] = React.useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
 
   // Sensitive Price Modal
   const [isPriceConfirmOpen, setIsPriceConfirmOpen] = React.useState(false);
   const [pendingPayload, setPendingPayload] = React.useState<CreateVariantPayload | null>(null);
+  const [priceChangeReason, setPriceChangeReason] = React.useState('');
 
   // Animation controller
   React.useEffect(() => {
@@ -91,7 +105,7 @@ export function ProductVariantForm({
   // Sync state on open
   React.useEffect(() => {
     if (editingVariant) {
-      setName(editingVariant.name);
+      setName(editingVariant.name || Object.values(editingVariant.attributes || {}).join(' / '));
       setSku(editingVariant.sku);
       setBarcode(editingVariant.barcode || '');
 
@@ -116,6 +130,27 @@ export function ProductVariantForm({
         setAttributes([{ key: 'Size', value: '' }]);
       }
       setIsActive(editingVariant.is_active);
+
+      // Load variant images
+      productApi
+        .listVariantImages(editingVariant.id)
+        .then((res) => {
+          if (res) {
+            setIsInherited(Boolean(res.isInherited));
+            setUploadedImages(
+              (res.images || []).map((img) => ({
+                id: img.id,
+                previewUrl: img.thumbnail_400 || img.url,
+                thumbnail_200: img.thumbnail_200,
+                thumbnail_400: img.thumbnail_400,
+                altText: img.alt_text || '',
+                isPrimary: img.is_primary,
+                sortOrder: img.sort_order,
+              }))
+            );
+          }
+        })
+        .catch(() => {});
     } else {
       setName('');
       setSku('');
@@ -135,10 +170,30 @@ export function ProductVariantForm({
       setInitialStock(0);
       setAttributes([{ key: 'Size', value: '' }]);
       setIsActive(true);
+
+      // Inherit parent product images as preview
+      if (parentProduct?.images && parentProduct.images.length > 0) {
+        setIsInherited(true);
+        setUploadedImages(
+          parentProduct.images.map((img) => ({
+            id: img.id,
+            previewUrl: img.thumbnail_400 || img.url,
+            thumbnail_200: img.thumbnail_200,
+            thumbnail_400: img.thumbnail_400,
+            altText: img.alt_text || '',
+            isPrimary: img.is_primary,
+            sortOrder: img.sort_order,
+          }))
+        );
+      } else {
+        setIsInherited(false);
+        setUploadedImages([]);
+      }
     }
     setError(null);
     setIsPriceConfirmOpen(false);
     setPendingPayload(null);
+    setPriceChangeReason('');
   }, [editingVariant, parentProduct, isOpen]);
 
   const triggerClose = React.useCallback(() => {
@@ -250,7 +305,10 @@ export function ProductVariantForm({
     try {
       setIsSubmitting(true);
       setError(null);
-      await onSubmit(payload);
+      const newFiles = uploadedImages
+        .filter((img) => !img.id && img.file)
+        .map((img) => img.file as File);
+      await onSubmit(payload, newFiles, uploadedImages);
       triggerClose();
     } catch (err: any) {
       setError(err?.message || 'Failed to save variant. Please check details and try again.');
@@ -512,6 +570,32 @@ export function ProductVariantForm({
               </div>
             </div>
 
+            {/* Variant Specific Images */}
+            <div className="border-t border-[#2d3139]/80 pt-4 space-y-3">
+              <div>
+                <h4 className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+                  <ImageIcon className="w-3.5 h-3.5 text-[#985184]" />
+                  Variant Images
+                </h4>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  {isInherited
+                    ? 'Currently displaying inherited product images. Upload variant-specific photos to override.'
+                    : 'Upload photos specific to this variant (e.g., colorway or finish).'}
+                </p>
+              </div>
+
+              <ImageUploader
+                images={uploadedImages}
+                onChange={(imgs: UploadedImage[]) => {
+                  setIsInherited(false);
+                  setUploadedImages(imgs);
+                }}
+                maxImages={maxVariantImages}
+                compact
+                isVariant
+              />
+            </div>
+
             {/* Stock Level */}
             {!editingVariant && (
               <div className="border-t border-[#2d3139]/80 pt-4 space-y-2">
@@ -620,6 +704,18 @@ export function ProductVariantForm({
               </div>
             </div>
 
+            <div className="space-y-1.5">
+              <label className="text-[11px] font-medium text-slate-300">
+                Reason for Price Revision <span className="text-slate-500 font-normal">(optional)</span>
+              </label>
+              <Input
+                placeholder="e.g. Supplier price increase, promotional markdown"
+                value={priceChangeReason}
+                onChange={(e) => setPriceChangeReason(e.target.value)}
+                className="bg-[#141519] border-[#2d3139] text-xs h-9 text-slate-200 placeholder:text-slate-500"
+              />
+            </div>
+
             <div className="flex items-center justify-end gap-3 pt-2">
               <Button
                 type="button"
@@ -633,7 +729,14 @@ export function ProductVariantForm({
               <Button
                 type="button"
                 size="sm"
-                onClick={() => pendingPayload && executeSubmit(pendingPayload)}
+                onClick={() => {
+                  if (pendingPayload) {
+                    executeSubmit({
+                      ...pendingPayload,
+                      priceChangeReason: priceChangeReason.trim() || undefined,
+                    });
+                  }
+                }}
                 className="bg-[#985184] hover:bg-[#985184]/90 text-white text-xs h-9 font-medium"
               >
                 Confirm Revision

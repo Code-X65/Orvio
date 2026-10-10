@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createTestApp, type TestAppContext } from '../helpers/app.js';
 
-describe('Inventory Category Management (Integration Tests)', () => {
+describe('Inventory Category Management (Integration Tests)', { timeout: 60000 }, () => {
   let ctx: TestAppContext;
 
   beforeAll(async () => {
@@ -436,5 +436,220 @@ describe('Inventory Category Management (Integration Tests)', () => {
     expect(names).toContain("Women's Clothing");
     expect(names).toContain("Men's Clothing");
     expect(names).toContain('Footwear');
+  });
+
+  it('checks category usage, blocks deletion when products exist, and reassigns products upon deletion', async () => {
+    const tenant = await registerAndVerifyTenant('catusage');
+
+    // Create Category A and Category B
+    const catARes = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/inventory/categories',
+      headers: { authorization: `Bearer ${tenant.token}` },
+      payload: { name: 'Dairy & Milk' },
+    });
+    expect(catARes.statusCode).toBe(201);
+    const catAId = catARes.json().data.category.id;
+
+    const catBRes = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/inventory/categories',
+      headers: { authorization: `Bearer ${tenant.token}` },
+      payload: { name: 'General Groceries' },
+    });
+    expect(catBRes.statusCode).toBe(201);
+    const catBId = catBRes.json().data.category.id;
+
+    // Create 2 products assigned to Category A
+    const prd1 = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/inventory/products',
+      headers: { authorization: `Bearer ${tenant.token}` },
+      payload: {
+        name: 'Whole Milk 1L',
+        costPrice: 500,
+        sellingPrice: 800,
+        categoryId: catAId,
+      },
+    });
+    expect(prd1.statusCode).toBe(201);
+
+    const prd2 = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/inventory/products',
+      headers: { authorization: `Bearer ${tenant.token}` },
+      payload: {
+        name: 'Cheddar Cheese 250g',
+        costPrice: 1200,
+        sellingPrice: 1800,
+        categoryId: catAId,
+      },
+    });
+    expect(prd2.statusCode).toBe(201);
+
+    // 1. Check GET /usage
+    const usageRes = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/inventory/categories/${catAId}/usage`,
+      headers: { authorization: `Bearer ${tenant.token}` },
+    });
+    expect(usageRes.statusCode).toBe(200);
+    const usage = usageRes.json().data.usage;
+    expect(usage.productCount).toBe(2);
+    expect(usage.childCount).toBe(0);
+
+    // 2. Attempt deletion without reassignment — must be blocked with CATEGORY_HAS_PRODUCTS
+    const blockedDelete = await ctx.app.inject({
+      method: 'DELETE',
+      url: `/api/v1/inventory/categories/${catAId}`,
+      headers: { authorization: `Bearer ${tenant.token}` },
+    });
+    expect(blockedDelete.statusCode).toBe(400);
+    expect(blockedDelete.json().error.code).toBe('CATEGORY_HAS_PRODUCTS');
+
+    // 3. Delete with reassignment to Category B
+    const reassignDelete = await ctx.app.inject({
+      method: 'DELETE',
+      url: `/api/v1/inventory/categories/${catAId}?reassignToCategoryId=${catBId}`,
+      headers: { authorization: `Bearer ${tenant.token}` },
+    });
+    expect(reassignDelete.statusCode).toBe(200);
+    expect(reassignDelete.json().data.success).toBe(true);
+    expect(reassignDelete.json().data.reassignedProductCount).toBe(2);
+
+    // 4. Verify products were moved to Category B
+    const prd1Check = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/inventory/products/${prd1.json().data.product.id}`,
+      headers: { authorization: `Bearer ${tenant.token}` },
+    });
+    expect(prd1Check.statusCode).toBe(200);
+    expect(prd1Check.json().data.product.category_id).toBe(catBId);
+
+    const prd2Check = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/inventory/products/${prd2.json().data.product.id}`,
+      headers: { authorization: `Bearer ${tenant.token}` },
+    });
+    expect(prd2Check.statusCode).toBe(200);
+    expect(prd2Check.json().data.product.category_id).toBe(catBId);
+
+    // 5. Verify Category A is soft-deleted and not in categories tree
+    const treeAfter = await ctx.app.inject({
+      method: 'GET',
+      url: '/api/v1/inventory/categories',
+      headers: { authorization: `Bearer ${tenant.token}` },
+    });
+    const afterCategoryIds = treeAfter.json().data.categories.map((c: { id: string }) => c.id);
+    expect(afterCategoryIds).not.toContain(catAId);
+    expect(afterCategoryIds).toContain(catBId);
+  });
+
+  it('calculates direct and roll-up product counts in category tree and filters products including subcategories', async () => {
+    const tenant = await registerAndVerifyTenant('catrollup');
+
+    // 1. Create parent category and child subcategory
+    const parentRes = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/inventory/categories',
+      headers: { authorization: `Bearer ${tenant.token}` },
+      payload: { name: 'Parent Tech' },
+    });
+    expect(parentRes.statusCode).toBe(201);
+    const parentId = parentRes.json().data.category.id;
+
+    const childRes = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/inventory/categories',
+      headers: { authorization: `Bearer ${tenant.token}` },
+      payload: { name: 'Child Laptops', parentId },
+    });
+    expect(childRes.statusCode).toBe(201);
+    const childId = childRes.json().data.category.id;
+
+    // 2. Create 1 product in Parent Tech, and 2 products in Child Laptops
+    const prdParent = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/inventory/products',
+      headers: { authorization: `Bearer ${tenant.token}` },
+      payload: {
+        name: 'Tech Gadget',
+        sku: 'TECH-GADGET-01',
+        costPrice: 50,
+        sellingPrice: 100,
+        categoryId: parentId,
+      },
+    });
+    expect(prdParent.statusCode).toBe(201);
+
+    const prdChild1 = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/inventory/products',
+      headers: { authorization: `Bearer ${tenant.token}` },
+      payload: {
+        name: 'Pro Laptop',
+        sku: 'LAPTOP-PRO-01',
+        costPrice: 800,
+        sellingPrice: 1200,
+        categoryId: childId,
+      },
+    });
+    expect(prdChild1.statusCode).toBe(201);
+
+    const prdChild2 = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/inventory/products',
+      headers: { authorization: `Bearer ${tenant.token}` },
+      payload: {
+        name: 'Air Laptop',
+        sku: 'LAPTOP-AIR-02',
+        costPrice: 600,
+        sellingPrice: 950,
+        categoryId: childId,
+      },
+    });
+    expect(prdChild2.statusCode).toBe(201);
+
+    // 3. Fetch category tree: verify product_count and direct_product_count
+    const treeRes = await ctx.app.inject({
+      method: 'GET',
+      url: '/api/v1/inventory/categories',
+      headers: { authorization: `Bearer ${tenant.token}` },
+    });
+    expect(treeRes.statusCode).toBe(200);
+
+    const parentNode = treeRes.json().data.categories.find((c: { id: string }) => c.id === parentId);
+    expect(parentNode).toBeDefined();
+    // Parent should have 1 direct product, but 3 total roll-up products (1 direct + 2 in child)
+    expect(parentNode.direct_product_count).toBe(1);
+    expect(parentNode.product_count).toBe(3);
+
+    const childNode = parentNode.children.find((c: { id: string }) => c.id === childId);
+    expect(childNode).toBeDefined();
+    expect(childNode.direct_product_count).toBe(2);
+    expect(childNode.product_count).toBe(2);
+
+    // 4. Query products filtering by parentId: must return all 3 products (including subcategory)
+    const parentFilterRes = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/inventory/products?categoryId=${parentId}`,
+      headers: { authorization: `Bearer ${tenant.token}` },
+    });
+    expect(parentFilterRes.statusCode).toBe(200);
+    const parentFilterProducts = parentFilterRes.json().data.products;
+    expect(parentFilterProducts.length).toBe(3);
+    const productNames = parentFilterProducts.map((p: { name: string }) => p.name);
+    expect(productNames).toContain('Tech Gadget');
+    expect(productNames).toContain('Pro Laptop');
+    expect(productNames).toContain('Air Laptop');
+
+    // 5. Query products filtering by childId: returns only child products (2)
+    const childFilterRes = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/inventory/products?categoryId=${childId}`,
+      headers: { authorization: `Bearer ${tenant.token}` },
+    });
+    expect(childFilterRes.statusCode).toBe(200);
+    expect(childFilterRes.json().data.products.length).toBe(2);
   });
 });

@@ -478,4 +478,495 @@ describe('Inventory Product Management (Integration Tests)', { timeout: 120000 }
     expect(Number(historyList[0].new_selling_price)).toBe(1400);
     expect(historyList[0].reason).toBe('Vendor raw cocoa price surge');
   });
+
+  it('enforces stock constraints, blocks reserved stock, requires confirmation for on-hand stock, and logs audit trail', async () => {
+    const { token } = await registerAndSetupTenant('delstock');
+
+    // 1. Create a product with variants and initial stock
+    const createRes = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/inventory/products',
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        name: 'Organic Brown Sugar 1kg',
+        costPrice: 500,
+        sellingPrice: 800,
+        unitOfMeasure: 'kg',
+        hasVariants: true,
+        initialStock: 50,
+      },
+    });
+    expect(createRes.statusCode).toBe(201);
+    const product = createRes.json().data.product;
+
+    // Create a variant
+    const variantRes = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/inventory/products/${product.id}/variants`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        sku: 'OBS-1KG-VAR',
+        costPrice: 500,
+        sellingPrice: 800,
+        attributes: { packaging: 'Paper bag' },
+      },
+    });
+    expect(variantRes.statusCode).toBe(201);
+    const variant = variantRes.json().data.variant;
+
+    // Direct database update: add 10 reserved stock
+    await ctx.prisma.stockLevel.updateMany({
+      where: {
+        org_id: product.org_id,
+        product_id: product.id,
+      },
+      data: {
+        reserved: 10,
+      },
+    });
+
+    // 2. Check GET /usage
+    const usageRes = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/inventory/products/${product.id}/usage`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(usageRes.statusCode).toBe(200);
+    const usage = usageRes.json().data.usage;
+    expect(usage.totalOnHand).toBe(50);
+    expect(usage.totalReserved).toBe(10);
+    expect(usage.variantCount).toBe(1);
+    expect(usage.hasReservedStock).toBe(true);
+    expect(usage.canDelete).toBe(false);
+
+    // 3. Attempt to delete while reserved stock > 0 -> must be strictly blocked
+    const blockedRes = await ctx.app.inject({
+      method: 'DELETE',
+      url: `/api/v1/inventory/products/${product.id}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(blockedRes.statusCode).toBe(400);
+    expect(blockedRes.json().error.code).toBe('PRODUCT_HAS_RESERVED_STOCK');
+
+    // 4. Clear reserved stock (orders fulfilled/cancelled), leaving 50 on-hand
+    await ctx.prisma.stockLevel.updateMany({
+      where: { org_id: product.org_id, product_id: product.id },
+      data: { reserved: 0 },
+    });
+
+    // Verify usage updated
+    const usageAfterReserved = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/inventory/products/${product.id}/usage`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(usageAfterReserved.statusCode).toBe(200);
+    expect(usageAfterReserved.json().data.usage.hasReservedStock).toBe(false);
+    expect(usageAfterReserved.json().data.usage.canDelete).toBe(true);
+    expect(usageAfterReserved.json().data.usage.totalOnHand).toBe(50);
+
+    // 5. Attempt delete without confirmWithStock flag -> must fail with PRODUCT_HAS_STOCK
+    const noConfirmRes = await ctx.app.inject({
+      method: 'DELETE',
+      url: `/api/v1/inventory/products/${product.id}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(noConfirmRes.statusCode).toBe(400);
+    expect(noConfirmRes.json().error.code).toBe('PRODUCT_HAS_STOCK');
+
+    // 6. Attempt delete with confirmWithStock but missing reason -> must fail with VALIDATION_ERROR
+    const noReasonRes = await ctx.app.inject({
+      method: 'DELETE',
+      url: `/api/v1/inventory/products/${product.id}?confirmWithStock=true`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(noReasonRes.statusCode).toBe(400);
+    expect(noReasonRes.json().error.code).toBe('VALIDATION_ERROR');
+
+    // 7. Successful delete with confirmWithStock and valid reason
+    const successDeleteRes = await ctx.app.inject({
+      method: 'DELETE',
+      url: `/api/v1/inventory/products/${product.id}`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        confirmWithStock: true,
+        reason: 'Vendor discontinued product line write-off',
+      },
+    });
+    expect(successDeleteRes.statusCode).toBe(200);
+    expect(successDeleteRes.json().data.success).toBe(true);
+
+    // 8. Verify soft-deleted state, audit fields, and variant deactivation in database
+    const dbProduct = await ctx.prisma.product.findUnique({
+      where: { id: product.id },
+    });
+    expect(dbProduct).toBeDefined();
+    expect(dbProduct!.is_deleted).toBe(true);
+    expect(dbProduct!.is_active).toBe(false);
+    expect(dbProduct!.deleted_at).toBeDefined();
+    expect(dbProduct!.deleted_by_user_id).toBeDefined();
+    expect(dbProduct!.deleted_reason).toBe('Vendor discontinued product line write-off');
+
+    const dbVariant = await ctx.prisma.productVariant.findUnique({
+      where: { id: variant.id },
+    });
+    expect(dbVariant).toBeDefined();
+    expect(dbVariant!.is_active).toBe(false);
+
+    // Verify audit log
+    const auditLog = await ctx.prisma.auditLog.findFirst({
+      where: {
+        org_id: product.org_id,
+        event: 'product_archived',
+      },
+    });
+    expect(auditLog).toBeDefined();
+    expect((auditLog!.metadata as any).productId).toBe(product.id);
+    expect((auditLog!.metadata as any).reason).toBe('Vendor discontinued product line write-off');
+  });
+
+  it('restores archived product and supports status=archived filtering in listProducts', async () => {
+    const { token } = await registerAndSetupTenant('prdrst');
+
+    // 1. Create product
+    const createRes = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/inventory/products',
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        name: 'Item to Archive and Restore',
+        costPrice: 500,
+        sellingPrice: 800,
+        unitOfMeasure: 'pcs',
+        trackQuantity: false,
+      },
+    });
+    expect(createRes.statusCode).toBe(201);
+    const product = createRes.json().data.product;
+
+    // 2. Archive product
+    const deleteRes = await ctx.app.inject({
+      method: 'DELETE',
+      url: `/api/v1/inventory/products/${product.id}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(deleteRes.statusCode).toBe(200);
+
+    // 3. List with status=archived — should contain archived product
+    const archivedListRes = await ctx.app.inject({
+      method: 'GET',
+      url: '/api/v1/inventory/products?status=archived',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(archivedListRes.statusCode).toBe(200);
+    const archivedItems = archivedListRes.json().data.products;
+    expect(archivedItems.some((p: any) => p.id === product.id)).toBe(true);
+
+    // List with default active/all — should NOT contain archived product
+    const activeListRes = await ctx.app.inject({
+      method: 'GET',
+      url: '/api/v1/inventory/products?status=active',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(activeListRes.statusCode).toBe(200);
+    const activeItems = activeListRes.json().data.products;
+    expect(activeItems.some((p: any) => p.id === product.id)).toBe(false);
+
+    // 4. Restore product
+    const restoreRes = await ctx.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/inventory/products/${product.id}/restore`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(restoreRes.statusCode).toBe(200);
+    const restoredProduct = restoreRes.json().data.product;
+    expect(restoredProduct.is_deleted).toBe(false);
+    expect(restoredProduct.is_active).toBe(true);
+
+    // 5. Verify database and audit log
+    const dbProduct = await ctx.prisma.product.findUnique({
+      where: { id: product.id },
+    });
+    expect(dbProduct!.is_deleted).toBe(false);
+    expect(dbProduct!.is_active).toBe(true);
+    expect(dbProduct!.deleted_at).toBeNull();
+
+    const auditLog = await ctx.prisma.auditLog.findFirst({
+      where: {
+        org_id: product.org_id,
+        event: 'product_restored',
+      },
+    });
+    expect(auditLog).toBeDefined();
+    expect((auditLog!.metadata as any).productId).toBe(product.id);
+  });
+
+  it('updates variant pricing with no-loss constraint and logs variant price revision history', async () => {
+    const { token } = await registerAndSetupTenant('prdvarprc');
+
+    // 1. Create template product with variant
+    const createRes = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/inventory/products',
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        name: 'T-Shirt Master',
+        costPrice: 2000,
+        sellingPrice: 3500,
+        hasVariants: true,
+        unitOfMeasure: 'pcs',
+      },
+    });
+    expect(createRes.statusCode).toBe(201);
+    const product = createRes.json().data.product;
+
+    const variantRes = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/inventory/products/${product.id}/variants`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        name: 'Size Medium Black',
+        costPrice: 2000,
+        sellingPrice: 3500,
+        attributes: { size: 'M', color: 'Black' },
+      },
+    });
+    expect(variantRes.statusCode).toBe(201);
+    const variant = variantRes.json().data.variant;
+
+    // 2. Reject update if sellingPrice < costPrice (no loss permitted)
+    const lossRes = await ctx.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/inventory/products/${product.id}/variants/${variant.id}`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        costPrice: 3000,
+        sellingPrice: 2500,
+      },
+    });
+    expect(lossRes.statusCode).toBe(400);
+
+    // 3. Update variant with valid prices and priceChangeReason
+    const updateRes = await ctx.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/inventory/products/${product.id}/variants/${variant.id}`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        costPrice: 2200,
+        sellingPrice: 4000,
+        priceChangeReason: 'Cotton supplier price increase',
+      },
+    });
+    expect(updateRes.statusCode).toBe(200);
+    const updatedVariant = updateRes.json().data.variant;
+    expect(Number(updatedVariant.cost_price)).toBe(2200);
+    expect(Number(updatedVariant.selling_price)).toBe(4000);
+
+    // 4. Retrieve variant price history
+    const historyRes = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/v1/inventory/products/${product.id}/variants/${variant.id}/price-history`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(historyRes.statusCode).toBe(200);
+    const history = historyRes.json().data.history;
+    expect(history.length).toBeGreaterThanOrEqual(1);
+
+    const latest = history[0];
+    expect(latest.variant_id).toBe(variant.id);
+    expect(Number(latest.old_cost_price)).toBe(2000);
+    expect(Number(latest.new_cost_price)).toBe(2200);
+    expect(Number(latest.old_selling_price)).toBe(3500);
+    expect(Number(latest.new_selling_price)).toBe(4000);
+    expect(latest.reason).toBe('Cotton supplier price increase');
+  });
+
+  it('soft-deletes variant with stock guards, reserved check, and reason', async () => {
+    const { token } = await registerAndSetupTenant('prdvardel');
+
+    // 1. Create template product and variant
+    const createRes = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/inventory/products',
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        name: 'Phone Case Master',
+        costPrice: 1000,
+        sellingPrice: 2000,
+        hasVariants: true,
+        unitOfMeasure: 'pcs',
+      },
+    });
+    expect(createRes.statusCode).toBe(201);
+    const product = createRes.json().data.product;
+
+    const variantRes = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/v1/inventory/products/${product.id}/variants`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        name: 'iPhone 15 Case',
+        costPrice: 1000,
+        sellingPrice: 2000,
+        initialStock: 10,
+        attributes: { model: 'iPhone 15' },
+      },
+    });
+    expect(variantRes.statusCode).toBe(201);
+    const variant = variantRes.json().data.variant;
+
+    // 2. Reject delete when variant has active stock on hand without confirmWithStock
+    const deleteBlockedRes = await ctx.app.inject({
+      method: 'DELETE',
+      url: `/api/v1/inventory/products/${product.id}/variants/${variant.id}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(deleteBlockedRes.statusCode).toBe(400);
+    expect(deleteBlockedRes.json().error.code).toBe('PRODUCT_HAS_STOCK');
+
+    // 3. Reject delete when confirmWithStock is true but no reason provided
+    const noReasonRes = await ctx.app.inject({
+      method: 'DELETE',
+      url: `/api/v1/inventory/products/${product.id}/variants/${variant.id}?confirmWithStock=true`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(noReasonRes.statusCode).toBe(400);
+    expect(noReasonRes.json().error.code).toBe('VALIDATION_ERROR');
+
+    // 4. Successful soft-delete with confirmWithStock and reason
+    const successDeleteRes = await ctx.app.inject({
+      method: 'DELETE',
+      url: `/api/v1/inventory/products/${product.id}/variants/${variant.id}`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        confirmWithStock: true,
+        reason: 'Discontinued older phone model case',
+      },
+    });
+    expect(successDeleteRes.statusCode).toBe(200);
+    expect(successDeleteRes.json().data.success).toBe(true);
+
+    // 5. Verify database state
+    const dbVariant = await ctx.prisma.productVariant.findUnique({
+      where: { id: variant.id },
+    });
+    expect(dbVariant!.is_deleted).toBe(true);
+    expect(dbVariant!.is_active).toBe(false);
+    expect(dbVariant!.deleted_at).toBeDefined();
+
+    // 6. Verify audit log
+    const auditLog = await ctx.prisma.auditLog.findFirst({
+      where: {
+        org_id: product.org_id,
+        event: 'product_variant_archived',
+      },
+    });
+    expect(auditLog).toBeDefined();
+    expect((auditLog!.metadata as any).variantId).toBe(variant.id);
+    expect((auditLog!.metadata as any).reason).toBe('Discontinued older phone model case');
+  });
+
+  it('validates business-type metadata and persists typed attributes', async () => {
+    const { token } = await registerAndSetupTenant('prdmtd');
+
+    // 1. Invalid metadata types are rejected
+    const invalidRes = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/inventory/products',
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        name: 'Paracetamol Extra',
+        costPrice: 200,
+        sellingPrice: 350,
+        metadata: {
+          requiresPrescription: 'yes_please', // must be boolean
+        },
+      },
+    });
+    expect(invalidRes.statusCode).toBe(400);
+
+    // 2. Valid clinical metadata persists cleanly
+    const validRes = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/inventory/products',
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        name: 'Paracetamol Extra',
+        costPrice: 200,
+        sellingPrice: 350,
+        metadata: {
+          requiresPrescription: false,
+          dosageForm: 'Tablet',
+          strength: '500mg',
+          nafdacNumber: '04-5678',
+        },
+      },
+    });
+    expect(validRes.statusCode).toBe(201);
+    const product = validRes.json().data.product;
+    expect(product.metadata).toEqual({
+      requiresPrescription: false,
+      dosageForm: 'Tablet',
+      strength: '500mg',
+      nafdacNumber: '04-5678',
+    });
+  });
+
+  it('ensures cross-entity cache invalidation when category name updates', async () => {
+    const { token } = await registerAndSetupTenant('prdcache');
+
+    // 1. Create category
+    const catRes = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/inventory/categories',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Dairy & Milk' },
+    });
+    expect(catRes.statusCode).toBe(201);
+    const category = catRes.json().data.category;
+
+    // 2. Create product in that category
+    const prodRes = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/inventory/products',
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        name: 'Greek Yogurt 500g',
+        categoryId: category.id,
+        costPrice: 800,
+        sellingPrice: 1300,
+      },
+    });
+    expect(prodRes.statusCode).toBe(201);
+    const product = prodRes.json().data.product;
+
+    // 3. Call listProducts to warm cache
+    const listRes1 = await ctx.app.inject({
+      method: 'GET',
+      url: '/api/v1/inventory/products',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(listRes1.statusCode).toBe(200);
+    const item1 = listRes1.json().data.products.find((p: any) => p.id === product.id);
+    expect(item1.category_name).toBe('Dairy & Milk');
+
+    // 4. Rename category via CategoryService
+    const updateCatRes = await ctx.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/inventory/categories/${category.id}`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Artisan Dairy Products' },
+    });
+    expect(updateCatRes.statusCode).toBe(200);
+
+    // 5. Call listProducts immediately — should reflect updated category name (not stale cached name)
+    const listRes2 = await ctx.app.inject({
+      method: 'GET',
+      url: '/api/v1/inventory/products',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(listRes2.statusCode).toBe(200);
+    const item2 = listRes2.json().data.products.find((p: any) => p.id === product.id);
+    expect(item2.category_name).toBe('Artisan Dairy Products');
+  });
 });

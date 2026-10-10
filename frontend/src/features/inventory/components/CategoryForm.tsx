@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { X, FolderTree, AlertCircle, Loader2 } from 'lucide-react';
+import { X, FolderTree, AlertCircle, Loader2, Camera, Trash2, Upload } from 'lucide-react';
 import { Button } from '../../../components/ui/button';
 import { Input } from '../../../components/ui/input';
 import { Textarea } from '../../../components/ui/textarea';
@@ -15,7 +15,7 @@ export interface CategoryFormData {
 export interface CategoryFormProps {
   isOpen: boolean;
   onClose: () => void;
-  onSubmit: (data: CategoryFormData) => Promise<void>;
+  onSubmit: (data: CategoryFormData, imageFile?: File | null, shouldRemoveImage?: boolean) => Promise<void>;
   editingCategory?: Category | null;
   categories: CategoryTreeNode[];
   defaultParentId?: string | null;
@@ -63,6 +63,11 @@ export function CategoryForm({
   const [error, setError] = React.useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
 
+  const [imageFile, setImageFile] = React.useState<File | null>(null);
+  const [imagePreviewUrl, setImagePreviewUrl] = React.useState<string | null>(null);
+  const [shouldRemoveImage, setShouldRemoveImage] = React.useState(false);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+
   // Manage enter/exit animation states
   React.useEffect(() => {
     let timer: NodeJS.Timeout;
@@ -87,12 +92,16 @@ export function CategoryForm({
       setDescription(editingCategory.description || '');
       setParentId(editingCategory.parent_id || null);
       setIsActive(editingCategory.is_active);
+      setImagePreviewUrl(editingCategory.image_url || null);
     } else {
       setName('');
       setDescription('');
       setParentId(defaultParentId ?? null);
       setIsActive(true);
+      setImagePreviewUrl(null);
     }
+    setImageFile(null);
+    setShouldRemoveImage(false);
     setError(null);
   }, [editingCategory, defaultParentId, isOpen]);
 
@@ -106,6 +115,35 @@ export function CategoryForm({
   if (!mounted) return null;
 
   const parentOptions = flattenCategoriesForSelection(categories, editingCategory?.id);
+
+  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      setError('Please select a valid image (JPEG, PNG, or WebP).');
+      return;
+    }
+
+    if (file.size > 10 * 1024 * 1024) {
+      setError('Image file must not exceed 10MB.');
+      return;
+    }
+
+    setImageFile(file);
+    setImagePreviewUrl(URL.createObjectURL(file));
+    setShouldRemoveImage(false);
+    setError(null);
+  };
+
+  const handleRemoveImage = () => {
+    setImageFile(null);
+    setImagePreviewUrl(null);
+    setShouldRemoveImage(true);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -134,12 +172,16 @@ export function CategoryForm({
     try {
       setIsSubmitting(true);
       setError(null);
-      await onSubmit({
-        name: trimmedName,
-        description: description.trim(),
-        parentId: parentId || null,
-        isActive,
-      });
+      await onSubmit(
+        {
+          name: trimmedName,
+          description: description.trim(),
+          parentId: parentId || null,
+          isActive,
+        },
+        imageFile,
+        shouldRemoveImage
+      );
       triggerClose();
     } catch (err: any) {
       setError(err?.message || 'Failed to save category. Please check details and try again.');
@@ -260,6 +302,65 @@ export function CategoryForm({
                 rows={4}
                 maxLength={500}
               />
+            </div>
+
+            {/* Category Thumbnail / Visual Icon */}
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                Category Image (Optional)
+              </label>
+              <div className="flex items-center gap-3 p-3 rounded-sm bg-[#181a20] border border-[#2d3139]">
+                {imagePreviewUrl ? (
+                  <div className="relative w-12 h-12 rounded-lg overflow-hidden border border-slate-700 bg-slate-900 shrink-0">
+                    <img
+                      src={imagePreviewUrl}
+                      alt="Category preview"
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                ) : (
+                  <div className="w-12 h-12 rounded-lg border border-dashed border-slate-700 bg-slate-900/60 flex items-center justify-center text-slate-500 shrink-0">
+                    <Camera className="w-5 h-5 stroke-1" />
+                  </div>
+                )}
+
+                <div className="flex-1 min-w-0">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    className="hidden"
+                    onChange={handleImageChange}
+                  />
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="h-7 text-xs bg-white/5 border-[#2d3139] text-slate-200 hover:text-white hover:bg-white/10"
+                    >
+                      <Upload className="w-3 h-3 mr-1" />
+                      {imagePreviewUrl ? 'Change image' : 'Upload thumbnail'}
+                    </Button>
+                    {imagePreviewUrl && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={handleRemoveImage}
+                        className="h-7 text-xs text-rose-400 hover:text-rose-300 hover:bg-rose-500/10"
+                      >
+                        <Trash2 className="w-3 h-3 mr-1" />
+                        Remove
+                      </Button>
+                    )}
+                  </div>
+                  <p className="text-[10px] text-slate-500 mt-1">
+                    JPEG, PNG, or WebP up to 10MB. Displayed in category tree and catalog browse views.
+                  </p>
+                </div>
+              </div>
             </div>
 
             {/* Active Status Switch */}

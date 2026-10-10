@@ -61,6 +61,7 @@ export function InventoryWorkspacePage({
   const [selectedBranch, setSelectedBranch] = React.useState(branch || branches[0]);
   const [currentCurrency, setCurrentCurrency] = React.useState(organization.currency || 'USD');
   const [activeTab, setActiveTab] = React.useState('Dashboard');
+  const [selectedProductCategoryId, setSelectedProductCategoryId] = React.useState<string | undefined>(undefined);
   const [mobileMenuOpen, setMobileMenuOpen] = React.useState(false);
   const [activeModal, setActiveModal] = React.useState<string | null>(null);
   const [categoryTimeRange, setCategoryTimeRange] = React.useState<'All time' | 'Weekly' | 'Monthly'>('Monthly');
@@ -407,9 +408,19 @@ export function InventoryWorkspacePage({
           {/* ================= WORKSPACE BODY CONTENT ================= */}
           <main className="flex-1 p-4 sm:p-6 lg:p-8 space-y-6 w-full mx-auto">
             {activeTab === 'Categories' ? (
-              <CategoriesPage organization={organization} />
+              <CategoriesPage
+                organization={organization}
+                onNavigateToProducts={(catId) => {
+                  setSelectedProductCategoryId(catId);
+                  setActiveTab('Products');
+                }}
+              />
             ) : activeTab === 'Products' ? (
-              <ProductsPage organization={organization} />
+              <ProductsPage
+                organization={organization}
+                initialCategoryId={selectedProductCategoryId}
+                onClearInitialCategory={() => setSelectedProductCategoryId(undefined)}
+              />
             ) : (
               <>
                 {/* ROW 1: TOP 4 METRIC CARDS */}

@@ -15,16 +15,37 @@ export interface ProductVariant {
   id: string;
   org_id: string;
   product_id: string;
+  name?: string;
   sku: string;
   barcode: string | null;
   cost_price: number;
   selling_price: number;
   compare_at_price?: number | null;
   attributes: Record<string, string>;
+  images?: ProductImage[];
   is_active: boolean;
   created_at: string;
   updated_at: string;
 }
+
+export function getVariantDisplayName(v: { name?: string; attributes?: Record<string, any>; sku?: string }): string {
+  if (v.name) return v.name;
+  if (v.attributes && Object.keys(v.attributes).length > 0) {
+    return Object.entries(v.attributes).map(([k, val]) => `${k}: ${val}`).join(', ');
+  }
+  return v.sku || 'Variant';
+}
+
+export const BUSINESS_TYPE_IMAGE_LIMITS: Record<string, number> = {
+  retail: 5,
+  fashion: 8,
+  restaurant: 3,
+  electronics: 8,
+  supermarket: 4,
+  wholesale: 5,
+  pharmacy: 3,
+  services: 2,
+};
 
 export type ProductListItem = Product;
 
@@ -34,6 +55,24 @@ export interface BranchStockItem {
   quantity_on_hand: number;
   reserved: number;
   available: number;
+}
+
+export interface ProductImage {
+  id: string;
+  org_id: string;
+  product_id: string;
+  variant_id: string | null;
+  url: string;
+  thumbnail_200: string | null;
+  thumbnail_400: string | null;
+  thumbnail_800: string | null;
+  thumbnail_1200: string | null;
+  alt_text: string | null;
+  sort_order: number;
+  is_primary: boolean;
+  file_size?: number | null;
+  mime_type?: string | null;
+  created_at: string;
 }
 
 export interface Product {
@@ -54,6 +93,8 @@ export interface Product {
   has_variants: boolean;
   variants_count?: number;
   image_url: string | null;
+  primary_image_url?: string | null;
+  images?: ProductImage[];
   is_active: boolean;
   is_deleted: boolean;
   business_type: string | null;
@@ -107,15 +148,17 @@ export interface UpdateProductPayload {
 }
 
 export interface CreateVariantPayload {
+  name?: string;
   sku?: string;
   barcode?: string | null;
-  costPrice: number;
-  sellingPrice: number;
+  costPrice?: number;
+  sellingPrice?: number;
   compareAtPrice?: number | null;
-  attributes: Record<string, string>;
+  attributes?: Record<string, string>;
   isActive?: boolean;
   initialStock?: number;
   branchId?: string;
+  priceChangeReason?: string;
 }
 
 export interface ProductListResponse {
@@ -150,6 +193,8 @@ export interface SearchProductsResponse {
     is_active: boolean;
     available_stock: number;
   }>;
+}
+
 export interface ProductPriceHistory {
   id: string;
   org_id: string;
@@ -168,11 +213,43 @@ export interface PriceHistoryResponse {
   history: ProductPriceHistory[];
 }
 
+export interface ProductBranchStock {
+  branchId: string;
+  branchName: string;
+  onHand: number;
+  reserved: number;
+}
+
+export interface ProductUsage {
+  totalOnHand: number;
+  totalReserved: number;
+  variantCount: number;
+  hasReservedStock: boolean;
+  canDelete: boolean;
+  branchStock: ProductBranchStock[];
+}
+
+export interface ProductUsageResponse {
+  usage: ProductUsage;
+}
+
+export interface UpdateVariantPayload {
+  sku?: string;
+  barcode?: string | null;
+  costPrice?: number;
+  sellingPrice?: number;
+  compareAtPrice?: number | null;
+  attributes?: Record<string, string>;
+  isActive?: boolean;
+  priceChangeReason?: string;
+}
+
 export const productApi = {
   listProducts: async (params?: {
     page?: number;
     limit?: number;
     categoryId?: string;
+    status?: 'all' | 'active' | 'inactive' | 'archived';
     activeOnly?: boolean;
     search?: string;
     lowStock?: boolean;
@@ -187,6 +264,7 @@ export const productApi = {
     page?: number;
     limit?: number;
     categoryId?: string;
+    status?: 'all' | 'active' | 'inactive' | 'archived';
     activeOnly?: boolean;
     search?: string;
     lowStock?: boolean;
@@ -209,14 +287,33 @@ export const productApi = {
   updateProduct: async (id: string, payload: UpdateProductPayload) => {
     return await api.patch<ProductSingleResponse>(`/inventory/products/${id}`, payload);
   },
-  deleteProduct: async (id: string) => {
-    return await api.delete<{ success: boolean }>(`/inventory/products/${id}`);
+  restoreProduct: async (id: string) => {
+    return await api.patch<ProductSingleResponse>(`/inventory/products/${id}/restore`);
+  },
+  getProductUsage: async (id: string) => {
+    return await api.get<ProductUsageResponse>(`/inventory/products/${id}/usage`);
+  },
+  deleteProduct: async (id: string, options?: { reason?: string; confirmWithStock?: boolean }) => {
+    return await api.delete<{ success: boolean }>(`/inventory/products/${id}`, {
+      params: options,
+    });
   },
   toggleProductStatus: async (id: string) => {
     return await api.patch<ProductSingleResponse>(`/inventory/products/${id}/toggle-status`);
   },
   createVariant: async (productId: string, payload: CreateVariantPayload) => {
     return await api.post<VariantResponse>(`/inventory/products/${productId}/variants`, payload);
+  },
+  updateVariant: async (productId: string, variantId: string, payload: UpdateVariantPayload) => {
+    return await api.patch<VariantResponse>(`/inventory/products/${productId}/variants/${variantId}`, payload);
+  },
+  deleteVariant: async (productId: string, variantId: string, options?: { reason?: string; confirmWithStock?: boolean }) => {
+    return await api.delete<{ success: boolean }>(`/inventory/products/${productId}/variants/${variantId}`, {
+      params: options,
+    });
+  },
+  getVariantPriceHistory: async (productId: string, variantId: string) => {
+    return await api.get<PriceHistoryResponse>(`/inventory/products/${productId}/variants/${variantId}/price-history`);
   },
   searchProducts: async (q: string, branchId?: string) => {
     return await api.get<SearchProductsResponse>('/inventory/products/search', {
@@ -225,5 +322,44 @@ export const productApi = {
   },
   getPriceHistory: async (productId: string) => {
     return await api.get<PriceHistoryResponse>(`/inventory/products/${productId}/price-history`);
+  },
+  uploadProductImages: async (productId: string, files: File[]) => {
+    const formData = new FormData();
+    files.forEach((file) => formData.append('images', file));
+    return await api.post<{ images: ProductImage[] }>(`/inventory/products/${productId}/images`, formData);
+  },
+  uploadVariantImages: async (productId: string, variantId: string, files: File[]) => {
+    const formData = new FormData();
+    files.forEach((file) => formData.append('images', file));
+    return await api.post<{ images: ProductImage[] }>(
+      `/inventory/products/${productId}/variants/${variantId}/images`,
+      formData
+    );
+  },
+  listProductImages: async (productId: string) => {
+    return await api.get<{ images: ProductImage[] }>(`/inventory/products/${productId}/images`);
+  },
+  listVariantImages: async (variantId: string) => {
+    return await api.get<{ images: ProductImage[]; isInherited: boolean }>(
+      `/inventory/products/${variantId}/variant-images`
+    );
+  },
+  reorderProductImages: async (
+    productId: string,
+    images: Array<{ id: string; sortOrder: number; isPrimary?: boolean }>
+  ) => {
+    return await api.patch<{ images: ProductImage[] }>(`/inventory/products/${productId}/images/reorder`, {
+      images,
+    });
+  },
+  updateProductImage: async (
+    productId: string,
+    imageId: string,
+    data: { altText?: string | null; isPrimary?: boolean }
+  ) => {
+    return await api.patch<{ image: ProductImage }>(`/inventory/products/${productId}/images/${imageId}`, data);
+  },
+  deleteProductImage: async (productId: string, imageId: string) => {
+    return await api.delete<{ success: boolean }>(`/inventory/products/${productId}/images/${imageId}`);
   },
 };

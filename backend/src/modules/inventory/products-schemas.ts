@@ -12,6 +12,45 @@ export const measurementUnitEnum = z.enum([
   'dozen',
 ]);
 
+export const productMetadataSchema = z.record(z.any()).superRefine((val, ctx) => {
+  if (val.requiresPrescription !== undefined && typeof val.requiresPrescription !== 'boolean') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'requiresPrescription must be a boolean',
+      path: ['requiresPrescription'],
+    });
+  }
+  if (val.isPerishable !== undefined && typeof val.isPerishable !== 'boolean') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'isPerishable must be a boolean',
+      path: ['isPerishable'],
+    });
+  }
+  if (
+    val.minimumOrderQuantity !== undefined &&
+    val.minimumOrderQuantity !== null &&
+    (typeof val.minimumOrderQuantity !== 'number' || val.minimumOrderQuantity < 1)
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'minimumOrderQuantity must be a positive integer',
+      path: ['minimumOrderQuantity'],
+    });
+  }
+  if (
+    val.casePackQuantity !== undefined &&
+    val.casePackQuantity !== null &&
+    (typeof val.casePackQuantity !== 'number' || val.casePackQuantity < 1)
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'casePackQuantity must be a positive integer',
+      path: ['casePackQuantity'],
+    });
+  }
+});
+
 export const createProductSchema = z
   .object({
     name: z.string().trim().min(1, 'Product name is required').max(200, 'Cannot exceed 200 characters'),
@@ -30,7 +69,7 @@ export const createProductSchema = z
     imageUrl: z.string().url('Must be a valid URL').nullable().optional().or(z.literal('')),
     initialStock: z.number().min(0).optional().default(0),
     branchId: z.string().trim().optional(),
-    metadata: z.record(z.any()).optional().nullable(),
+    metadata: productMetadataSchema.optional().nullable(),
   })
   .refine((data) => data.sellingPrice >= data.costPrice, {
     message: 'Selling price must not be less than cost price (no loss sales permitted)',
@@ -53,7 +92,7 @@ export const updateProductSchema = z
     hasVariants: z.boolean().optional(),
     isActive: z.boolean().optional(),
     imageUrl: z.string().url().nullable().optional(),
-    metadata: z.record(z.any()).optional().nullable(),
+    metadata: productMetadataSchema.optional().nullable(),
     priceChangeReason: z.string().trim().max(500).optional(),
   })
   .refine(
@@ -88,10 +127,35 @@ export const createVariantSchema = z
     path: ['sellingPrice'],
   });
 
+export const updateVariantSchema = z
+  .object({
+    sku: z.string().trim().max(50).optional(),
+    barcode: z.string().trim().max(50).nullable().optional(),
+    costPrice: z.number().min(0).optional(),
+    sellingPrice: z.number().min(0).optional(),
+    compareAtPrice: z.number().min(0).nullable().optional(),
+    attributes: z.record(z.string()).optional(),
+    isActive: z.boolean().optional(),
+    priceChangeReason: z.string().trim().max(500).optional(),
+  })
+  .refine(
+    (data) => {
+      if (data.sellingPrice !== undefined && data.costPrice !== undefined) {
+        return data.sellingPrice >= data.costPrice;
+      }
+      return true;
+    },
+    {
+      message: 'Selling price must not be less than cost price (no loss sales permitted)',
+      path: ['sellingPrice'],
+    }
+  );
+
 export const listProductsQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
   categoryId: z.string().optional(),
+  status: z.enum(['all', 'active', 'inactive', 'archived']).optional(),
   activeOnly: z
     .string()
     .optional()
@@ -116,8 +180,36 @@ export const searchProductsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).default(10),
 });
 
+export const deleteProductQuerySchema = z.object({
+  reason: z.string().trim().max(500).optional(),
+  confirmWithStock: z
+    .union([z.boolean(), z.string()])
+    .optional()
+    .transform((val) => val === true || val === 'true'),
+});
+
+export const updateProductImageSchema = z.object({
+  altText: z.string().max(200, 'Alt text cannot exceed 200 characters').optional().nullable(),
+  isPrimary: z.boolean().optional(),
+});
+
+export const reorderProductImagesSchema = z.object({
+  images: z.array(
+    z.object({
+      id: z.string().min(1),
+      sortOrder: z.number().int().min(0),
+      isPrimary: z.boolean().optional(),
+    })
+  ).min(1, 'At least one image is required'),
+});
+
 export type CreateProductInput = z.infer<typeof createProductSchema>;
 export type UpdateProductInput = z.infer<typeof updateProductSchema>;
 export type CreateVariantInput = z.infer<typeof createVariantSchema>;
+export type UpdateVariantInput = z.infer<typeof updateVariantSchema>;
 export type ListProductsQueryInput = z.infer<typeof listProductsQuerySchema>;
 export type SearchProductsQueryInput = z.infer<typeof searchProductsQuerySchema>;
+export type DeleteProductInput = z.infer<typeof deleteProductQuerySchema>;
+export type UpdateProductImageInput = z.infer<typeof updateProductImageSchema>;
+export type ReorderProductImagesInput = z.infer<typeof reorderProductImagesSchema>;
+

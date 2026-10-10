@@ -7,6 +7,7 @@ import {
   ChevronDown,
   ChevronRight,
   AlertTriangle,
+  AlertOctagon,
   Loader2,
   Trash2,
   Edit2,
@@ -21,6 +22,10 @@ import {
   History,
   ArrowRight,
   TrendingUp,
+  RotateCcw,
+  X,
+  Eye,
+  ImageIcon,
 } from 'lucide-react';
 import { Button } from '../../../components/ui/button';
 import { Input } from '../../../components/ui/input';
@@ -28,10 +33,12 @@ import { Badge } from '../../../components/ui/badge';
 import { toast } from 'sonner';
 import {
   productApi,
+  getVariantDisplayName,
   type Product,
   type ProductListItem,
   type ProductVariant,
   type ProductPriceHistory,
+  type ProductUsage,
   type CreateProductPayload,
   type UpdateProductPayload,
   type CreateVariantPayload,
@@ -39,6 +46,9 @@ import {
 import { categoryApi, type CategoryTreeNode } from '../categories-api';
 import { ProductForm } from './ProductForm';
 import { ProductVariantForm } from './ProductVariantForm';
+import { ProductGallery } from './ProductGallery';
+import { VariantSwatchSelector } from './VariantSwatchSelector';
+import type { UploadedImage } from '../../../components/ui/ImageUploader';
 import { flattenCategoriesForSelection } from './CategoryForm';
 
 interface ProductsPageProps {
@@ -48,9 +58,15 @@ interface ProductsPageProps {
     currency?: string;
     business_type?: string;
   };
+  initialCategoryId?: string;
+  onClearInitialCategory?: () => void;
 }
 
-export function ProductsPage({ organization }: ProductsPageProps) {
+export function ProductsPage({
+  organization,
+  initialCategoryId,
+  onClearInitialCategory,
+}: ProductsPageProps) {
   const currency = organization?.currency || 'NGN';
 
   // State
@@ -61,8 +77,17 @@ export function ProductsPage({ organization }: ProductsPageProps) {
 
   // Filters & Pagination
   const [searchQuery, setSearchQuery] = React.useState('');
-  const [selectedCategoryId, setSelectedCategoryId] = React.useState<string>('all');
-  const [statusFilter, setStatusFilter] = React.useState<'all' | 'active' | 'inactive'>('all');
+  const [selectedCategoryId, setSelectedCategoryId] = React.useState<string>(
+    initialCategoryId || 'all'
+  );
+
+  React.useEffect(() => {
+    if (initialCategoryId) {
+      setSelectedCategoryId(initialCategoryId);
+      setCurrentPage(1);
+    }
+  }, [initialCategoryId]);
+  const [statusFilter, setStatusFilter] = React.useState<'all' | 'active' | 'inactive' | 'archived'>('all');
   const [lowStockFilter, setLowStockFilter] = React.useState(false);
   const [currentPage, setCurrentPage] = React.useState(1);
   const [totalPages, setTotalPages] = React.useState(1);
@@ -84,17 +109,49 @@ export function ProductsPage({ organization }: ProductsPageProps) {
   const [variantTargetProduct, setVariantTargetProduct] = React.useState<Product | null>(null);
   const [editingVariant, setEditingVariant] = React.useState<ProductVariant | null>(null);
 
-  // Delete Modal State
+  // Delete Modal State & Stock Usage
   const [productToDelete, setProductToDelete] = React.useState<ProductListItem | null>(null);
+  const [deleteUsage, setDeleteUsage] = React.useState<ProductUsage | null>(null);
+  const [loadingDeleteUsage, setLoadingDeleteUsage] = React.useState(false);
+  const [confirmWithStockChecked, setConfirmWithStockChecked] = React.useState(false);
+  const [deleteReason, setDeleteReason] = React.useState('');
   const [isDeletingProduct, setIsDeletingProduct] = React.useState(false);
+
+  // Variant Delete Modal State
+  const [variantToDelete, setVariantToDelete] = React.useState<{ product: ProductListItem; variant: ProductVariant } | null>(null);
+  const [isDeletingVariant, setIsDeletingVariant] = React.useState(false);
+  const [variantDeleteReason, setVariantDeleteReason] = React.useState('');
+  const [confirmVariantWithStockChecked, setConfirmVariantWithStockChecked] = React.useState(false);
 
   // Price History Modal State
   const [historyProduct, setHistoryProduct] = React.useState<ProductListItem | null>(null);
+  const [historyHeader, setHistoryHeader] = React.useState<{ title: string; subtitle: string } | null>(null);
   const [priceHistoryList, setPriceHistoryList] = React.useState<ProductPriceHistory[]>([]);
   const [loadingHistory, setLoadingHistory] = React.useState(false);
 
   // Copy feedback
   const [copiedText, setCopiedText] = React.useState<string | null>(null);
+
+  // Product Visual Details & Gallery Modal State
+  const [detailProduct, setDetailProduct] = React.useState<Product | null>(null);
+  const [detailVariant, setDetailVariant] = React.useState<ProductVariant | null>(null);
+  const [isDetailModalOpen, setIsDetailModalOpen] = React.useState(false);
+  const [loadingDetail, setLoadingDetail] = React.useState(false);
+
+  const handleOpenProductDetail = async (item: ProductListItem) => {
+    try {
+      setLoadingDetail(true);
+      setIsDetailModalOpen(true);
+      const res = await productApi.getProductById(item.id);
+      setDetailProduct(res.product);
+      setDetailVariant(null);
+    } catch (err: any) {
+      toast.error('Failed to load product details');
+      setIsDetailModalOpen(false);
+    } finally {
+      setLoadingDetail(false);
+    }
+  };
 
   // Load Categories once
   const fetchCategories = React.useCallback(async () => {
@@ -117,7 +174,7 @@ export function ProductsPage({ organization }: ProductsPageProps) {
         limit: 15,
         search: searchQuery.trim() || undefined,
         categoryId: selectedCategoryId !== 'all' ? selectedCategoryId : undefined,
-        activeOnly: statusFilter === 'active' ? true : statusFilter === 'inactive' ? false : undefined,
+        status: statusFilter,
         lowStock: lowStockFilter || undefined,
       });
 
@@ -141,6 +198,52 @@ export function ProductsPage({ organization }: ProductsPageProps) {
   React.useEffect(() => {
     fetchProducts();
   }, [fetchProducts]);
+
+  // Fetch product usage when delete modal opens
+  React.useEffect(() => {
+    if (!productToDelete) {
+      setDeleteUsage(null);
+      setLoadingDeleteUsage(false);
+      setConfirmWithStockChecked(false);
+      setDeleteReason('');
+      return;
+    }
+
+    let isMounted = true;
+    setLoadingDeleteUsage(true);
+    setConfirmWithStockChecked(false);
+    setDeleteReason('');
+
+    productApi
+      .getProductUsage(productToDelete.id)
+      .then((res) => {
+        if (isMounted) {
+          setDeleteUsage(res.usage);
+        }
+      })
+      .catch((err) => {
+        console.error('Failed to inspect product stock usage:', err);
+        if (isMounted) {
+          setDeleteUsage({
+            totalOnHand: productToDelete.total_stock || 0,
+            totalReserved: productToDelete.reserved_stock || 0,
+            variantCount: productToDelete.variants_count || 0,
+            hasReservedStock: (productToDelete.reserved_stock || 0) > 0,
+            canDelete: (productToDelete.reserved_stock || 0) === 0,
+            branchStock: [],
+          });
+        }
+      })
+      .finally(() => {
+        if (isMounted) {
+          setLoadingDeleteUsage(false);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [productToDelete]);
 
   // Handle expanding a product row to view variants
   const toggleExpandProduct = async (product: ProductListItem) => {
@@ -172,13 +275,39 @@ export function ProductsPage({ organization }: ProductsPageProps) {
   };
 
   // Create or Update Product submission
-  const handleProductSubmit = async (data: CreateProductPayload | UpdateProductPayload) => {
+  const handleProductSubmit = async (
+    data: CreateProductPayload | UpdateProductPayload,
+    newFiles?: File[],
+    reorderedImages?: UploadedImage[]
+  ) => {
+    let productId = editingProduct?.id;
     if (editingProduct) {
       await productApi.updateProduct(editingProduct.id, data as UpdateProductPayload);
+      if (reorderedImages && reorderedImages.length > 0) {
+        const reorderPayload = reorderedImages
+          .filter((img) => Boolean(img.id))
+          .map((img, index) => ({
+            id: img.id as string,
+            sortOrder: index,
+            isPrimary: img.isPrimary,
+          }));
+        if (reorderPayload.length > 0) {
+          await productApi.reorderProductImages(editingProduct.id, reorderPayload).catch(() => {});
+        }
+      }
       toast.success('Product updated successfully');
     } else {
-      await productApi.createProduct(data as CreateProductPayload);
+      const res = await productApi.createProduct(data as CreateProductPayload);
+      productId = res.product.id;
       toast.success('Product created successfully');
+    }
+
+    if (productId && newFiles && newFiles.length > 0) {
+      try {
+        await productApi.uploadProductImages(productId, newFiles);
+      } catch (err: any) {
+        toast.error(err?.message || 'Failed to upload some product images');
+      }
     }
     await fetchProducts();
   };
@@ -194,6 +323,17 @@ export function ProductsPage({ organization }: ProductsPageProps) {
     }
   };
 
+  // Restore product handler
+  const handleRestoreProduct = async (product: ProductListItem) => {
+    try {
+      await productApi.restoreProduct(product.id);
+      toast.success(`Product "${product.name}" restored successfully`);
+      await fetchProducts();
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to restore product');
+    }
+  };
+
   // Open Add Variant drawer
   const handleOpenAddVariant = async (productItem: ProductListItem) => {
     try {
@@ -206,11 +346,51 @@ export function ProductsPage({ organization }: ProductsPageProps) {
     }
   };
 
-  // Variant submit handler
-  const handleVariantSubmit = async (data: CreateVariantPayload) => {
+  // Open Edit Variant drawer
+  const handleOpenEditVariant = async (productItem: ProductListItem, variant: ProductVariant) => {
+    try {
+      const res = await productApi.getProductById(productItem.id);
+      setVariantTargetProduct(res.product);
+      setEditingVariant(variant);
+      setIsVariantDrawerOpen(true);
+    } catch (err: any) {
+      toast.error('Failed to prepare variant form for editing');
+    }
+  };
+
+  // Variant submit handler (Create or Update)
+  const handleVariantSubmit = async (
+    data: CreateVariantPayload,
+    newFiles?: File[],
+    _reorderedImages?: UploadedImage[]
+  ) => {
     if (!variantTargetProduct) return;
-    await productApi.createVariant(variantTargetProduct.id, data);
-    toast.success('Variant added successfully');
+    let variantId = editingVariant?.id;
+    if (editingVariant) {
+      await productApi.updateVariant(variantTargetProduct.id, editingVariant.id, {
+        sku: data.sku,
+        barcode: data.barcode,
+        costPrice: data.costPrice,
+        sellingPrice: data.sellingPrice,
+        compareAtPrice: data.compareAtPrice,
+        attributes: data.attributes,
+        isActive: data.isActive,
+        priceChangeReason: data.priceChangeReason,
+      });
+      toast.success('Variant updated successfully');
+    } else {
+      const vRes = await productApi.createVariant(variantTargetProduct.id, data);
+      variantId = vRes.variant.id;
+      toast.success('Variant added successfully');
+    }
+
+    if (variantId && newFiles && newFiles.length > 0) {
+      try {
+        await productApi.uploadVariantImages(variantTargetProduct.id, variantId, newFiles);
+      } catch (err: any) {
+        toast.error(err?.message || 'Failed to upload some variant images');
+      }
+    }
 
     // Refresh variants for this product
     const updated = await productApi.getProductById(variantTargetProduct.id);
@@ -229,7 +409,10 @@ export function ProductsPage({ organization }: ProductsPageProps) {
     if (!productToDelete) return;
     try {
       setIsDeletingProduct(true);
-      await productApi.deleteProduct(productToDelete.id);
+      await productApi.deleteProduct(productToDelete.id, {
+        confirmWithStock: confirmWithStockChecked,
+        reason: deleteReason.trim() || undefined,
+      });
       toast.success(`Product "${productToDelete.name}" archived successfully`);
       setProductToDelete(null);
       await fetchProducts();
@@ -240,8 +423,37 @@ export function ProductsPage({ organization }: ProductsPageProps) {
     }
   };
 
-  // View price history handler
+  // Delete variant handler (soft delete)
+  const confirmDeleteVariant = async () => {
+    if (!variantToDelete) return;
+    try {
+      setIsDeletingVariant(true);
+      await productApi.deleteVariant(variantToDelete.product.id, variantToDelete.variant.id, {
+        confirmWithStock: confirmVariantWithStockChecked,
+        reason: variantDeleteReason.trim() || undefined,
+      });
+      toast.success(`Variant "${getVariantDisplayName(variantToDelete.variant)}" archived successfully`);
+
+      const updated = await productApi.getProductById(variantToDelete.product.id);
+      setProductVariantsMap((prev) => ({
+        ...prev,
+        [variantToDelete.product.id]: updated.product.variants || [],
+      }));
+      setVariantToDelete(null);
+      await fetchProducts();
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to archive variant');
+    } finally {
+      setIsDeletingVariant(false);
+    }
+  };
+
+  // View product price history handler
   const handleViewPriceHistory = async (product: ProductListItem) => {
+    setHistoryHeader({
+      title: 'Price Revision History',
+      subtitle: `${product.name} (SKU: ${product.sku})`,
+    });
     setHistoryProduct(product);
     setLoadingHistory(true);
     try {
@@ -249,6 +461,25 @@ export function ProductsPage({ organization }: ProductsPageProps) {
       setPriceHistoryList(res.history || []);
     } catch (err: any) {
       toast.error(err?.message || 'Failed to load price revision history');
+      setPriceHistoryList([]);
+    } finally {
+      setLoadingHistory(false);
+    }
+  };
+
+  // View variant price history handler
+  const handleViewVariantPriceHistory = async (product: ProductListItem, variant: ProductVariant) => {
+    setHistoryHeader({
+      title: `Price History: ${getVariantDisplayName(variant)}`,
+      subtitle: `${product.name} (Variant SKU: ${variant.sku})`,
+    });
+    setHistoryProduct(product);
+    setLoadingHistory(true);
+    try {
+      const res = await productApi.getVariantPriceHistory(product.id, variant.id);
+      setPriceHistoryList(res.history || []);
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to load variant price revision history');
       setPriceHistoryList([]);
     } finally {
       setLoadingHistory(false);
@@ -264,10 +495,10 @@ export function ProductsPage({ organization }: ProductsPageProps) {
 
   // Stats calculation
   const lowStockCount = products.filter(
-    (p) => p.track_quantity && p.available_stock <= p.low_stock_threshold
+    (p) => p.track_quantity && (p.available_stock ?? 0) <= p.low_stock_threshold
   ).length;
   const outOfStockCount = products.filter(
-    (p) => p.track_quantity && p.available_stock <= 0
+    (p) => p.track_quantity && (p.available_stock ?? 0) <= 0
   ).length;
   const activeCount = products.filter((p) => p.is_active).length;
 
@@ -403,6 +634,7 @@ export function ProductsPage({ organization }: ProductsPageProps) {
               <option value="all">All Status</option>
               <option value="active">Active Only</option>
               <option value="inactive">Inactive Only</option>
+              <option value="archived">Archived</option>
             </select>
           </div>
 
@@ -425,6 +657,34 @@ export function ProductsPage({ organization }: ProductsPageProps) {
           </Button>
         </div>
       </div>
+
+      {/* Active Category Filter Banner */}
+      {selectedCategoryId !== 'all' && (
+        <div className="px-6 pt-3 pb-1">
+          <div className="flex items-center justify-between gap-3 px-3.5 py-2 bg-[#985184]/15 border border-[#985184]/30 rounded-md text-xs text-white">
+            <div className="flex items-center gap-2">
+              <span className="text-slate-400 text-[11px]">Filtered by category:</span>
+              <span className="font-semibold text-[#fbb945] bg-black/40 px-2 py-0.5 rounded-sm border border-white/5">
+                {categoryOptions.find((c) => c.id === selectedCategoryId)?.label || selectedCategoryId}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedCategoryId('all');
+                onClearInitialCategory?.();
+                setCurrentPage(1);
+              }}
+              className="inline-flex items-center gap-1 text-[11px] text-slate-300 hover:text-white cursor-pointer px-2 py-1 rounded-sm hover:bg-white/10 transition-colors"
+              title="Clear category filter"
+              data-testid="clear-category-filter-btn"
+            >
+              <X className="w-3.5 h-3.5 text-slate-400" />
+              <span>Clear category filter</span>
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Main Content Area */}
       <div className="p-6">
@@ -492,9 +752,10 @@ export function ProductsPage({ organization }: ProductsPageProps) {
                     const isLoadingVariants = loadingVariantsMap[item.id];
 
                     // Stock health logic
+                    const availableStock = item.available_stock ?? 0;
                     let stockBadge = (
                       <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                        {item.available_stock} in stock
+                        {availableStock} in stock
                       </span>
                     );
 
@@ -504,16 +765,16 @@ export function ProductsPage({ organization }: ProductsPageProps) {
                           Untracked
                         </span>
                       );
-                    } else if (item.available_stock <= 0) {
+                    } else if (availableStock <= 0) {
                       stockBadge = (
                         <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-rose-500/15 text-rose-400 border border-rose-500/30">
                           Out of Stock
                         </span>
                       );
-                    } else if (item.available_stock <= item.low_stock_threshold) {
+                    } else if (availableStock <= item.low_stock_threshold) {
                       stockBadge = (
                         <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30">
-                          Low: {item.available_stock} left
+                          Low: {availableStock} left
                         </span>
                       );
                     }
@@ -547,27 +808,54 @@ export function ProductsPage({ organization }: ProductsPageProps) {
 
                           {/* Product Name & Details */}
                           <td className="py-3 px-4">
-                            <div className="font-semibold text-white flex items-center gap-2">
-                              <span>{item.name}</span>
-                              {item.has_variants && (
-                                <Badge
-                                  variant="outline"
-                                  className="text-[10px] font-normal py-0 px-1.5 border-[#985184]/40 text-[#fbb945] bg-[#985184]/15"
-                                >
-                                  {item.variants_count > 0
-                                    ? `${item.variants_count} variants`
-                                    : 'Template'}
-                                </Badge>
-                              )}
+                            <div className="flex items-center gap-3">
+                              {/* Product Thumbnail */}
+                              <button
+                                type="button"
+                                onClick={() => handleOpenProductDetail(item)}
+                                className="w-10 h-10 rounded-lg bg-[#141519] border border-[#2d3139] overflow-hidden shrink-0 flex items-center justify-center relative group hover:border-[#985184] transition-colors cursor-pointer"
+                                title="View gallery & details"
+                              >
+                                {item.primary_image_url || item.image_url ? (
+                                  <img
+                                    src={(item.primary_image_url || item.image_url) ?? undefined}
+                                    alt={item.name}
+                                    className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                                    loading="lazy"
+                                  />
+                                ) : (
+                                  <Package className="w-5 h-5 text-slate-500 group-hover:text-slate-400" />
+                                )}
+                              </button>
+                              <div>
+                                <div className="font-semibold text-white flex items-center gap-2">
+                                  <span
+                                    onClick={() => handleOpenProductDetail(item)}
+                                    className="cursor-pointer hover:text-[#fbb945] transition-colors"
+                                  >
+                                    {item.name}
+                                  </span>
+                                  {item.has_variants && (
+                                    <Badge
+                                      variant="outline"
+                                      className="text-[10px] font-normal py-0 px-1.5 border-[#985184]/40 text-[#fbb945] bg-[#985184]/15"
+                                    >
+                                      {(item.variants_count ?? 0) > 0
+                                        ? `${item.variants_count} variants`
+                                        : 'Template'}
+                                    </Badge>
+                                  )}
+                                </div>
+                                {item.description && (
+                                  <p className="text-[11px] text-slate-400 truncate max-w-xs mt-0.5">
+                                    {item.description}
+                                  </p>
+                                )}
+                                <span className="text-[10px] text-slate-500">
+                                  Unit: {item.unit_of_measure}
+                                </span>
+                              </div>
                             </div>
-                            {item.description && (
-                              <p className="text-[11px] text-slate-400 truncate max-w-xs mt-0.5">
-                                {item.description}
-                              </p>
-                            )}
-                            <span className="text-[10px] text-slate-500">
-                              Unit: {item.unit_of_measure}
-                            </span>
                           </td>
 
                           {/* SKU & Barcode */}
@@ -635,7 +923,11 @@ export function ProductsPage({ organization }: ProductsPageProps) {
 
                           {/* Status */}
                           <td className="py-3 px-4 text-center">
-                            {item.is_active ? (
+                            {item.is_deleted ? (
+                              <span className="inline-flex items-center gap-1 text-[11px] text-rose-400 font-medium">
+                                <XCircle className="w-3 h-3 text-rose-400" /> Archived
+                              </span>
+                            ) : item.is_active ? (
                               <span className="inline-flex items-center gap-1 text-[11px] text-emerald-400">
                                 <CheckCircle2 className="w-3 h-3" /> Active
                               </span>
@@ -649,42 +941,65 @@ export function ProductsPage({ organization }: ProductsPageProps) {
                           {/* Actions */}
                           <td className="py-3 px-4 text-right">
                             <div className="flex items-center justify-end gap-1.5">
-                              {item.has_variants && (
+                              {item.is_deleted ? (
                                 <Button
                                   variant="ghost"
                                   size="sm"
-                                  onClick={() => handleOpenAddVariant(item)}
-                                  className="h-7 px-2 text-[11px] text-[#fbb945] hover:text-white hover:bg-[#2d3139]"
-                                  title="Add Variant"
+                                  onClick={() => handleRestoreProduct(item)}
+                                  className="h-7 px-2.5 text-xs text-emerald-400 hover:text-white hover:bg-emerald-500/20 border border-emerald-500/30"
+                                  title="Restore product to active catalog"
                                 >
-                                  <Plus className="w-3 h-3 mr-1" />
-                                  Variant
+                                  <RotateCcw className="w-3.5 h-3.5 mr-1" />
+                                  Restore
                                 </Button>
+                              ) : (
+                                <>
+                                  {item.has_variants && (
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => handleOpenAddVariant(item)}
+                                      className="h-7 px-2 text-[11px] text-[#fbb945] hover:text-white hover:bg-[#2d3139]"
+                                      title="Add Variant"
+                                    >
+                                      <Plus className="w-3 h-3 mr-1" />
+                                      Variant
+                                    </Button>
+                                  )}
+                                   <button
+                                    type="button"
+                                    onClick={() => handleOpenProductDetail(item)}
+                                    className="p-1.5 text-slate-400 hover:text-[#985184] hover:bg-[#2d3139] rounded transition-colors"
+                                    title="View gallery and details"
+                                  >
+                                    <Eye className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleViewPriceHistory(item)}
+                                    className="p-1.5 text-slate-400 hover:text-[#fbb945] hover:bg-[#2d3139] rounded transition-colors"
+                                    title="View price revision history"
+                                  >
+                                    <History className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleEditProduct(item)}
+                                    className="p-1.5 text-slate-400 hover:text-white hover:bg-[#2d3139] rounded transition-colors"
+                                    title="Edit product"
+                                  >
+                                    <Edit2 className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setProductToDelete(item)}
+                                    className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 rounded transition-colors"
+                                    title="Archive product"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </>
                               )}
-                              <button
-                                type="button"
-                                onClick={() => handleViewPriceHistory(item)}
-                                className="p-1.5 text-slate-400 hover:text-[#fbb945] hover:bg-[#2d3139] rounded transition-colors"
-                                title="View price revision history"
-                              >
-                                <History className="w-3.5 h-3.5" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleEditProduct(item)}
-                                className="p-1.5 text-slate-400 hover:text-white hover:bg-[#2d3139] rounded transition-colors"
-                                title="Edit product"
-                              >
-                                <Edit2 className="w-3.5 h-3.5" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setProductToDelete(item)}
-                                className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 rounded transition-colors"
-                                title="Archive product"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
                             </div>
                           </td>
                         </tr>
@@ -730,13 +1045,34 @@ export function ProductsPage({ organization }: ProductsPageProps) {
                                         <th className="py-2 px-3 text-right">Cost Price</th>
                                         <th className="py-2 px-3 text-right">Selling Price</th>
                                         <th className="py-2 px-3 text-center">Status</th>
+                                        <th className="py-2 px-3 text-right">Actions</th>
                                       </tr>
                                     </thead>
                                     <tbody className="divide-y divide-[#2d3139]/40">
                                       {variants.map((v) => (
                                         <tr key={v.id} className="hover:bg-[#1a1b22]">
                                           <td className="py-2 px-3 font-medium text-slate-200">
-                                            {v.name}
+                                            <div className="flex items-center gap-2">
+                                              <div className="w-6 h-6 rounded bg-[#202229] border border-[#2d3139] overflow-hidden shrink-0 flex items-center justify-center">
+                                                {v.images && v.images.length > 0 && (v.images[0].thumbnail_200 || v.images[0].url) ? (
+                                                  <img
+                                                    src={v.images[0].thumbnail_200 || v.images[0].url}
+                                                    alt={getVariantDisplayName(v)}
+                                                    className="w-full h-full object-cover"
+                                                  />
+                                                ) : item.primary_image_url || item.image_url ? (
+                                                  <img
+                                                    src={(item.primary_image_url || item.image_url) ?? undefined}
+                                                    alt={getVariantDisplayName(v)}
+                                                    className="w-full h-full object-cover opacity-60"
+                                                    title="Inherited product photo"
+                                                  />
+                                                ) : (
+                                                  <Layers className="w-3.5 h-3.5 text-slate-500" />
+                                                )}
+                                              </div>
+                                              <span>{getVariantDisplayName(v)}</span>
+                                            </div>
                                           </td>
                                           <td className="py-2 px-3 font-mono text-slate-300">
                                             {v.sku}
@@ -792,6 +1128,38 @@ export function ProductsPage({ organization }: ProductsPageProps) {
                                                 Inactive
                                               </span>
                                             )}
+                                          </td>
+                                          <td className="py-2 px-3 text-right">
+                                            <div className="flex items-center justify-end gap-1">
+                                              <button
+                                                type="button"
+                                                onClick={() => handleViewVariantPriceHistory(item, v)}
+                                                className="p-1 text-slate-400 hover:text-[#fbb945] hover:bg-[#252830] rounded transition-colors"
+                                                title="View variant price revision history"
+                                              >
+                                                <History className="w-3.5 h-3.5" />
+                                              </button>
+                                              <button
+                                                type="button"
+                                                onClick={() => handleOpenEditVariant(item, v)}
+                                                className="p-1 text-slate-400 hover:text-white hover:bg-[#252830] rounded transition-colors"
+                                                title="Edit variant"
+                                              >
+                                                <Edit2 className="w-3.5 h-3.5" />
+                                              </button>
+                                              <button
+                                                type="button"
+                                                onClick={() => {
+                                                  setVariantToDelete({ product: item, variant: v });
+                                                  setVariantDeleteReason('');
+                                                  setConfirmVariantWithStockChecked(false);
+                                                }}
+                                                className="p-1 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 rounded transition-colors"
+                                                title="Archive variant"
+                                              >
+                                                <Trash2 className="w-3.5 h-3.5" />
+                                              </button>
+                                            </div>
                                           </td>
                                         </tr>
                                       ))}
@@ -850,6 +1218,7 @@ export function ProductsPage({ organization }: ProductsPageProps) {
         editingProduct={editingProduct}
         categories={categories}
         currency={currency}
+        businessType={organization?.business_type}
       />
 
       {/* Slide-over Product Variant Drawer */}
@@ -869,7 +1238,7 @@ export function ProductsPage({ organization }: ProductsPageProps) {
           role="dialog"
           aria-modal="true"
         >
-          <div className="bg-[#181a20] border border-[#2d3139] rounded-xl max-w-md w-full p-6 shadow-2xl text-slate-100 animate-in zoom-in-95">
+          <div className="bg-[#181a20] border border-[#2d3139] rounded-xl max-w-md w-full p-6 shadow-2xl text-slate-100 animate-in zoom-in-95 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center gap-3 mb-4">
               <div className="w-10 h-10 rounded-full bg-rose-500/10 text-rose-400 flex items-center justify-center shrink-0">
                 <AlertTriangle className="w-5 h-5" />
@@ -883,13 +1252,115 @@ export function ProductsPage({ organization }: ProductsPageProps) {
             <p className="text-xs text-slate-300 leading-relaxed">
               Are you sure you want to archive{' '}
               <strong className="text-white font-semibold">"{productToDelete.name}"</strong> (SKU:{' '}
-              {productToDelete.sku})?
-            </p>
-            <p className="text-[11px] text-slate-400 mt-2 bg-[#141519] p-3 rounded-lg border border-[#2d3139]">
-              This product will be hidden from new sales and catalog lists, but all historical transactions and stock history will remain intact.
+              <span className="font-mono text-[#fbb945]">{productToDelete.sku}</span>)?
             </p>
 
-            <div className="flex items-center justify-end gap-3 mt-6">
+            {/* Loading stock inspection */}
+            {loadingDeleteUsage ? (
+              <div className="my-4 p-4 rounded-lg bg-[#141519] border border-[#2d3139] flex items-center justify-center gap-2 text-xs text-slate-400">
+                <Loader2 className="w-4 h-4 animate-spin text-[#985184]" />
+                <span>Checking branch stock levels & reservations...</span>
+              </div>
+            ) : deleteUsage?.hasReservedStock ? (
+              /* State 1: Active Reserved Stock (Strict Block) */
+              <div className="my-4 p-3.5 rounded-lg bg-rose-950/30 border border-rose-500/30 space-y-2">
+                <div className="flex items-center gap-2 text-rose-400 font-semibold text-xs">
+                  <AlertOctagon className="w-4 h-4 shrink-0" />
+                  <span>Cannot Archive: Active Reserved Stock</span>
+                </div>
+                <p className="text-[11px] text-slate-300 leading-relaxed">
+                  This product has <strong className="text-rose-400 font-semibold">{deleteUsage.totalReserved} reserved unit(s)</strong> across pending customer orders or branch transfers. Outstanding orders must be fulfilled or cancelled before archiving.
+                </p>
+                {deleteUsage.branchStock.length > 0 && (
+                  <div className="mt-2 pt-2 border-t border-rose-500/20 space-y-1">
+                    <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Branch Reservations</span>
+                    {deleteUsage.branchStock.map((b) => (
+                      <div key={b.branchId} className="flex justify-between text-[11px]">
+                        <span className="text-slate-300">{b.branchName}</span>
+                        <span className="font-mono text-rose-300">{b.reserved} reserved ({b.onHand} on hand)</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : (deleteUsage?.totalOnHand ?? 0) > 0 ? (
+              /* State 2: Stock on hand > 0 (Amber Alert + Checkbox + Mandatory Reason) */
+              <div className="my-4 space-y-3">
+                <div className="p-3.5 rounded-lg bg-amber-950/30 border border-amber-500/30 space-y-2">
+                  <div className="flex items-center gap-2 text-amber-400 font-semibold text-xs">
+                    <AlertTriangle className="w-4 h-4 shrink-0" />
+                    <span>Active Stock Detected</span>
+                  </div>
+                  <p className="text-[11px] text-slate-300 leading-relaxed">
+                    This product currently holds <strong className="text-amber-400 font-semibold">{deleteUsage?.totalOnHand} unit(s)</strong> on hand across branches
+                    {deleteUsage?.variantCount ? ` across ${deleteUsage.variantCount} variant(s)` : ''}.
+                  </p>
+                  {deleteUsage?.branchStock && deleteUsage.branchStock.length > 0 && (
+                    <div className="mt-2 pt-2 border-t border-amber-500/20 space-y-1">
+                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Branch Stock Breakdown</span>
+                      {deleteUsage.branchStock.map((b) => (
+                        <div key={b.branchId} className="flex justify-between text-[11px]">
+                          <span className="text-slate-300">{b.branchName}</span>
+                          <span className="font-mono text-amber-300">{b.onHand} on hand</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <label className="flex items-start gap-2.5 p-3 rounded-lg bg-[#141519] border border-[#2d3139] cursor-pointer hover:border-slate-600 transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={confirmWithStockChecked}
+                    onChange={(e) => setConfirmWithStockChecked(e.target.checked)}
+                    className="mt-0.5 rounded border-[#2d3139] text-[#985184] focus:ring-[#985184] bg-[#1c1e24]"
+                    data-testid="confirm-stock-checkbox"
+                  />
+                  <span className="text-xs text-slate-300">
+                    I understand there are <strong className="text-white">{deleteUsage?.totalOnHand} units</strong> in stock and confirm archiving this product.
+                  </span>
+                </label>
+
+                <div className="space-y-1.5">
+                  <label className="text-[11px] font-medium text-slate-300 flex items-center justify-between">
+                    <span>Reason for archiving <span className="text-rose-400">*</span></span>
+                    <span className="text-[10px] text-slate-500">Required</span>
+                  </label>
+                  <textarea
+                    value={deleteReason}
+                    onChange={(e) => setDeleteReason(e.target.value)}
+                    placeholder="Provide a clear operational reason (e.g., Discontinued, damaged batch write-off)..."
+                    rows={2}
+                    className="w-full bg-[#141519] border border-[#2d3139] rounded-lg p-2.5 text-xs text-slate-100 placeholder:text-slate-600 focus:outline-hidden focus:border-[#985184]"
+                    data-testid="archive-product-reason-input"
+                  />
+                </div>
+              </div>
+            ) : (
+              /* State 3: Clean (0 stock) */
+              <div className="my-4 space-y-3">
+                <div className="p-3 rounded-lg bg-[#141519] border border-[#2d3139] text-[11px] text-slate-400 leading-relaxed">
+                  No active stock units detected across branches. This product will be hidden from catalog lists and POS terminals, but historical transaction records remain intact.
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[11px] font-medium text-slate-300 flex items-center justify-between">
+                    <span>Archive note / reason</span>
+                    <span className="text-[10px] text-slate-500">Optional</span>
+                  </label>
+                  <textarea
+                    value={deleteReason}
+                    onChange={(e) => setDeleteReason(e.target.value)}
+                    placeholder="Optional note for audit records..."
+                    rows={2}
+                    className="w-full bg-[#141519] border border-[#2d3139] rounded-lg p-2.5 text-xs text-slate-100 placeholder:text-slate-600 focus:outline-hidden focus:border-[#985184]"
+                    data-testid="archive-product-reason-input"
+                  />
+                </div>
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-3 mt-6 pt-3 border-t border-[#2d3139]">
               <Button
                 variant="outline"
                 size="sm"
@@ -902,8 +1373,15 @@ export function ProductsPage({ organization }: ProductsPageProps) {
               <Button
                 size="sm"
                 onClick={confirmDeleteProduct}
-                disabled={isDeletingProduct}
-                className="bg-rose-600 hover:bg-rose-700 text-white text-xs h-9 font-medium flex items-center gap-1.5"
+                disabled={
+                  isDeletingProduct ||
+                  loadingDeleteUsage ||
+                  (deleteUsage?.hasReservedStock ?? false) ||
+                  ((deleteUsage?.totalOnHand ?? 0) > 0 &&
+                    (!confirmWithStockChecked || !deleteReason.trim()))
+                }
+                className="bg-rose-600 hover:bg-rose-700 text-white text-xs h-9 font-medium flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                data-testid="confirm-archive-product-btn"
               >
                 {isDeletingProduct && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
                 Archive Product
@@ -928,17 +1406,20 @@ export function ProductsPage({ organization }: ProductsPageProps) {
                 </div>
                 <div>
                   <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                    <span>Price Revision History</span>
+                    <span>{historyHeader?.title || 'Price Revision History'}</span>
                     <Badge variant="outline" className="bg-[#202229] border-[#2d3139] text-xs font-mono text-[#fbb945]">
                       {historyProduct.sku}
                     </Badge>
                   </h3>
-                  <p className="text-xs text-slate-400 mt-0.5">{historyProduct.name}</p>
+                  <p className="text-xs text-slate-400 mt-0.5">{historyHeader?.subtitle || historyProduct.name}</p>
                 </div>
               </div>
               <button
                 type="button"
-                onClick={() => setHistoryProduct(null)}
+                onClick={() => {
+                  setHistoryProduct(null);
+                  setHistoryHeader(null);
+                }}
                 className="p-1 rounded-md text-slate-400 hover:text-white hover:bg-[#252830] transition-colors"
                 title="Close"
               >
@@ -1051,12 +1532,260 @@ export function ProductsPage({ organization }: ProductsPageProps) {
             <div className="pt-3 border-t border-[#2d3139] flex justify-end">
               <Button
                 size="sm"
-                onClick={() => setHistoryProduct(null)}
+                onClick={() => {
+                  setHistoryProduct(null);
+                  setHistoryHeader(null);
+                }}
                 className="bg-[#252830] hover:bg-[#2d3139] text-white text-xs h-8 px-4"
               >
                 Close
               </Button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Variant Archive Confirmation Modal */}
+      {variantToDelete && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs animate-in fade-in"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="bg-[#181a20] border border-[#2d3139] rounded-xl max-w-md w-full p-6 text-slate-100 shadow-2xl space-y-4 animate-in zoom-in-95">
+            <div className="flex items-start gap-3">
+              <div className="p-2 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-400 shrink-0 mt-0.5">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="text-base font-semibold text-white">Archive Variant</h3>
+                <p className="text-xs text-slate-400">
+                  Are you sure you want to archive variant{' '}
+                  <span className="font-semibold text-slate-200">"{getVariantDisplayName(variantToDelete.variant)}"</span> (SKU:{' '}
+                  <span className="font-mono text-slate-300">{variantToDelete.variant.sku}</span>) for product{' '}
+                  <span className="font-medium text-slate-200">"{variantToDelete.product.name}"</span>?
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-3 pt-1">
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-slate-300">
+                  Reason for archiving <span className="text-slate-500 font-normal">(optional unless stock exists)</span>
+                </label>
+                <Input
+                  placeholder="e.g. Discontinued variant option, supplier retired SKU"
+                  value={variantDeleteReason}
+                  onChange={(e) => setVariantDeleteReason(e.target.value)}
+                  className="bg-[#141519] border-[#2d3139] text-xs h-9 text-slate-200 placeholder:text-slate-500"
+                />
+              </div>
+
+              <div className="bg-[#141519] border border-[#2d3139] p-3 rounded-lg flex items-start gap-2.5">
+                <input
+                  type="checkbox"
+                  id="confirmVariantStock"
+                  checked={confirmVariantWithStockChecked}
+                  onChange={(e) => setConfirmVariantWithStockChecked(e.target.checked)}
+                  className="mt-0.5 rounded border-slate-600 bg-slate-800 text-[#985184] focus:ring-[#985184]"
+                />
+                <label htmlFor="confirmVariantStock" className="text-xs text-slate-300 cursor-pointer select-none">
+                  Confirm archiving even if active inventory exists for this variant
+                </label>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setVariantToDelete(null)}
+                className="border-[#2d3139] text-slate-300 hover:text-white"
+                disabled={isDeletingVariant}
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                onClick={confirmDeleteVariant}
+                disabled={isDeletingVariant}
+                className="bg-rose-600 hover:bg-rose-700 text-white font-medium text-xs h-9 px-4"
+              >
+                {isDeletingVariant ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" />
+                    Archiving...
+                  </>
+                ) : (
+                  'Archive Variant'
+                )}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Product Visual Details & Gallery Modal */}
+      {isDetailModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-xs animate-in fade-in"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="bg-[#181a20] border border-[#2d3139] rounded-2xl max-w-4xl w-full p-6 shadow-2xl text-slate-100 max-h-[92vh] overflow-y-auto animate-in zoom-in-95">
+            {loadingDetail || !detailProduct ? (
+              <div className="py-24 flex flex-col items-center justify-center gap-3 text-slate-400">
+                <Loader2 className="w-8 h-8 animate-spin text-[#985184]" />
+                <span className="text-sm font-medium">Loading product visuals & gallery...</span>
+              </div>
+            ) : (
+              <div className="space-y-6">
+                {/* Header */}
+                <div className="flex items-start justify-between border-b border-[#2d3139] pb-4">
+                  <div>
+                    <div className="flex items-center gap-2.5">
+                      <h2 className="text-xl font-bold text-white tracking-tight">
+                        {detailProduct.name}
+                      </h2>
+                      {detailProduct.category_name && (
+                        <Badge
+                          variant="outline"
+                          className="border-[#2d3139] text-slate-300 bg-[#141519] text-xs font-normal"
+                        >
+                          {detailProduct.category_name}
+                        </Badge>
+                      )}
+                      {detailProduct.is_active ? (
+                        <Badge className="bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 text-[10px]">
+                          Active
+                        </Badge>
+                      ) : (
+                        <Badge className="bg-slate-500/15 text-slate-400 border border-slate-500/30 text-[10px]">
+                          Inactive
+                        </Badge>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-4 text-xs text-slate-400 mt-1 font-mono">
+                      <span>SKU: {detailProduct.sku}</span>
+                      {detailProduct.barcode && <span>Barcode: {detailProduct.barcode}</span>}
+                      <span>Unit: {detailProduct.unit_of_measure}</span>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setIsDetailModalOpen(false)}
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-[#252830] transition-colors"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                {/* Main Content Grid */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-start">
+                  {/* Left Column: Visual Gallery */}
+                  <div>
+                    <ProductGallery
+                      images={detailProduct.images || []}
+                      productName={detailProduct.name}
+                      variantImages={detailVariant?.images}
+                      onSelectVariant={setDetailVariant}
+                      thumbnailPosition="bottom"
+                    />
+                  </div>
+
+                  {/* Right Column: Pricing, Attributes, Swatches */}
+                  <div className="space-y-5">
+                    {/* Variant Swatch Selector if variants exist */}
+                    {detailProduct.has_variants && (detailProduct.variants?.length ?? 0) > 0 && (
+                      <div className="p-4 rounded-xl bg-[#141519] border border-[#2d3139] space-y-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-slate-200 uppercase tracking-wider">
+                            Choose Variation
+                          </span>
+                          {detailVariant && (
+                            <button
+                              type="button"
+                              onClick={() => setDetailVariant(null)}
+                              className="text-[11px] text-[#985184] hover:underline"
+                            >
+                              Reset to all
+                            </button>
+                          )}
+                        </div>
+                        <VariantSwatchSelector
+                          variants={detailProduct.variants || []}
+                          parentImages={detailProduct.images || []}
+                          selectedVariant={detailVariant}
+                          onSelectVariant={setDetailVariant}
+                          swatchType="auto"
+                        />
+                      </div>
+                    )}
+
+                    {/* Pricing summary */}
+                    <div className="p-4 rounded-xl bg-[#141519] border border-[#2d3139] space-y-3">
+                      <div className="text-xs font-bold text-slate-200 uppercase tracking-wider">
+                        Pricing & Margins {detailVariant ? `(${getVariantDisplayName(detailVariant)})` : ''}
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <span className="text-[11px] text-slate-400 block">Selling Price</span>
+                          <span className="text-lg font-bold text-white font-mono">
+                            {currency}{' '}
+                            {Number(
+                              detailVariant?.selling_price ?? detailProduct.selling_price
+                            ).toLocaleString()}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-[11px] text-slate-400 block">Cost Price</span>
+                          <span className="text-lg font-medium text-slate-300 font-mono">
+                            {currency}{' '}
+                            {Number(
+                              detailVariant?.cost_price ?? detailProduct.cost_price
+                            ).toLocaleString()}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Description */}
+                    {detailProduct.description && (
+                      <div className="space-y-1.5">
+                        <span className="text-xs font-semibold text-slate-300">Description</span>
+                        <p className="text-xs text-slate-400 leading-relaxed bg-[#141519] p-3 rounded-lg border border-[#2d3139]">
+                          {detailProduct.description}
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Quick Action Footer */}
+                    <div className="flex items-center justify-end gap-3 pt-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => {
+                          setIsDetailModalOpen(false);
+                          handleEditProduct(detailProduct);
+                        }}
+                        className="border-[#2d3139] text-slate-200 hover:text-white text-xs h-9"
+                      >
+                        <Edit2 className="w-3.5 h-3.5 mr-1.5 text-slate-400" />
+                        Edit Product
+                      </Button>
+                      <Button
+                        type="button"
+                        onClick={() => setIsDetailModalOpen(false)}
+                        className="bg-[#985184] hover:bg-[#985184]/90 text-white text-xs h-9 px-4 font-medium"
+                      >
+                        Close
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

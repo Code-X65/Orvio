@@ -24,7 +24,7 @@ export interface InventoryBranchSetupPayload {
 }
 
 export interface SaveInventoryDraftPayload {
-  currentStep: number;
+  currentStep: number | string;
   stepData: Record<string, any>;
 }
 

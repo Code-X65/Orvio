@@ -13,28 +13,115 @@ import {
   ShieldAlert,
   Percent,
   Tag,
+  ImageIcon,
 } from 'lucide-react';
 import { Button } from '../../../components/ui/button';
 import { Input } from '../../../components/ui/input';
 import { Textarea } from '../../../components/ui/textarea';
 import type { CategoryTreeNode } from '../categories-api';
 import { flattenCategoriesForSelection } from './CategoryForm';
-import type {
-  Product,
-  MeasurementUnit,
-  CreateProductPayload,
-  UpdateProductPayload,
+import {
+  productApi,
+  BUSINESS_TYPE_IMAGE_LIMITS,
+  type Product,
+  type MeasurementUnit,
+  type CreateProductPayload,
+  type UpdateProductPayload,
 } from '../products-api';
+import { ImageUploader, type UploadedImage } from '../../../components/ui/ImageUploader';
 
 export interface ProductFormProps {
   isOpen: boolean;
   onClose: () => void;
-  onSubmit: (data: CreateProductPayload | UpdateProductPayload) => Promise<void>;
+  onSubmit: (
+    data: CreateProductPayload | UpdateProductPayload,
+    newFiles?: File[],
+    reorderedImages?: UploadedImage[]
+  ) => Promise<void>;
   editingProduct?: Product | null;
   categories: CategoryTreeNode[];
   currency?: string;
   defaultCategoryId?: string | null;
+  businessType?: string | null;
 }
+
+export interface BusinessTypeAttributeField {
+  key: string;
+  label: string;
+  type: 'text' | 'boolean' | 'date' | 'select' | 'number';
+  placeholder?: string;
+  options?: string[];
+  helperText?: string;
+}
+
+export const BUSINESS_TYPE_ATTRIBUTES: Record<string, { title: string; fields: BusinessTypeAttributeField[] }> = {
+  pharmacy_cosmetics: {
+    title: 'Pharmacy & Clinical Specifications',
+    fields: [
+      { key: 'requiresPrescription', label: 'Requires Prescription (Rx)', type: 'boolean', helperText: 'Flag if medication requires a licensed doctor prescription' },
+      { key: 'dosageForm', label: 'Dosage Form', type: 'select', options: ['Tablet', 'Capsule', 'Syrup', 'Injection', 'Cream / Ointment', 'Suspension', 'Drops', 'Other'] },
+      { key: 'strength', label: 'Strength / Potency', type: 'text', placeholder: 'e.g. 500mg, 10mg/5ml' },
+      { key: 'nafdacNumber', label: 'NAFDAC / Regulatory Reg No.', type: 'text', placeholder: 'e.g. 04-1234' },
+      { key: 'expiryDate', label: 'Batch Expiry Date', type: 'date' },
+    ],
+  },
+  food_grocery: {
+    title: 'Food & Perishables Details',
+    fields: [
+      { key: 'isPerishable', label: 'Perishable Goods', type: 'boolean', helperText: 'Item spoils rapidly without cold storage' },
+      { key: 'expiryDate', label: 'Best Before / Expiry Date', type: 'date' },
+      { key: 'storageConditions', label: 'Storage Temperature', type: 'select', options: ['Ambient / Dry Shelf', 'Refrigerated (2°C - 8°C)', 'Frozen (-18°C or below)', 'Cool & Dark'] },
+      { key: 'dietaryInfo', label: 'Dietary Classification', type: 'text', placeholder: 'e.g. Halal, Vegan, Gluten-Free, Organic' },
+    ],
+  },
+  retail_supermarket: {
+    title: 'Supermarket Product Attributes',
+    fields: [
+      { key: 'isPerishable', label: 'Perishable / Fresh Good', type: 'boolean', helperText: 'Check if product has a shelf-life limit' },
+      { key: 'expiryDate', label: 'Expiry Date', type: 'date' },
+      { key: 'brand', label: 'Brand Name', type: 'text', placeholder: 'e.g. Unilever, Nestlé, Dangote' },
+    ],
+  },
+  electronics_tech: {
+    title: 'Technical Specifications & Warranty',
+    fields: [
+      { key: 'brand', label: 'Manufacturer / Brand', type: 'text', placeholder: 'e.g. Apple, Samsung, HP' },
+      { key: 'modelNumber', label: 'Model Number / ID', type: 'text', placeholder: 'e.g. A2848, XPS-9530' },
+      { key: 'warrantyPeriod', label: 'Warranty Period', type: 'select', options: ['No Warranty', '3 Months', '6 Months', '1 Year', '2 Years', '3+ Years'] },
+      { key: 'powerRating', label: 'Power Specification', type: 'text', placeholder: 'e.g. 65W USB-C, 220V 50Hz' },
+    ],
+  },
+  fashion_boutique: {
+    title: 'Apparel & Fashion Specs',
+    fields: [
+      { key: 'gender', label: 'Target Demographic', type: 'select', options: ['Unisex', "Women's", "Men's", "Kids / Teens", 'Infant'] },
+      { key: 'material', label: 'Fabric / Material', type: 'text', placeholder: 'e.g. 100% Egyptian Cotton, Genuine Leather, Silk' },
+      { key: 'season', label: 'Collection / Season', type: 'text', placeholder: 'e.g. Harmattan / Autumn 2026, Summer' },
+      { key: 'careInstructions', label: 'Care Instructions', type: 'text', placeholder: 'e.g. Dry Clean Only, Machine Wash Cold' },
+    ],
+  },
+  wholesale_distribution: {
+    title: 'Wholesale & B2B Logistics',
+    fields: [
+      { key: 'minimumOrderQuantity', label: 'Minimum Order Quantity (MOQ)', type: 'number', placeholder: 'e.g. 10' },
+      { key: 'casePackQuantity', label: 'Units Per Carton / Case', type: 'number', placeholder: 'e.g. 24' },
+      { key: 'countryOfOrigin', label: 'Country of Origin', type: 'text', placeholder: 'e.g. Nigeria, Germany, China' },
+    ],
+  },
+  manufacturing_other: {
+    title: 'Manufacturing & Materials',
+    fields: [
+      { key: 'batchNumber', label: 'Production Batch #', type: 'text', placeholder: 'e.g. BATCH-2026-09' },
+      { key: 'materialGrade', label: 'Material Grade / Spec', type: 'text', placeholder: 'e.g. 304 Stainless Steel, Food Grade' },
+    ],
+  },
+  services_other: {
+    title: 'Service Parameters',
+    fields: [
+      { key: 'serviceDuration', label: 'Estimated Service Duration', type: 'text', placeholder: 'e.g. 1 Hour, 3 Days' },
+    ],
+  },
+};
 
 const MEASUREMENT_UNITS: Array<{ value: MeasurementUnit; label: string }> = [
   { value: 'pcs', label: 'Pieces (pcs)' },
@@ -90,6 +177,7 @@ export function ProductForm({
   categories,
   currency = 'NGN',
   defaultCategoryId,
+  businessType,
 }: ProductFormProps) {
   const [mounted, setMounted] = React.useState(isOpen);
   const [animating, setAnimating] = React.useState(false);
@@ -112,6 +200,11 @@ export function ProductForm({
   const [hasVariants, setHasVariants] = React.useState(false);
   const [description, setDescription] = React.useState('');
   const [isActive, setIsActive] = React.useState(true);
+  const [metadata, setMetadata] = React.useState<Record<string, any>>({});
+
+  // Image Gallery State
+  const maxProductImages: number = (businessType && BUSINESS_TYPE_IMAGE_LIMITS[businessType]) ? BUSINESS_TYPE_IMAGE_LIMITS[businessType] : 5;
+  const [uploadedImages, setUploadedImages] = React.useState<UploadedImage[]>([]);
 
   const [error, setError] = React.useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
@@ -165,6 +258,66 @@ export function ProductForm({
       setHasVariants(editingProduct.has_variants);
       setDescription(editingProduct.description || '');
       setIsActive(editingProduct.is_active);
+      setMetadata(
+        editingProduct.metadata && typeof editingProduct.metadata === 'object'
+          ? { ...(editingProduct.metadata as any) }
+          : {}
+      );
+
+      // Populate visual gallery
+      if (editingProduct.images && editingProduct.images.length > 0) {
+        setUploadedImages(
+          editingProduct.images.map((img) => ({
+            id: img.id,
+            previewUrl: img.thumbnail_400 || img.url,
+            thumbnail_200: img.thumbnail_200,
+            thumbnail_400: img.thumbnail_400,
+            altText: img.alt_text || '',
+            isPrimary: img.is_primary,
+            sortOrder: img.sort_order,
+          }))
+        );
+      } else if (editingProduct.image_url) {
+        setUploadedImages([
+          {
+            previewUrl: editingProduct.image_url,
+            isPrimary: true,
+            sortOrder: 0,
+          },
+        ]);
+        productApi.listProductImages(editingProduct.id).then((res) => {
+          if (res?.images && res.images.length > 0) {
+            setUploadedImages(
+              res.images.map((img) => ({
+                id: img.id,
+                previewUrl: img.thumbnail_400 || img.url,
+                thumbnail_200: img.thumbnail_200,
+                thumbnail_400: img.thumbnail_400,
+                altText: img.alt_text || '',
+                isPrimary: img.is_primary,
+                sortOrder: img.sort_order,
+              }))
+            );
+          }
+        }).catch(() => {});
+      } else {
+        setUploadedImages([]);
+        productApi.listProductImages(editingProduct.id).then((res) => {
+          if (res?.images && res.images.length > 0) {
+            setUploadedImages(
+              res.images.map((img) => ({
+                id: img.id,
+                previewUrl: img.thumbnail_400 || img.url,
+                thumbnail_200: img.thumbnail_200,
+                thumbnail_400: img.thumbnail_400,
+                altText: img.alt_text || '',
+                isPrimary: img.is_primary,
+                sortOrder: img.sort_order,
+              }))
+            );
+          }
+        }).catch(() => {});
+      }
     } else {
       setName('');
       setSku('');
@@ -183,6 +336,8 @@ export function ProductForm({
       setHasVariants(false);
       setDescription('');
       setIsActive(true);
+      setMetadata({});
+      setUploadedImages([]);
     }
     setError(null);
     setIsPriceConfirmOpen(false);
@@ -200,6 +355,9 @@ export function ProductForm({
   if (!mounted) return null;
 
   const categoryOptions = flattenCategoriesForSelection(categories);
+
+  const effectiveBusinessType = editingProduct?.business_type || businessType || 'retail_supermarket';
+  const businessSpec = effectiveBusinessType ? BUSINESS_TYPE_ATTRIBUTES[effectiveBusinessType] : null;
 
   // Profit & Margin computations
   const costNum = costPrice !== '' ? Number(costPrice) : 0;
@@ -268,6 +426,11 @@ export function ProductForm({
 
     const compareNum = compareAtPrice !== '' ? Number(compareAtPrice) : null;
 
+    const cleanMetadata = Object.fromEntries(
+      Object.entries(metadata).filter(([_, v]) => v !== undefined && v !== '' && v !== null)
+    );
+    const finalMetadata = Object.keys(cleanMetadata).length > 0 ? cleanMetadata : undefined;
+
     if (editingProduct) {
       const payload: UpdateProductPayload = {
         name: trimmedName,
@@ -283,6 +446,7 @@ export function ProductForm({
         hasVariants,
         description: description.trim() || null,
         isActive,
+        metadata: finalMetadata,
       };
 
       // Sensitive Price Change Check: did cost or selling price change?
@@ -312,6 +476,7 @@ export function ProductForm({
         hasVariants,
         description: description.trim() || undefined,
         isActive,
+        metadata: finalMetadata,
       };
       await executeSubmit(payload);
     }
@@ -321,7 +486,8 @@ export function ProductForm({
     try {
       setIsSubmitting(true);
       setError(null);
-      await onSubmit(payload);
+      const newFiles = uploadedImages.filter((img) => img.file).map((img) => img.file!);
+      await onSubmit(payload, newFiles, uploadedImages);
       triggerClose();
     } catch (err: any) {
       setError(err?.message || 'Failed to save product. Please check the fields and try again.');
@@ -496,6 +662,23 @@ export function ProductForm({
                   </span>
                 )}
               </div>
+            </div>
+
+            {/* Visual Media & Product Gallery */}
+            <div className="border-t border-[#2d3139]/80 pt-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                  <ImageIcon className="w-3.5 h-3.5 text-[#fbb945]" /> Product Images & Gallery
+                </h4>
+                <span className="text-[11px] text-slate-400">
+                  Allowed: up to {maxProductImages} images
+                </span>
+              </div>
+              <ImageUploader
+                maxProductImages={maxProductImages}
+                existingImages={uploadedImages}
+                onImagesChange={setUploadedImages}
+              />
             </div>
 
             {/* Pricing, Gain & Profitability */}
@@ -775,6 +958,116 @@ export function ProductForm({
                 />
               </div>
             </div>
+
+            {/* Business-Type Specific Attributes */}
+            {effectiveBusinessType && businessSpec && (
+              <div className="border-t border-[#2d3139]/80 pt-4 space-y-3.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Tag className="w-3.5 h-3.5 text-[#fbb945]" />
+                    <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider">
+                      {businessSpec.title}
+                    </h4>
+                  </div>
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-[#202229] border border-[#2d3139] text-[#fbb945]">
+                    {effectiveBusinessType.replace(/_/g, ' ')}
+                  </span>
+                </div>
+
+                <div className="space-y-3">
+                  {businessSpec.fields.map((field) => (
+                    <div key={field.key} className="space-y-1">
+                      {field.type === 'boolean' ? (
+                        <div className="flex items-center justify-between p-3 bg-[#141519] border border-[#2d3139] rounded-lg">
+                          <div>
+                            <div className="text-xs font-medium text-slate-200">{field.label}</div>
+                            {field.helperText && (
+                              <div className="text-[10px] text-slate-400 mt-0.5">{field.helperText}</div>
+                            )}
+                          </div>
+                          <input
+                            type="checkbox"
+                            checked={Boolean(metadata[field.key])}
+                            onChange={(e) =>
+                              setMetadata((prev) => ({ ...prev, [field.key]: e.target.checked }))
+                            }
+                            className="w-4 h-4 rounded border-gray-700 bg-gray-900 text-[#985184] focus:ring-[#985184] accent-[#985184] cursor-pointer"
+                          />
+                        </div>
+                      ) : field.type === 'select' ? (
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                            {field.label}
+                          </label>
+                          <select
+                            value={metadata[field.key] || ''}
+                            onChange={(e) =>
+                              setMetadata((prev) => ({ ...prev, [field.key]: e.target.value }))
+                            }
+                            className="w-full bg-[#121316] border border-[#2d3139] rounded-md px-3 py-2 text-xs text-white focus:outline-none focus:border-[#985184] transition-colors"
+                          >
+                            <option value="">Select option...</option>
+                            {field.options?.map((opt) => (
+                              <option key={opt} value={opt}>
+                                {opt}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      ) : field.type === 'date' ? (
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                            {field.label}
+                          </label>
+                          <Input
+                            type="date"
+                            value={metadata[field.key] || ''}
+                            onChange={(e) =>
+                              setMetadata((prev) => ({ ...prev, [field.key]: e.target.value }))
+                            }
+                            className="bg-[#121316] border-[#2d3139] text-white text-xs focus:border-[#985184]"
+                          />
+                        </div>
+                      ) : field.type === 'number' ? (
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                            {field.label}
+                          </label>
+                          <Input
+                            type="number"
+                            min="1"
+                            placeholder={field.placeholder}
+                            value={metadata[field.key] ?? ''}
+                            onChange={(e) =>
+                              setMetadata((prev) => ({
+                                ...prev,
+                                [field.key]: e.target.value === '' ? '' : Number(e.target.value),
+                              }))
+                            }
+                            className="bg-[#121316] border-[#2d3139] text-white text-xs focus:border-[#985184]"
+                          />
+                        </div>
+                      ) : (
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                            {field.label}
+                          </label>
+                          <Input
+                            type="text"
+                            placeholder={field.placeholder}
+                            value={metadata[field.key] || ''}
+                            onChange={(e) =>
+                              setMetadata((prev) => ({ ...prev, [field.key]: e.target.value }))
+                            }
+                            className="bg-[#121316] border-[#2d3139] text-white text-xs focus:border-[#985184]"
+                          />
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </form>
 
           {/* Drawer Footer */}

@@ -11,7 +11,12 @@ vi.mock('../products-api', () => ({
     createProduct: vi.fn(),
     updateProduct: vi.fn(),
     deleteProduct: vi.fn(),
+    getProductUsage: vi.fn(),
     createVariant: vi.fn(),
+    updateVariant: vi.fn(),
+    deleteVariant: vi.fn(),
+    getVariantPriceHistory: vi.fn(),
+    restoreProduct: vi.fn(),
     getPriceHistory: vi.fn(),
   },
 }));
@@ -184,5 +189,225 @@ describe('ProductsPage Component', () => {
     });
 
     expect(productApi.getPriceHistory).toHaveBeenCalledWith('p-1');
+  });
+
+  it('blocks archiving when product has active reserved stock (State 1)', async () => {
+    (productApi.getProductUsage as any).mockResolvedValue({
+      usage: {
+        totalOnHand: 20,
+        totalReserved: 5,
+        variantCount: 0,
+        hasReservedStock: true,
+        canDelete: false,
+        branchStock: [
+          { branchId: 'b-1', branchName: 'HQ Branch', onHand: 20, reserved: 5 },
+        ],
+      },
+    });
+
+    render(<ProductsPage organization={{ name: 'Test Market', currency: 'NGN' }} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Golden Penny Spaghetti')).toBeInTheDocument();
+    });
+
+    // Click delete button
+    const deleteBtn = screen.getByTitle('Archive product');
+    fireEvent.click(deleteBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText('Cannot Archive: Active Reserved Stock')).toBeInTheDocument();
+      expect(screen.getByText(/5 reserved unit\(s\)/i)).toBeInTheDocument();
+    });
+
+    const archiveBtn = screen.getByTestId('confirm-archive-product-btn');
+    expect(archiveBtn).toBeDisabled();
+  });
+
+  it('requires confirmation checkbox and reason when product has on-hand stock (State 2)', async () => {
+    (productApi.getProductUsage as any).mockResolvedValue({
+      usage: {
+        totalOnHand: 45,
+        totalReserved: 0,
+        variantCount: 2,
+        hasReservedStock: false,
+        canDelete: true,
+        branchStock: [
+          { branchId: 'b-1', branchName: 'Main Store', onHand: 45, reserved: 0 },
+        ],
+      },
+    });
+    (productApi.deleteProduct as any).mockResolvedValue({ success: true });
+
+    render(<ProductsPage organization={{ name: 'Test Market', currency: 'NGN' }} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Golden Penny Spaghetti')).toBeInTheDocument();
+    });
+
+    // Click delete button
+    const deleteBtn = screen.getByTitle('Archive product');
+    fireEvent.click(deleteBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText('Active Stock Detected')).toBeInTheDocument();
+      expect(screen.getByText(/45 unit\(s\)/i)).toBeInTheDocument();
+    });
+
+    const archiveBtn = screen.getByTestId('confirm-archive-product-btn');
+    expect(archiveBtn).toBeDisabled();
+
+    // Check confirmation checkbox
+    const checkbox = screen.getByTestId('confirm-stock-checkbox');
+    fireEvent.click(checkbox);
+    expect(archiveBtn).toBeDisabled(); // Still disabled because reason is required
+
+    // Enter reason
+    const reasonInput = screen.getByTestId('archive-product-reason-input');
+    fireEvent.change(reasonInput, { target: { value: 'Discontinued product line write-off' } });
+
+    expect(archiveBtn).not.toBeDisabled();
+    fireEvent.click(archiveBtn);
+
+    await waitFor(() => {
+      expect(productApi.deleteProduct).toHaveBeenCalledWith('p-1', {
+        confirmWithStock: true,
+        reason: 'Discontinued product line write-off',
+      });
+    });
+  });
+
+  it('allows clean archiving when product has 0 stock (State 3)', async () => {
+    (productApi.getProductUsage as any).mockResolvedValue({
+      usage: {
+        totalOnHand: 0,
+        totalReserved: 0,
+        variantCount: 0,
+        hasReservedStock: false,
+        canDelete: true,
+        branchStock: [],
+      },
+    });
+    (productApi.deleteProduct as any).mockResolvedValue({ success: true });
+
+    render(<ProductsPage organization={{ name: 'Test Market', currency: 'NGN' }} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Golden Penny Spaghetti')).toBeInTheDocument();
+    });
+
+    const deleteBtn = screen.getByTitle('Archive product');
+    fireEvent.click(deleteBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/No active stock units detected across branches/i)).toBeInTheDocument();
+    });
+
+    const archiveBtn = screen.getByTestId('confirm-archive-product-btn');
+    expect(archiveBtn).not.toBeDisabled();
+    fireEvent.click(archiveBtn);
+
+    await waitFor(() => {
+      expect(productApi.deleteProduct).toHaveBeenCalledWith('p-1', {
+        confirmWithStock: false,
+        reason: undefined,
+      });
+    });
+  });
+
+  it('renders Archived status badge and Restore button for archived products and calls restoreProduct', async () => {
+    (productApi.listProducts as any).mockResolvedValue({
+      products: [
+        {
+          ...mockProductsResponse.products[0],
+          id: 'p-archived',
+          name: 'Archived Indomie Noodles',
+          is_deleted: true,
+          is_active: false,
+        },
+      ],
+      pagination: { page: 1, limit: 15, total: 1, totalPages: 1 },
+    });
+    (productApi.restoreProduct as any).mockResolvedValue({ success: true });
+
+    render(<ProductsPage organization={{ name: 'Test Market', currency: 'NGN' }} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Archived Indomie Noodles')).toBeInTheDocument();
+    });
+
+    expect(screen.getAllByText(/Archived/i).length).toBeGreaterThanOrEqual(2);
+    const restoreBtn = screen.getByRole('button', { name: /restore/i });
+    expect(restoreBtn).toBeInTheDocument();
+
+    fireEvent.click(restoreBtn);
+
+    await waitFor(() => {
+      expect(productApi.restoreProduct).toHaveBeenCalledWith('p-archived');
+    });
+  });
+
+  it('allows archiving a variant with stock confirmation and reason', async () => {
+    (productApi.getProductById as any).mockResolvedValue({
+      product: {
+        ...mockProductsResponse.products[0],
+        variants: [
+          {
+            id: 'v-1',
+            org_id: 'org-1',
+            product_id: 'p-1',
+            name: '500g Pack',
+            sku: 'GPS-500G-PK',
+            barcode: null,
+            cost_price: 350,
+            selling_price: 550,
+            compare_at_price: null,
+            attributes: { size: '500g' },
+            is_active: true,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          },
+        ],
+      },
+    });
+    (productApi.deleteVariant as any).mockResolvedValue({ success: true });
+
+    render(<ProductsPage organization={{ name: 'Test Market', currency: 'NGN' }} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Golden Penny Spaghetti')).toBeInTheDocument();
+    });
+
+    // Expand row to view variants
+    const expandBtn = screen.getByTitle('Expand variants');
+    fireEvent.click(expandBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText('500g Pack')).toBeInTheDocument();
+    });
+
+    const archiveVariantBtn = screen.getByTitle('Archive variant');
+    fireEvent.click(archiveVariantBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Are you sure you want to archive variant/i)).toBeInTheDocument();
+    });
+
+    // Fill reason and check confirmation
+    const reasonInput = screen.getByPlaceholderText(/Discontinued variant option/i);
+    fireEvent.change(reasonInput, { target: { value: 'Supplier discontinued 500g pack' } });
+
+    const checkbox = screen.getByRole('checkbox', { name: /Confirm archiving even if active inventory exists/i });
+    fireEvent.click(checkbox);
+
+    const confirmArchiveBtn = screen.getByRole('button', { name: 'Archive Variant' });
+    fireEvent.click(confirmArchiveBtn);
+
+    await waitFor(() => {
+      expect(productApi.deleteVariant).toHaveBeenCalledWith('p-1', 'v-1', {
+        confirmWithStock: true,
+        reason: 'Supplier discontinued 500g pack',
+      });
+    });
   });
 });

@@ -1,15 +1,47 @@
-import type { PrismaClient, Product, ProductVariant, measurement_unit } from '@prisma/client';
+import type { PrismaClient, Product, ProductVariant, ProductImage, measurement_unit } from '@prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
 import { prisma as defaultPrisma } from '../../infrastructure/database/client.js';
 import { AppError } from '../../lib/errors.js';
 import { inventoryCache } from '../../infrastructure/cache/in-memory-cache.js';
+import { imageUploadService } from './image-upload-service.js';
 import type {
   CreateProductInput,
   UpdateProductInput,
   CreateVariantInput,
+  UpdateVariantInput,
   ListProductsQueryInput,
   SearchProductsQueryInput,
+  DeleteProductInput,
+  UpdateProductImageInput,
+  ReorderProductImagesInput,
 } from './products-schemas.js';
+
+export const BUSINESS_TYPE_IMAGE_LIMITS: Record<string, number> = {
+  retail_supermarket: 3,
+  wholesale_distribution: 2,
+  fashion_boutique: 5,
+  electronics_tech: 5,
+  pharmacy_cosmetics: 3,
+  food_grocery: 3,
+  manufacturing_other: 2,
+  services_other: 1,
+};
+
+export const DEFAULT_MAX_IMAGES = 5;
+
+export interface ProductUsageSummary {
+  totalOnHand: number;
+  totalReserved: number;
+  variantCount: number;
+  hasReservedStock: boolean;
+  canDelete: boolean;
+  branchStock: Array<{
+    branchId: string;
+    branchName: string;
+    onHand: number;
+    reserved: number;
+  }>;
+}
 
 export interface ProductListItem {
   id: string;
@@ -28,7 +60,9 @@ export interface ProductListItem {
   has_variants: boolean;
   variants_count: number;
   is_active: boolean;
+  is_deleted?: boolean;
   image_url: string | null;
+  primary_image_url?: string | null;
   metadata: unknown;
   business_type: string | null;
   total_stock: number;
@@ -50,6 +84,7 @@ export interface ProductDetailResponse {
   product: Product & {
     category_name: string | null;
     variants: ProductVariant[];
+    images: ProductImage[];
     stock_levels: BranchStockItem[];
     total_stock: number;
     reserved_stock: number;
@@ -64,6 +99,8 @@ export class ProductService {
     inventoryCache.clearPrefix(`products_list:${orgId}`);
     inventoryCache.clearPrefix(`products_detail:${orgId}`);
     inventoryCache.clearPrefix(`products_search:${orgId}`);
+    // Invalidate category cache so category tree and product counts remain consistent
+    inventoryCache.clearPrefix(`categories_tree:${orgId}`);
   }
 
   async generateUniqueSku(orgId: string, name: string): Promise<string> {
@@ -238,15 +275,43 @@ export class ProductService {
       async () => {
         const whereClause: any = {
           org_id: orgId,
-          is_deleted: false,
         };
 
-        if (activeOnly) {
+        if (query.status === 'archived') {
+          whereClause.is_deleted = true;
+        } else if (query.status === 'active') {
+          whereClause.is_deleted = false;
           whereClause.is_active = true;
+        } else if (query.status === 'inactive') {
+          whereClause.is_deleted = false;
+          whereClause.is_active = false;
+        } else if (query.status === 'all') {
+          whereClause.is_deleted = false;
+        } else {
+          whereClause.is_deleted = false;
+          if (activeOnly) {
+            whereClause.is_active = true;
+          }
         }
 
         if (query.categoryId) {
-          whereClause.category_id = query.categoryId;
+          // Resolve target category + all its recursive child category IDs
+          const allCategories = await this.db.category.findMany({
+            where: { org_id: orgId, is_deleted: false },
+            select: { id: true, parent_id: true },
+          });
+          const catIds = new Set<string>([query.categoryId]);
+          let added = true;
+          while (added) {
+            added = false;
+            for (const cat of allCategories) {
+              if (cat.parent_id && catIds.has(cat.parent_id) && !catIds.has(cat.id)) {
+                catIds.add(cat.id);
+                added = true;
+              }
+            }
+          }
+          whereClause.category_id = { in: Array.from(catIds) };
         }
 
         if (query.trackQuantity !== undefined) {
@@ -271,6 +336,11 @@ export class ProductService {
             include: {
               category: { select: { id: true, name: true } },
               variants: { select: { id: true } },
+              images: {
+                where: { variant_id: null },
+                orderBy: [{ is_primary: 'desc' }, { sort_order: 'asc' }],
+                take: 1,
+              },
               stock_levels: {
                 select: {
                   quantity_on_hand: true,
@@ -298,6 +368,7 @@ export class ProductService {
           }
 
           const availableStock = totalStock - reservedStock;
+          const primaryImage = p.images?.[0]?.thumbnail_200 || p.images?.[0]?.url || p.image_url;
 
           return {
             id: p.id,
@@ -316,7 +387,9 @@ export class ProductService {
             has_variants: p.has_variants,
             variants_count: p.variants.length,
             is_active: p.is_active,
-            image_url: p.image_url,
+            is_deleted: p.is_deleted,
+            image_url: primaryImage,
+            primary_image_url: primaryImage,
             metadata: p.metadata,
             business_type: p.business_type,
             total_stock: totalStock,
@@ -358,8 +431,11 @@ export class ProductService {
           include: {
             category: { select: { name: true } },
             variants: {
-              where: { is_active: true },
+              where: { is_deleted: false },
               orderBy: { created_at: 'asc' },
+            },
+            images: {
+              orderBy: [{ sort_order: 'asc' }, { created_at: 'asc' }],
             },
             stock_levels: {
               include: {
@@ -396,6 +472,7 @@ export class ProductService {
             ...product,
             category_name: product.category?.name ?? null,
             variants: product.variants,
+            images: product.images,
             stock_levels: branchStocks as any,
             total_stock: totalStock,
             reserved_stock: reservedStock,
@@ -548,7 +625,7 @@ export class ProductService {
     });
   }
 
-  async deleteProduct(orgId: string, productId: string): Promise<{ success: true }> {
+  async getProductUsage(orgId: string, productId: string): Promise<ProductUsageSummary> {
     const existing = await this.db.product.findFirst({
       where: { id: productId, org_id: orgId, is_deleted: false },
     });
@@ -557,13 +634,139 @@ export class ProductService {
       throw new AppError('PRODUCT_NOT_FOUND', 'Product not found', 404);
     }
 
-    // Strict soft-delete per agreed decision
-    await this.db.product.update({
-      where: { id: productId },
-      data: {
-        is_deleted: true,
-        is_active: false,
+    const variants = await this.db.productVariant.findMany({
+      where: { product_id: productId, org_id: orgId },
+      select: { id: true },
+    });
+    const variantIds = variants.map((v) => v.id);
+
+    const stockLevels = await this.db.stockLevel.findMany({
+      where: {
+        org_id: orgId,
+        OR: [
+          { product_id: productId },
+          ...(variantIds.length > 0 ? [{ variant_id: { in: variantIds } }] : []),
+        ],
       },
+      include: {
+        branch: { select: { id: true, name: true } },
+      },
+    });
+
+    let totalOnHand = 0;
+    let totalReserved = 0;
+    const branchMap = new Map<string, { branchId: string; branchName: string; onHand: number; reserved: number }>();
+
+    for (const sl of stockLevels) {
+      const onHand = Number(sl.quantity_on_hand);
+      const reserved = Number(sl.reserved);
+      totalOnHand += onHand;
+      totalReserved += reserved;
+
+      const branchId = sl.branch_id;
+      const branchName = sl.branch?.name ?? 'Branch';
+      const existingBranch = branchMap.get(branchId);
+      if (existingBranch) {
+        existingBranch.onHand += onHand;
+        existingBranch.reserved += reserved;
+      } else {
+        branchMap.set(branchId, {
+          branchId,
+          branchName,
+          onHand,
+          reserved,
+        });
+      }
+    }
+
+    const branchStock = Array.from(branchMap.values());
+    const hasReservedStock = totalReserved > 0;
+    const canDelete = !hasReservedStock;
+
+    return {
+      totalOnHand,
+      totalReserved,
+      variantCount: variants.length,
+      hasReservedStock,
+      canDelete,
+      branchStock,
+    };
+  }
+
+  async deleteProduct(
+    orgId: string,
+    productId: string,
+    options: { userId?: string; reason?: string; confirmWithStock?: boolean } = {}
+  ): Promise<{ success: true }> {
+    const existing = await this.db.product.findFirst({
+      where: { id: productId, org_id: orgId, is_deleted: false },
+    });
+
+    if (!existing) {
+      throw new AppError('PRODUCT_NOT_FOUND', 'Product not found', 404);
+    }
+
+    const usage = await this.getProductUsage(orgId, productId);
+
+    if (usage.hasReservedStock) {
+      throw new AppError(
+        'PRODUCT_HAS_RESERVED_STOCK',
+        `Cannot archive product with ${usage.totalReserved} active reserved units. Fulfill or cancel pending orders first.`,
+        400,
+        { usage }
+      );
+    }
+
+    if (usage.totalOnHand > 0 && !options.confirmWithStock) {
+      throw new AppError(
+        'PRODUCT_HAS_STOCK',
+        `Product has ${usage.totalOnHand} units on hand across branches. Explicit confirmation required to archive.`,
+        400,
+        { usage }
+      );
+    }
+
+    if (usage.totalOnHand > 0 && options.confirmWithStock && !options.reason?.trim()) {
+      throw new AppError(
+        'VALIDATION_ERROR',
+        'A reason is required when archiving a product with stock on hand.',
+        400
+      );
+    }
+
+    await this.db.$transaction(async (tx) => {
+      await tx.product.update({
+        where: { id: productId },
+        data: {
+          is_deleted: true,
+          is_active: false,
+          deleted_at: new Date(),
+          deleted_by_user_id: options.userId ?? null,
+          deleted_reason: options.reason?.trim() ?? null,
+        },
+      });
+
+      await tx.productVariant.updateMany({
+        where: { product_id: productId },
+        data: { is_active: false },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          org_id: orgId,
+          user_id: options.userId ?? null,
+          event: 'product_archived',
+          status: 'success',
+          metadata: {
+            productId,
+            productName: existing.name,
+            totalOnHand: usage.totalOnHand,
+            totalReserved: usage.totalReserved,
+            variantCount: usage.variantCount,
+            reason: options.reason?.trim() ?? null,
+          },
+        },
+      });
     });
 
     this.invalidateCache(orgId);
@@ -588,6 +791,47 @@ export class ProductService {
 
     this.invalidateCache(orgId);
     return updated;
+  }
+
+  async restoreProduct(orgId: string, productId: string, userId?: string): Promise<Product> {
+    const existing = await this.db.product.findFirst({
+      where: { id: productId, org_id: orgId, is_deleted: true },
+    });
+
+    if (!existing) {
+      throw new AppError('PRODUCT_NOT_FOUND', 'Archived product not found', 404);
+    }
+
+    const restored = await this.db.$transaction(async (tx) => {
+      const p = await tx.product.update({
+        where: { id: productId },
+        data: {
+          is_deleted: false,
+          is_active: true,
+          deleted_at: null,
+          deleted_by_user_id: null,
+          deleted_reason: null,
+        },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          org_id: orgId,
+          user_id: userId ?? null,
+          event: 'product_restored',
+          status: 'success',
+          metadata: {
+            productId,
+            productName: existing.name,
+          },
+        },
+      });
+
+      return p;
+    });
+
+    this.invalidateCache(orgId);
+    return restored;
   }
 
   async createVariant(orgId: string, productId: string, input: CreateVariantInput): Promise<ProductVariant> {
@@ -695,6 +939,203 @@ export class ProductService {
     return variant;
   }
 
+  async updateVariant(
+    orgId: string,
+    productId: string,
+    variantId: string,
+    input: UpdateVariantInput,
+    userId?: string
+  ): Promise<ProductVariant> {
+    const existing = await this.db.productVariant.findFirst({
+      where: { id: variantId, product_id: productId, org_id: orgId, is_deleted: false },
+    });
+
+    if (!existing) {
+      throw new AppError('VARIANT_NOT_FOUND', 'Variant not found', 404);
+    }
+
+    let sku = existing.sku;
+    if (input.sku && input.sku.trim().toUpperCase() !== existing.sku) {
+      sku = input.sku.trim().toUpperCase();
+      const existingSku = await this.db.productVariant.findFirst({
+        where: { org_id: orgId, sku: { equals: sku, mode: 'insensitive' }, id: { not: variantId } },
+        select: { id: true },
+      });
+      if (existingSku) {
+        throw new AppError('PRODUCT_SKU_DUPLICATE', `Variant SKU "${sku}" already exists in this organization`, 409, {
+          field: 'sku',
+        });
+      }
+    }
+
+    let barcode = existing.barcode;
+    if (input.barcode !== undefined) {
+      barcode = input.barcode?.trim() || null;
+      if (barcode && barcode !== existing.barcode) {
+        const existingBarcode = await this.db.productVariant.findFirst({
+          where: { org_id: orgId, barcode, id: { not: variantId } },
+          select: { id: true },
+        });
+        if (existingBarcode) {
+          throw new AppError('PRODUCT_BARCODE_DUPLICATE', `Barcode "${barcode}" already exists`, 409, {
+            field: 'barcode',
+          });
+        }
+      }
+    }
+
+    const nextCost = input.costPrice !== undefined ? input.costPrice : Number(existing.cost_price);
+    const nextSelling = input.sellingPrice !== undefined ? input.sellingPrice : Number(existing.selling_price);
+
+    if (nextSelling < nextCost) {
+      throw new AppError(
+        'PRODUCT_PRICE_INVALID',
+        'Selling price must not be less than cost price (no loss sales permitted)',
+        400
+      );
+    }
+
+    const priceChanged =
+      (input.costPrice !== undefined && input.costPrice !== Number(existing.cost_price)) ||
+      (input.sellingPrice !== undefined && input.sellingPrice !== Number(existing.selling_price));
+
+    const updated = await this.db.$transaction(async (tx) => {
+      if (priceChanged) {
+        await tx.productPriceHistory.create({
+          data: {
+            org_id: orgId,
+            product_id: productId,
+            variant_id: variantId,
+            old_cost_price: existing.cost_price,
+            new_cost_price: new Decimal(nextCost),
+            old_selling_price: existing.selling_price,
+            new_selling_price: new Decimal(nextSelling),
+            reason: input.priceChangeReason?.trim() || null,
+            changed_by_user_id: userId || null,
+          },
+        });
+      }
+
+      const updateData: any = {
+        sku,
+        barcode,
+      };
+      if (input.costPrice !== undefined) updateData.cost_price = new Decimal(input.costPrice);
+      if (input.sellingPrice !== undefined) updateData.selling_price = new Decimal(input.sellingPrice);
+      if (input.compareAtPrice !== undefined) {
+        updateData.compare_at_price = input.compareAtPrice !== null ? new Decimal(input.compareAtPrice) : null;
+      }
+      if (input.attributes !== undefined) updateData.attributes = input.attributes;
+      if (input.isActive !== undefined) updateData.is_active = input.isActive;
+
+      return await tx.productVariant.update({
+        where: { id: variantId },
+        data: updateData,
+      });
+    });
+
+    this.invalidateCache(orgId);
+    return updated;
+  }
+
+  async deleteVariant(
+    orgId: string,
+    productId: string,
+    variantId: string,
+    options: { userId?: string; reason?: string; confirmWithStock?: boolean } = {}
+  ): Promise<{ success: true }> {
+    const existing = await this.db.productVariant.findFirst({
+      where: { id: variantId, product_id: productId, org_id: orgId, is_deleted: false },
+    });
+
+    if (!existing) {
+      throw new AppError('VARIANT_NOT_FOUND', 'Variant not found', 404);
+    }
+
+    const stockLevels = await this.db.stockLevel.findMany({
+      where: { org_id: orgId, variant_id: variantId },
+    });
+
+    let totalOnHand = 0;
+    let totalReserved = 0;
+    for (const sl of stockLevels) {
+      totalOnHand += Number(sl.quantity_on_hand);
+      totalReserved += Number(sl.reserved);
+    }
+
+    if (totalReserved > 0) {
+      throw new AppError(
+        'PRODUCT_HAS_RESERVED_STOCK',
+        `Cannot archive variant with ${totalReserved} active reserved units. Fulfill or cancel pending orders first.`,
+        400
+      );
+    }
+
+    if (totalOnHand > 0 && !options.confirmWithStock) {
+      throw new AppError(
+        'PRODUCT_HAS_STOCK',
+        `Variant has ${totalOnHand} units on hand. Explicit confirmation required to archive.`,
+        400
+      );
+    }
+
+    if (totalOnHand > 0 && options.confirmWithStock && !options.reason?.trim()) {
+      throw new AppError(
+        'VALIDATION_ERROR',
+        'A reason is required when archiving a variant with stock on hand.',
+        400
+      );
+    }
+
+    await this.db.$transaction(async (tx) => {
+      await tx.productVariant.update({
+        where: { id: variantId },
+        data: {
+          is_deleted: true,
+          is_active: false,
+          deleted_at: new Date(),
+        },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          org_id: orgId,
+          user_id: options.userId ?? null,
+          event: 'product_variant_archived',
+          status: 'success',
+          metadata: {
+            productId,
+            variantId,
+            sku: existing.sku,
+            totalOnHand,
+            totalReserved,
+            reason: options.reason?.trim() ?? null,
+          },
+        },
+      });
+    });
+
+    this.invalidateCache(orgId);
+    return { success: true };
+  }
+
+  async getVariantPriceHistory(orgId: string, productId: string, variantId: string) {
+    const variant = await this.db.productVariant.findFirst({
+      where: { id: variantId, product_id: productId, org_id: orgId },
+      select: { id: true },
+    });
+
+    if (!variant) {
+      throw new AppError('VARIANT_NOT_FOUND', 'Variant not found', 404);
+    }
+
+    return await this.db.productPriceHistory.findMany({
+      where: { org_id: orgId, product_id: productId, variant_id: variantId },
+      orderBy: { created_at: 'desc' },
+      take: 50,
+    });
+  }
+
   async searchProducts(
     orgId: string,
     query: SearchProductsQueryInput
@@ -741,5 +1182,314 @@ export class ProductService {
         available_stock: total - reserved,
       };
     });
+  }
+
+  async uploadProductImages(
+    orgId: string,
+    productId: string,
+    files: Array<{ buffer: Buffer; filename?: string; mimeType: string }>,
+    variantId?: string | null
+  ): Promise<ProductImage[]> {
+    if (!files.length) {
+      throw new AppError('VALIDATION_ERROR', 'No image files provided for upload', 400);
+    }
+
+    const product = await this.db.product.findFirst({
+      where: { id: productId, org_id: orgId, is_deleted: false },
+    });
+    if (!product) {
+      throw new AppError('PRODUCT_NOT_FOUND', 'Product not found', 404);
+    }
+
+    if (variantId) {
+      const variant = await this.db.productVariant.findFirst({
+        where: { id: variantId, product_id: productId, org_id: orgId, is_deleted: false },
+      });
+      if (!variant) {
+        throw new AppError('VARIANT_NOT_FOUND', 'Product variant not found', 404);
+      }
+    }
+
+    const org = await this.db.organization.findUnique({
+      where: { id: orgId },
+      select: { business_type: true },
+    });
+
+    const maxAllowed: number =
+      (org?.business_type ? BUSINESS_TYPE_IMAGE_LIMITS[org.business_type] : undefined) ?? DEFAULT_MAX_IMAGES;
+
+    const existingImages = await this.db.productImage.findMany({
+      where: {
+        org_id: orgId,
+        product_id: productId,
+        variant_id: variantId || null,
+      },
+      orderBy: { sort_order: 'asc' },
+    });
+
+    if (existingImages.length + files.length > maxAllowed) {
+      throw new AppError(
+        'IMAGE_COUNT_EXCEEDED',
+        `Image count limit exceeded. Maximum ${maxAllowed} images allowed for this ${variantId ? 'variant' : 'product'}. Current count: ${existingImages.length}, attempting to add: ${files.length}.`,
+        422,
+        {
+          maxAllowed,
+          currentCount: existingImages.length,
+          attemptedAddCount: files.length,
+        }
+      );
+    }
+
+    const hasPrimary = existingImages.some((img) => img.is_primary);
+    let nextSortOrder =
+      existingImages.length > 0 ? Math.max(...existingImages.map((img) => img.sort_order)) + 1 : 0;
+
+    const createdImages: ProductImage[] = [];
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const isPrimary = !hasPrimary && i === 0;
+
+      const processed = await imageUploadService.processAndSaveProductImage({
+        orgId,
+        productId,
+        fileBuffer: file.buffer,
+        originalFilename: file.filename,
+        mimeType: file.mimeType,
+      });
+
+      const imageRecord = await this.db.productImage.create({
+        data: {
+          org_id: orgId,
+          product_id: productId,
+          variant_id: variantId || null,
+          url: processed.url,
+          thumbnail_200: processed.thumbnail_200,
+          thumbnail_400: processed.thumbnail_400,
+          thumbnail_800: processed.thumbnail_800,
+          thumbnail_1200: processed.thumbnail_1200,
+          sort_order: nextSortOrder++,
+          is_primary: isPrimary,
+          file_size: processed.file_size,
+          mime_type: processed.mime_type,
+        },
+      });
+
+      if (isPrimary && !variantId) {
+        await this.db.product.update({
+          where: { id: productId },
+          data: { image_url: processed.url },
+        });
+      }
+
+      createdImages.push(imageRecord);
+    }
+
+    this.invalidateCache(orgId);
+    return createdImages;
+  }
+
+  async listProductImages(orgId: string, productId: string): Promise<ProductImage[]> {
+    const product = await this.db.product.findFirst({
+      where: { id: productId, org_id: orgId, is_deleted: false },
+    });
+    if (!product) {
+      throw new AppError('PRODUCT_NOT_FOUND', 'Product not found', 404);
+    }
+
+    return await this.db.productImage.findMany({
+      where: { org_id: orgId, product_id: productId },
+      orderBy: [{ sort_order: 'asc' }, { created_at: 'asc' }],
+    });
+  }
+
+  async listVariantImages(
+    orgId: string,
+    variantId: string
+  ): Promise<{ images: ProductImage[]; isInherited: boolean }> {
+    const variant = await this.db.productVariant.findFirst({
+      where: { id: variantId, org_id: orgId, is_deleted: false },
+      include: { product: true },
+    });
+    if (!variant) {
+      throw new AppError('VARIANT_NOT_FOUND', 'Variant not found', 404);
+    }
+
+    const variantImages = await this.db.productImage.findMany({
+      where: { org_id: orgId, variant_id: variantId },
+      orderBy: [{ sort_order: 'asc' }, { created_at: 'asc' }],
+    });
+
+    if (variantImages.length > 0) {
+      return { images: variantImages, isInherited: false };
+    }
+
+    const parentImages = await this.db.productImage.findMany({
+      where: { org_id: orgId, product_id: variant.product_id, variant_id: null },
+      orderBy: [{ sort_order: 'asc' }, { created_at: 'asc' }],
+    });
+
+    return { images: parentImages, isInherited: true };
+  }
+
+  async reorderProductImages(
+    orgId: string,
+    productId: string,
+    items: Array<{ id: string; sortOrder: number; isPrimary?: boolean }>
+  ): Promise<ProductImage[]> {
+    const product = await this.db.product.findFirst({
+      where: { id: productId, org_id: orgId, is_deleted: false },
+    });
+    if (!product) {
+      throw new AppError('PRODUCT_NOT_FOUND', 'Product not found', 404);
+    }
+
+    const imageIds = items.map((it) => it.id);
+    const existing = await this.db.productImage.findMany({
+      where: { id: { in: imageIds }, org_id: orgId, product_id: productId },
+    });
+    if (existing.length !== imageIds.length) {
+      throw new AppError('IMAGE_NOT_FOUND', 'One or more image IDs not found for this product', 404);
+    }
+
+    await this.db.$transaction(async (tx) => {
+      for (const item of items) {
+        await tx.productImage.update({
+          where: { id: item.id },
+          data: { sort_order: item.sortOrder },
+        });
+
+        if (item.isPrimary) {
+          const target = existing.find((e) => e.id === item.id);
+          if (target) {
+            await tx.productImage.updateMany({
+              where: {
+                product_id: productId,
+                variant_id: target.variant_id,
+                id: { not: target.id },
+              },
+              data: { is_primary: false },
+            });
+            await tx.productImage.update({
+              where: { id: target.id },
+              data: { is_primary: true },
+            });
+            if (!target.variant_id) {
+              await tx.product.update({
+                where: { id: productId },
+                data: { image_url: target.url },
+              });
+            }
+          }
+        }
+      }
+    });
+
+    this.invalidateCache(orgId);
+
+    return await this.db.productImage.findMany({
+      where: { org_id: orgId, product_id: productId },
+      orderBy: [{ sort_order: 'asc' }, { created_at: 'asc' }],
+    });
+  }
+
+  async updateProductImage(
+    orgId: string,
+    imageId: string,
+    input: { altText?: string | null; isPrimary?: boolean }
+  ): Promise<ProductImage> {
+    const image = await this.db.productImage.findFirst({
+      where: { id: imageId, org_id: orgId },
+    });
+    if (!image) {
+      throw new AppError('IMAGE_NOT_FOUND', 'Image not found', 404);
+    }
+
+    return await this.db.$transaction(async (tx) => {
+      if (input.isPrimary === true) {
+        await tx.productImage.updateMany({
+          where: {
+            product_id: image.product_id,
+            variant_id: image.variant_id,
+            id: { not: image.id },
+          },
+          data: { is_primary: false },
+        });
+
+        if (!image.variant_id) {
+          await tx.product.update({
+            where: { id: image.product_id },
+            data: { image_url: image.url },
+          });
+        }
+      }
+
+      const updated = await tx.productImage.update({
+        where: { id: imageId },
+        data: {
+          ...(input.altText !== undefined ? { alt_text: input.altText } : {}),
+          ...(input.isPrimary !== undefined ? { is_primary: input.isPrimary } : {}),
+        },
+      });
+
+      this.invalidateCache(orgId);
+      return updated;
+    });
+  }
+
+  async deleteProductImage(orgId: string, imageId: string): Promise<{ success: true }> {
+    const image = await this.db.productImage.findFirst({
+      where: { id: imageId, org_id: orgId },
+    });
+    if (!image) {
+      throw new AppError('IMAGE_NOT_FOUND', 'Image not found', 404);
+    }
+
+    // Delete image files from storage
+    const ext = image.url.split('.').pop();
+    await imageUploadService.deleteProductImageFiles({
+      orgId,
+      productId: image.product_id,
+      imageId: image.id,
+      ext,
+    });
+
+    await this.db.$transaction(async (tx) => {
+      await tx.productImage.delete({
+        where: { id: imageId },
+      });
+
+      // If deleted image was primary, auto-promote the next available image
+      if (image.is_primary) {
+        const nextPrimary = await tx.productImage.findFirst({
+          where: {
+            product_id: image.product_id,
+            variant_id: image.variant_id,
+          },
+          orderBy: [{ sort_order: 'asc' }, { created_at: 'asc' }],
+        });
+
+        if (nextPrimary) {
+          await tx.productImage.update({
+            where: { id: nextPrimary.id },
+            data: { is_primary: true },
+          });
+          if (!image.variant_id) {
+            await tx.product.update({
+              where: { id: image.product_id },
+              data: { image_url: nextPrimary.url },
+            });
+          }
+        } else if (!image.variant_id) {
+          await tx.product.update({
+            where: { id: image.product_id },
+            data: { image_url: null },
+          });
+        }
+      }
+    });
+
+    this.invalidateCache(orgId);
+    return { success: true };
   }
 }

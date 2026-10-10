@@ -4,8 +4,12 @@ import {
   createProductSchema,
   updateProductSchema,
   createVariantSchema,
+  updateVariantSchema,
   listProductsQuerySchema,
   searchProductsQuerySchema,
+  deleteProductQuerySchema,
+  updateProductImageSchema,
+  reorderProductImagesSchema,
 } from './products-schemas.js';
 import { prisma as defaultPrisma } from '../../infrastructure/database/client.js';
 import { requireAuth } from '../../middleware/auth.js';
@@ -156,14 +160,14 @@ export async function productRoutes(app: FastifyInstance) {
     }
   );
 
-  // DELETE /products/:id — soft-delete product
-  app.delete(
-    '/:id',
+  // GET /products/:id/usage — check stock levels and variants before deletion
+  app.get(
+    '/:id/usage',
     {
       preHandler: [requireAuth],
       schema: {
         tags: ['Inventory Products'],
-        summary: 'Soft-delete product from catalog',
+        summary: 'Inspect stock levels and variants for a product before deletion',
         security: [{ bearerAuth: [] }],
       },
     },
@@ -173,7 +177,49 @@ export async function productRoutes(app: FastifyInstance) {
       const db = (request.server as { prisma?: typeof defaultPrisma }).prisma ?? defaultPrisma;
       const service = new ProductService(db);
 
-      const result = await service.deleteProduct(orgId, id);
+      const usage = await service.getProductUsage(orgId, id);
+      return sendData(reply, { usage }, 200);
+    }
+  );
+
+  // DELETE /products/:id — soft-delete product with stock and reservation checks
+  app.delete(
+    '/:id',
+    {
+      preHandler: [requireAuth],
+      schema: {
+        tags: ['Inventory Products'],
+        summary: 'Soft-delete product from catalog after stock verification',
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const orgId = getOrgId(request);
+      const userId = request.auth?.user?.id ?? request.auth?.claims?.sub;
+      const { id } = z.object({ id: z.string().min(1) }).parse(request.params);
+
+      const queryParams = deleteProductQuerySchema.safeParse(request.query);
+      const bodyParams = deleteProductQuerySchema.safeParse(request.body);
+
+      const reason = bodyParams.success && bodyParams.data.reason
+        ? bodyParams.data.reason
+        : queryParams.success
+        ? queryParams.data.reason
+        : undefined;
+
+      const confirmWithStock =
+        (bodyParams.success && bodyParams.data.confirmWithStock) ||
+        (queryParams.success && queryParams.data.confirmWithStock) ||
+        false;
+
+      const db = (request.server as { prisma?: typeof defaultPrisma }).prisma ?? defaultPrisma;
+      const service = new ProductService(db);
+
+      const result = await service.deleteProduct(orgId, id, {
+        userId,
+        reason,
+        confirmWithStock,
+      });
       return sendData(reply, result, 200);
     }
   );
@@ -220,6 +266,323 @@ export async function productRoutes(app: FastifyInstance) {
 
       const variant = await service.createVariant(orgId, id, body);
       return sendData(reply, { variant }, 201);
+    }
+  );
+
+  // PATCH /products/:id/restore — restore soft-deleted product
+  app.patch(
+    '/:id/restore',
+    {
+      preHandler: [requireAuth],
+      schema: {
+        tags: ['Inventory Products'],
+        summary: 'Restore an archived/soft-deleted product back to active status',
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const orgId = getOrgId(request);
+      const userId = request.auth?.user?.id ?? request.auth?.claims?.sub;
+      const { id } = z.object({ id: z.string().min(1) }).parse(request.params);
+      const db = (request.server as { prisma?: typeof defaultPrisma }).prisma ?? defaultPrisma;
+      const service = new ProductService(db);
+
+      const product = await service.restoreProduct(orgId, id, userId);
+      return sendData(reply, { product }, 200);
+    }
+  );
+
+  // PATCH /products/:productId/variants/:variantId — update variant
+  app.patch(
+    '/:productId/variants/:variantId',
+    {
+      preHandler: [requireAuth],
+      schema: {
+        tags: ['Inventory Products'],
+        summary: 'Update variant attributes, prices, or status with audit history',
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const orgId = getOrgId(request);
+      const userId = request.auth?.user?.id ?? request.auth?.claims?.sub;
+      const { productId, variantId } = z.object({
+        productId: z.string().min(1),
+        variantId: z.string().min(1),
+      }).parse(request.params);
+      const body = updateVariantSchema.parse(request.body);
+      const db = (request.server as { prisma?: typeof defaultPrisma }).prisma ?? defaultPrisma;
+      const service = new ProductService(db);
+
+      const variant = await service.updateVariant(orgId, productId, variantId, body, userId);
+      return sendData(reply, { variant }, 200);
+    }
+  );
+
+  // DELETE /products/:productId/variants/:variantId — soft-delete variant
+  app.delete(
+    '/:productId/variants/:variantId',
+    {
+      preHandler: [requireAuth],
+      schema: {
+        tags: ['Inventory Products'],
+        summary: 'Soft-delete variant with stock and reservation checks',
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const orgId = getOrgId(request);
+      const userId = request.auth?.user?.id ?? request.auth?.claims?.sub;
+      const { productId, variantId } = z.object({
+        productId: z.string().min(1),
+        variantId: z.string().min(1),
+      }).parse(request.params);
+
+      const queryParams = deleteProductQuerySchema.safeParse(request.query);
+      const bodyParams = deleteProductQuerySchema.safeParse(request.body);
+
+      const reason = bodyParams.success && bodyParams.data.reason
+        ? bodyParams.data.reason
+        : queryParams.success
+        ? queryParams.data.reason
+        : undefined;
+
+      const confirmWithStock =
+        (bodyParams.success && bodyParams.data.confirmWithStock) ||
+        (queryParams.success && queryParams.data.confirmWithStock) ||
+        false;
+
+      const db = (request.server as { prisma?: typeof defaultPrisma }).prisma ?? defaultPrisma;
+      const service = new ProductService(db);
+
+      const result = await service.deleteVariant(orgId, productId, variantId, {
+        userId,
+        reason,
+        confirmWithStock,
+      });
+      return sendData(reply, result, 200);
+    }
+  );
+
+  // GET /products/:productId/variants/:variantId/price-history — variant price change history
+  app.get(
+    '/:productId/variants/:variantId/price-history',
+    {
+      preHandler: [requireAuth],
+      schema: {
+        tags: ['Inventory Products'],
+        summary: 'Get chronological price change history log for a variant',
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const orgId = getOrgId(request);
+      const { productId, variantId } = z.object({
+        productId: z.string().min(1),
+        variantId: z.string().min(1),
+      }).parse(request.params);
+      const db = (request.server as { prisma?: typeof defaultPrisma }).prisma ?? defaultPrisma;
+      const service = new ProductService(db);
+
+      const history = await service.getVariantPriceHistory(orgId, productId, variantId);
+      return sendData(reply, { history }, 200);
+    }
+  );
+
+  // POST /products/:productId/images — upload product images
+  app.post(
+    '/:productId/images',
+    {
+      preHandler: [requireAuth],
+      schema: {
+        tags: ['Inventory Products'],
+        summary: 'Upload 1-5 product images',
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const orgId = getOrgId(request);
+      const { productId } = z.object({ productId: z.string().min(1) }).parse(request.params);
+      const db = (request.server as { prisma?: typeof defaultPrisma }).prisma ?? defaultPrisma;
+      const service = new ProductService(db);
+
+      const files: Array<{ buffer: Buffer; filename?: string; mimeType: string }> = [];
+      for await (const part of request.parts()) {
+        if (part.type === 'file') {
+          const buffer = await part.toBuffer();
+          files.push({
+            buffer,
+            filename: part.filename,
+            mimeType: part.mimetype,
+          });
+        }
+      }
+
+      if (files.length === 0) {
+        throw new AppError('VALIDATION_ERROR', 'No image files uploaded', 400);
+      }
+
+      const images = await service.uploadProductImages(orgId, productId, files);
+      return sendData(reply, { images }, 201);
+    }
+  );
+
+  // GET /products/:productId/images — list product images
+  app.get(
+    '/:productId/images',
+    {
+      preHandler: [requireAuth],
+      schema: {
+        tags: ['Inventory Products'],
+        summary: 'List images for a product',
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const orgId = getOrgId(request);
+      const { productId } = z.object({ productId: z.string().min(1) }).parse(request.params);
+      const db = (request.server as { prisma?: typeof defaultPrisma }).prisma ?? defaultPrisma;
+      const service = new ProductService(db);
+
+      const images = await service.listProductImages(orgId, productId);
+      return sendData(reply, { images }, 200);
+    }
+  );
+
+  // PATCH /products/:productId/images/reorder — reorder images
+  app.patch(
+    '/:productId/images/reorder',
+    {
+      preHandler: [requireAuth],
+      schema: {
+        tags: ['Inventory Products'],
+        summary: 'Reorder product images and update primary flag',
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const orgId = getOrgId(request);
+      const { productId } = z.object({ productId: z.string().min(1) }).parse(request.params);
+      const body = reorderProductImagesSchema.parse(request.body);
+      const db = (request.server as { prisma?: typeof defaultPrisma }).prisma ?? defaultPrisma;
+      const service = new ProductService(db);
+
+      const images = await service.reorderProductImages(orgId, productId, body.images);
+      return sendData(reply, { images }, 200);
+    }
+  );
+
+  // PATCH /products/:productId/images/:imageId — update alt text or primary
+  app.patch(
+    '/:productId/images/:imageId',
+    {
+      preHandler: [requireAuth],
+      schema: {
+        tags: ['Inventory Products'],
+        summary: 'Update alt text or primary flag for a product image',
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const orgId = getOrgId(request);
+      const { imageId } = z.object({
+        productId: z.string().min(1),
+        imageId: z.string().min(1),
+      }).parse(request.params);
+      const body = updateProductImageSchema.parse(request.body);
+      const db = (request.server as { prisma?: typeof defaultPrisma }).prisma ?? defaultPrisma;
+      const service = new ProductService(db);
+
+      const image = await service.updateProductImage(orgId, imageId, body);
+      return sendData(reply, { image }, 200);
+    }
+  );
+
+  // DELETE /products/:productId/images/:imageId — delete product image
+  app.delete(
+    '/:productId/images/:imageId',
+    {
+      preHandler: [requireAuth],
+      schema: {
+        tags: ['Inventory Products'],
+        summary: 'Delete image record and its files from storage',
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const orgId = getOrgId(request);
+      const { imageId } = z.object({
+        productId: z.string().min(1),
+        imageId: z.string().min(1),
+      }).parse(request.params);
+      const db = (request.server as { prisma?: typeof defaultPrisma }).prisma ?? defaultPrisma;
+      const service = new ProductService(db);
+
+      const result = await service.deleteProductImage(orgId, imageId);
+      return sendData(reply, result, 200);
+    }
+  );
+
+  // POST /products/:productId/variants/:variantId/images — upload variant images
+  app.post(
+    '/:productId/variants/:variantId/images',
+    {
+      preHandler: [requireAuth],
+      schema: {
+        tags: ['Inventory Products'],
+        summary: 'Upload images for a specific product variant',
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const orgId = getOrgId(request);
+      const { productId, variantId } = z.object({
+        productId: z.string().min(1),
+        variantId: z.string().min(1),
+      }).parse(request.params);
+      const db = (request.server as { prisma?: typeof defaultPrisma }).prisma ?? defaultPrisma;
+      const service = new ProductService(db);
+
+      const files: Array<{ buffer: Buffer; filename?: string; mimeType: string }> = [];
+      for await (const part of request.parts()) {
+        if (part.type === 'file') {
+          const buffer = await part.toBuffer();
+          files.push({
+            buffer,
+            filename: part.filename,
+            mimeType: part.mimetype,
+          });
+        }
+      }
+
+      if (files.length === 0) {
+        throw new AppError('VALIDATION_ERROR', 'No image files uploaded', 400);
+      }
+
+      const images = await service.uploadProductImages(orgId, productId, files, variantId);
+      return sendData(reply, { images }, 201);
+    }
+  );
+
+  // GET /products/:variantId/variant-images — get variant images (with parent fallback)
+  app.get(
+    '/:variantId/variant-images',
+    {
+      preHandler: [requireAuth],
+      schema: {
+        tags: ['Inventory Products'],
+        summary: 'List variant images with fallback to parent images',
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const orgId = getOrgId(request);
+      const { variantId } = z.object({ variantId: z.string().min(1) }).parse(request.params);
+      const db = (request.server as { prisma?: typeof defaultPrisma }).prisma ?? defaultPrisma;
+      const service = new ProductService(db);
+
+      const result = await service.listVariantImages(orgId, variantId);
+      return sendData(reply, result, 200);
     }
   );
 }

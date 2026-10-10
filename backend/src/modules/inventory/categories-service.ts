@@ -2,6 +2,7 @@ import type { PrismaClient, Category } from '@prisma/client';
 import { prisma as defaultPrisma } from '../../infrastructure/database/client.js';
 import { AppError } from '../../lib/errors.js';
 import { inventoryCache } from '../../infrastructure/cache/in-memory-cache.js';
+import { imageUploadService } from './image-upload-service.js';
 import {
   DEFAULT_CATEGORIES_BY_BUSINESS_TYPE,
   GENERIC_DEFAULT_CATEGORIES,
@@ -12,6 +13,8 @@ import {
 export interface CategoryTreeNode extends Category {
   children: CategoryTreeNode[];
   depth: number;
+  direct_product_count?: number;
+  product_count?: number;
 }
 
 export interface CategoryWithPath extends Category {
@@ -39,6 +42,10 @@ export class CategoryService {
   private invalidateCache(orgId: string): void {
     inventoryCache.clearPrefix(`categories_tree:${orgId}`);
     inventoryCache.clearPrefix(`category:${orgId}`);
+    // Invalidate product caches so cached products reflect updated/deleted category names
+    inventoryCache.clearPrefix(`products_list:${orgId}`);
+    inventoryCache.clearPrefix(`products_detail:${orgId}`);
+    inventoryCache.clearPrefix(`products_search:${orgId}`);
   }
 
   async resolveUniqueSlug(
@@ -55,6 +62,7 @@ export class CategoryService {
         where: {
           org_id: orgId,
           slug: candidate,
+          is_deleted: false,
           ...(excludeId ? { id: { not: excludeId } } : {}),
         },
         select: { id: true },
@@ -83,12 +91,12 @@ export class CategoryService {
         );
       }
 
-      const ancestor: { parent_id: string | null; org_id: string } | null = await this.db.category.findUnique({
+      const ancestor: { parent_id: string | null; org_id: string; is_deleted: boolean } | null = await this.db.category.findUnique({
         where: { id: currentParentId },
-        select: { parent_id: true, org_id: true },
+        select: { parent_id: true, org_id: true, is_deleted: true },
       });
 
-      if (!ancestor || ancestor.org_id !== orgId) {
+      if (!ancestor || ancestor.org_id !== orgId || ancestor.is_deleted) {
         throw new AppError('CATEGORY_NOT_FOUND', 'Parent category not found in this organization', 404);
       }
 
@@ -100,7 +108,7 @@ export class CategoryService {
 
   private async getSubtreeHeight(categoryId: string): Promise<number> {
     const children = await this.db.category.findMany({
-      where: { parent_id: categoryId },
+      where: { parent_id: categoryId, is_deleted: false },
       select: { id: true },
     });
 
@@ -124,7 +132,7 @@ export class CategoryService {
       cacheKey,
       async () => {
         const allCategories = await this.db.category.findMany({
-          where: { org_id: orgId },
+          where: { org_id: orgId, is_deleted: false },
           orderBy: [{ sort_order: 'asc' }, { created_at: 'asc' }],
         });
 
@@ -153,6 +161,20 @@ export class CategoryService {
           return true;
         });
 
+        // Fetch product counts per category
+        const productCounts = await this.db.product.groupBy({
+          by: ['category_id'],
+          where: { org_id: orgId, is_deleted: false, category_id: { not: null } },
+          _count: { id: true },
+        });
+
+        const directCountMap = new Map<string, number>();
+        for (const item of productCounts) {
+          if (item.category_id) {
+            directCountMap.set(item.category_id, item._count.id);
+          }
+        }
+
         // Group by parent_id
         const childrenMap = new Map<string | null, Category[]>();
         for (const cat of eligibleCategories) {
@@ -164,11 +186,23 @@ export class CategoryService {
 
         const buildTree = (parentId: string | null, depth = 0): CategoryTreeNode[] => {
           const directChildren = childrenMap.get(parentId) ?? [];
-          return directChildren.map((item) => ({
-            ...item,
-            depth,
-            children: buildTree(item.id, depth + 1),
-          }));
+          return directChildren.map((item) => {
+            const children = buildTree(item.id, depth + 1);
+            const directProductCount = directCountMap.get(item.id) ?? 0;
+            const subtreeProductCount = children.reduce(
+              (sum, child) => sum + (child.product_count ?? 0),
+              0
+            );
+            const totalProductCount = directProductCount + subtreeProductCount;
+
+            return {
+              ...item,
+              depth,
+              direct_product_count: directProductCount,
+              product_count: totalProductCount,
+              children,
+            };
+          });
         };
 
         if (options?.parentId) {
@@ -183,7 +217,7 @@ export class CategoryService {
 
   async getCategoryById(orgId: string, categoryId: string): Promise<CategoryWithPath> {
     const category = await this.db.category.findFirst({
-      where: { id: categoryId, org_id: orgId },
+      where: { id: categoryId, org_id: orgId, is_deleted: false },
     });
 
     if (!category) {
@@ -191,7 +225,7 @@ export class CategoryService {
     }
 
     const childrenCount = await this.db.category.count({
-      where: { parent_id: categoryId },
+      where: { parent_id: categoryId, is_deleted: false },
     });
 
     // Build path
@@ -201,9 +235,9 @@ export class CategoryService {
     while (currentParentId) {
       const parent = await this.db.category.findUnique({
         where: { id: currentParentId },
-        select: { name: true, parent_id: true, org_id: true },
+        select: { name: true, parent_id: true, org_id: true, is_deleted: true },
       });
-      if (!parent || parent.org_id !== orgId) break;
+      if (!parent || parent.org_id !== orgId || parent.is_deleted) break;
       pathSegments.unshift(parent.name);
       currentParentId = parent.parent_id;
     }
@@ -215,12 +249,35 @@ export class CategoryService {
     };
   }
 
+  async getCategoryUsage(
+    orgId: string,
+    categoryId: string
+  ): Promise<{ productCount: number; childCount: number }> {
+    const category = await this.db.category.findFirst({
+      where: { id: categoryId, org_id: orgId, is_deleted: false },
+    });
+
+    if (!category) {
+      throw new AppError('CATEGORY_NOT_FOUND', 'Category not found', 404);
+    }
+
+    const childCount = await this.db.category.count({
+      where: { parent_id: categoryId, is_deleted: false },
+    });
+
+    const productCount = await this.db.product.count({
+      where: { category_id: categoryId, org_id: orgId, is_deleted: false },
+    });
+
+    return { productCount, childCount };
+  }
+
   async createCategory(orgId: string, input: CreateCategoryInput): Promise<Category> {
     const parentId = input.parentId ?? null;
 
     if (parentId) {
       const parent = await this.db.category.findFirst({
-        where: { id: parentId, org_id: orgId },
+        where: { id: parentId, org_id: orgId, is_deleted: false },
       });
       if (!parent) {
         throw new AppError('CATEGORY_NOT_FOUND', 'Parent category not found in this organization', 404);
@@ -233,7 +290,7 @@ export class CategoryService {
 
     // Compute next sort order for this parent
     const lastSibling = await this.db.category.findFirst({
-      where: { org_id: orgId, parent_id: parentId },
+      where: { org_id: orgId, parent_id: parentId, is_deleted: false },
       orderBy: { sort_order: 'desc' },
       select: { sort_order: true },
     });
@@ -257,7 +314,7 @@ export class CategoryService {
 
   async updateCategory(orgId: string, categoryId: string, input: UpdateCategoryInput): Promise<Category> {
     const existing = await this.db.category.findFirst({
-      where: { id: categoryId, org_id: orgId },
+      where: { id: categoryId, org_id: orgId, is_deleted: false },
     });
 
     if (!existing) {
@@ -283,12 +340,12 @@ export class CategoryService {
             );
           }
 
-          const ancestor: { parent_id: string | null; org_id: string } | null = await this.db.category.findUnique({
+          const ancestor: { parent_id: string | null; org_id: string; is_deleted: boolean } | null = await this.db.category.findUnique({
             where: { id: checkId },
-            select: { parent_id: true, org_id: true },
+            select: { parent_id: true, org_id: true, is_deleted: true },
           });
 
-          if (!ancestor || ancestor.org_id !== orgId) {
+          if (!ancestor || ancestor.org_id !== orgId || ancestor.is_deleted) {
             throw new AppError('CATEGORY_NOT_FOUND', 'Parent category not found in this organization', 404);
           }
 
@@ -325,9 +382,13 @@ export class CategoryService {
     return updated;
   }
 
-  async deleteCategory(orgId: string, categoryId: string): Promise<{ success: true }> {
+  async deleteCategory(
+    orgId: string,
+    categoryId: string,
+    reassignToCategoryId?: string
+  ): Promise<{ success: true; reassignedProductCount: number }> {
     const category = await this.db.category.findFirst({
-      where: { id: categoryId, org_id: orgId },
+      where: { id: categoryId, org_id: orgId, is_deleted: false },
     });
 
     if (!category) {
@@ -335,7 +396,7 @@ export class CategoryService {
     }
 
     const childCount = await this.db.category.count({
-      where: { parent_id: categoryId },
+      where: { parent_id: categoryId, is_deleted: false },
     });
 
     if (childCount > 0) {
@@ -346,12 +407,72 @@ export class CategoryService {
       );
     }
 
-    await this.db.category.delete({
+    const productCount = await this.db.product.count({
+      where: { category_id: categoryId, org_id: orgId, is_deleted: false },
+    });
+
+    if (productCount > 0) {
+      if (!reassignToCategoryId) {
+        throw new AppError(
+          'CATEGORY_HAS_PRODUCTS',
+          `Cannot delete category "${category.name}" because it has ${productCount} assigned product${productCount > 1 ? 's' : ''}. Please reassign them to another category first.`,
+          400,
+          { productCount }
+        );
+      }
+
+      if (reassignToCategoryId === categoryId) {
+        throw new AppError(
+          'INVALID_REASSIGNMENT_CATEGORY',
+          'Cannot reassign products to the category being deleted',
+          400
+        );
+      }
+
+      const targetCategory = await this.db.category.findFirst({
+        where: { id: reassignToCategoryId, org_id: orgId, is_deleted: false },
+      });
+
+      if (!targetCategory) {
+        throw new AppError(
+          'INVALID_REASSIGNMENT_CATEGORY',
+          'Target category for reassignment not found or inactive',
+          404
+        );
+      }
+
+      // Reassign products and soft-delete category atomically in transaction
+      await this.db.$transaction([
+        this.db.product.updateMany({
+          where: { category_id: categoryId, org_id: orgId, is_deleted: false },
+          data: { category_id: reassignToCategoryId },
+        }),
+        this.db.category.update({
+          where: { id: categoryId },
+          data: {
+            is_deleted: true,
+            is_active: false,
+            deleted_at: new Date(),
+          },
+        }),
+      ]);
+
+      this.invalidateCache(orgId);
+      return { success: true, reassignedProductCount: productCount };
+    }
+
+    // No products assigned: soft-delete category
+    await this.db.category.update({
       where: { id: categoryId },
+      data: {
+        is_deleted: true,
+        is_active: false,
+        deleted_at: new Date(),
+      },
     });
 
     this.invalidateCache(orgId);
-    return { success: true };
+    return { success: true, reassignedProductCount: 0 };
   }
 
   async reorderCategories(
@@ -366,6 +487,7 @@ export class CategoryService {
         id: { in: categoryIds },
         org_id: orgId,
         parent_id: targetParentId,
+        is_deleted: false,
       },
     });
 
@@ -399,7 +521,7 @@ export class CategoryService {
 
   async toggleCategoryStatus(orgId: string, categoryId: string): Promise<Category> {
     const category = await this.db.category.findFirst({
-      where: { id: categoryId, org_id: orgId },
+      where: { id: categoryId, org_id: orgId, is_deleted: false },
     });
 
     if (!category) {
@@ -435,5 +557,52 @@ export class CategoryService {
 
     this.invalidateCache(orgId);
     return { count: result.count };
+  }
+
+  async uploadCategoryImage(
+    orgId: string,
+    categoryId: string,
+    file: { buffer: Buffer; mimeType: string }
+  ): Promise<Category> {
+    const category = await this.db.category.findFirst({
+      where: { id: categoryId, org_id: orgId, is_deleted: false },
+    });
+    if (!category) {
+      throw new AppError('CATEGORY_NOT_FOUND', 'Category not found', 404);
+    }
+
+    const { url } = await imageUploadService.processAndSaveCategoryImage({
+      orgId,
+      categoryId,
+      fileBuffer: file.buffer,
+      mimeType: file.mimeType,
+    });
+
+    const updated = await this.db.category.update({
+      where: { id: categoryId },
+      data: { image_url: url },
+    });
+
+    this.invalidateCache(orgId);
+    return updated;
+  }
+
+  async deleteCategoryImage(orgId: string, categoryId: string): Promise<Category> {
+    const category = await this.db.category.findFirst({
+      where: { id: categoryId, org_id: orgId, is_deleted: false },
+    });
+    if (!category) {
+      throw new AppError('CATEGORY_NOT_FOUND', 'Category not found', 404);
+    }
+
+    await imageUploadService.deleteCategoryImageFile({ orgId, categoryId });
+
+    const updated = await this.db.category.update({
+      where: { id: categoryId },
+      data: { image_url: null },
+    });
+
+    this.invalidateCache(orgId);
+    return updated;
   }
 }

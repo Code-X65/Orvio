@@ -231,6 +231,9 @@ describe('ProductForm Component', () => {
       is_active: true,
       is_deleted: false,
       business_type: null,
+      image_url: null,
+      primary_image_url: null,
+      images: [],
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
@@ -275,6 +278,56 @@ describe('ProductForm Component', () => {
       expect.objectContaining({
         sellingPrice: 2000,
         priceChangeReason: 'Supplier raw material adjustment',
+      })
+    );
+  });
+
+  it('renders business-type specific attributes and includes them in payload', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    const onClose = vi.fn();
+
+    render(
+      <ProductForm
+        isOpen={true}
+        onClose={onClose}
+        onSubmit={onSubmit}
+        categories={mockCategories}
+        currency="NGN"
+        businessType="pharmacy_cosmetics"
+      />
+    );
+
+    expect(screen.getByText('Pharmacy & Clinical Specifications')).toBeInTheDocument();
+    expect(screen.getByText('Requires Prescription (Rx)')).toBeInTheDocument();
+    expect(screen.getByText('Dosage Form')).toBeInTheDocument();
+
+    const nameInput = screen.getByPlaceholderText(/Golden Penny Spaghetti/i);
+    fireEvent.change(nameInput, { target: { value: 'Amoxicillin 500mg' } });
+
+    const categorySelect = screen.getByDisplayValue(/Select a category or subcategory/i);
+    fireEvent.change(categorySelect, { target: { value: 'cat-1' } });
+
+    const [costInput, sellingInput] = screen.getAllByPlaceholderText('0.00');
+    fireEvent.change(costInput, { target: { value: '1000' } });
+    fireEvent.change(sellingInput, { target: { value: '1800' } });
+
+    // Fill clinical specs
+    const nafdacInput = screen.getByPlaceholderText(/04-1234/i);
+    fireEvent.change(nafdacInput, { target: { value: 'A4-9988' } });
+
+    const submitBtn = screen.getByRole('button', { name: /Create Product/i });
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => {
+      expect(onSubmit).toHaveBeenCalledTimes(1);
+    });
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'Amoxicillin 500mg',
+        metadata: expect.objectContaining({
+          nafdacNumber: 'A4-9988',
+        }),
       })
     );
   });

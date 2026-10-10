@@ -22,13 +22,18 @@ import {
   type CategoryTreeNode,
 } from '../categories-api';
 import { CategoryTree } from './CategoryTree';
-import { CategoryForm, type CategoryFormData } from './CategoryForm';
+import {
+  CategoryForm,
+  type CategoryFormData,
+  flattenCategoriesForSelection,
+} from './CategoryForm';
 
 interface CategoriesPageProps {
   organization?: {
     name?: string;
     business_type?: string;
   };
+  onNavigateToProducts?: (categoryId: string) => void;
 }
 
 // Recursively filter tree nodes based on search query
@@ -74,7 +79,7 @@ function countTotalCategories(nodes: CategoryTreeNode[]): number {
   }, 0);
 }
 
-export function CategoriesPage({ organization }: CategoriesPageProps) {
+export function CategoriesPage({ organization, onNavigateToProducts }: CategoriesPageProps) {
   const [categories, setCategories] = React.useState<CategoryTreeNode[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
@@ -92,6 +97,9 @@ export function CategoriesPage({ organization }: CategoriesPageProps) {
   // Delete Confirm Modal State
   const [categoryToDelete, setCategoryToDelete] = React.useState<Category | null>(null);
   const [isDeleting, setIsDeleting] = React.useState(false);
+  const [usageLoading, setUsageLoading] = React.useState(false);
+  const [categoryUsage, setCategoryUsage] = React.useState<{ productCount: number; childCount: number } | null>(null);
+  const [reassignTargetCategoryId, setReassignTargetCategoryId] = React.useState<string>('');
 
   // Seeding State
   const [isSeeding, setIsSeeding] = React.useState(false);
@@ -102,7 +110,7 @@ export function CategoriesPage({ organization }: CategoriesPageProps) {
       setLoading(true);
       setError(null);
       const res = await categoryApi.getCategories({ activeOnly });
-      const tree = res?.data?.categories ?? res?.categories ?? [];
+      const tree = (res as any)?.data?.categories ?? res?.categories ?? [];
       setCategories(tree);
 
       // Default expand top-level nodes with children
@@ -158,7 +166,12 @@ export function CategoriesPage({ organization }: CategoriesPageProps) {
     setIsFormOpen(true);
   };
 
-  const handleFormSubmit = async (data: CategoryFormData) => {
+  const handleFormSubmit = async (
+    data: CategoryFormData,
+    imageFile?: File | null,
+    shouldRemoveImage?: boolean
+  ) => {
+    let catId: string;
     if (editingCategory) {
       await categoryApi.updateCategory(editingCategory.id, {
         name: data.name,
@@ -166,44 +179,110 @@ export function CategoriesPage({ organization }: CategoriesPageProps) {
         parentId: data.parentId,
         isActive: data.isActive,
       });
+      catId = editingCategory.id;
       toast.success(`Category "${data.name}" updated successfully.`);
     } else {
-      await categoryApi.createCategory({
+      const res = await categoryApi.createCategory({
         name: data.name,
         description: data.description || null,
         parentId: data.parentId,
         isActive: data.isActive,
       });
+      catId = res.category.id;
       toast.success(`Category "${data.name}" created successfully.`);
     }
+
+    if (imageFile) {
+      try {
+        await categoryApi.uploadCategoryImage(catId, imageFile);
+      } catch (err: any) {
+        toast.error(err?.message || 'Failed to upload category image');
+      }
+    } else if (shouldRemoveImage && editingCategory) {
+      try {
+        await categoryApi.deleteCategoryImage(catId);
+      } catch (err: any) {
+        toast.error(err?.message || 'Failed to remove category image');
+      }
+    }
+
     await fetchCategories();
   };
 
-  // Toggle active status
+  // Helper to recursively update category node active status
+  const updateNodeStatusInTree = (
+    nodes: CategoryTreeNode[],
+    id: string,
+    newActive: boolean
+  ): CategoryTreeNode[] => {
+    return nodes.map((n) => {
+      if (n.id === id) {
+        return { ...n, is_active: newActive };
+      }
+      if (n.children && n.children.length > 0) {
+        return { ...n, children: updateNodeStatusInTree(n.children, id, newActive) };
+      }
+      return n;
+    });
+  };
+
+  // Toggle active status with optimistic UI update
   const handleToggleStatus = async (cat: Category) => {
+    const previousState = cat.is_active;
+    const nextState = !previousState;
+
+    // Optimistically update the UI immediately
+    setCategories((prev) => updateNodeStatusInTree(prev, cat.id, nextState));
+
     try {
       await categoryApi.toggleCategoryStatus(cat.id);
       toast.success(
-        `Category "${cat.name}" is now ${cat.is_active ? 'inactive' : 'active'}.`
+        `Category "${cat.name}" is now ${nextState ? 'active' : 'inactive'}.`
       );
       await fetchCategories();
     } catch (err: any) {
+      // Revert optimistic update on failure
+      setCategories((prev) => updateNodeStatusInTree(prev, cat.id, previousState));
       toast.error(err?.message || 'Failed to update category status.');
     }
   };
 
   // Delete category
-  const handleDeleteClick = (cat: Category) => {
+  const handleDeleteClick = async (cat: Category) => {
     setCategoryToDelete(cat);
+    setCategoryUsage(null);
+    setReassignTargetCategoryId('');
+    setUsageLoading(true);
+    try {
+      const res = await categoryApi.getCategoryUsage(cat.id);
+      setCategoryUsage(res.usage);
+    } catch (err: any) {
+      console.error('Failed to get category usage:', err);
+    } finally {
+      setUsageLoading(false);
+    }
   };
 
   const confirmDelete = async () => {
     if (!categoryToDelete) return;
     try {
       setIsDeleting(true);
-      await categoryApi.deleteCategory(categoryToDelete.id);
-      toast.success(`Category "${categoryToDelete.name}" deleted.`);
+      const targetId =
+        categoryUsage && categoryUsage.productCount > 0
+          ? reassignTargetCategoryId || undefined
+          : undefined;
+
+      const res = await categoryApi.deleteCategory(categoryToDelete.id, targetId);
+      if (res.reassignedProductCount && res.reassignedProductCount > 0) {
+        toast.success(
+          `Category "${categoryToDelete.name}" archived. ${res.reassignedProductCount} product(s) reassigned successfully.`
+        );
+      } else {
+        toast.success(`Category "${categoryToDelete.name}" archived.`);
+      }
       setCategoryToDelete(null);
+      setCategoryUsage(null);
+      setReassignTargetCategoryId('');
       await fetchCategories();
     } catch (err: any) {
       toast.error(
@@ -214,6 +293,33 @@ export function CategoriesPage({ organization }: CategoriesPageProps) {
       setIsDeleting(false);
     }
   };
+
+  // Find all descendant IDs of categoryToDelete to exclude them from reassignment
+  const getSubtreeCategoryIds = React.useCallback((nodeId: string, nodes: CategoryTreeNode[]): Set<string> => {
+    const ids = new Set<string>([nodeId]);
+    const findAndCollect = (list: CategoryTreeNode[]) => {
+      for (const item of list) {
+        if (item.id === nodeId || ids.has(item.parent_id || '')) {
+          ids.add(item.id);
+          if (item.children) findAndCollect(item.children);
+        } else if (item.children) {
+          findAndCollect(item.children);
+        }
+      }
+    };
+    findAndCollect(nodes);
+    return ids;
+  }, []);
+
+  const excludedCategoryIds = React.useMemo(() => {
+    if (!categoryToDelete) return new Set<string>();
+    return getSubtreeCategoryIds(categoryToDelete.id, categories);
+  }, [categoryToDelete, categories, getSubtreeCategoryIds]);
+
+  const reassignCategoryOptions = React.useMemo(() => {
+    const allOptions = flattenCategoriesForSelection(categories);
+    return allOptions.filter((opt) => !excludedCategoryIds.has(opt.id));
+  }, [categories, excludedCategoryIds]);
 
   // Reorder siblings
   const handleMoveUp = async (cat: Category, siblings: CategoryTreeNode[]) => {
@@ -263,7 +369,7 @@ export function CategoriesPage({ organization }: CategoriesPageProps) {
     try {
       setIsSeeding(true);
       const res = await categoryApi.seedDefaultCategories(organization?.business_type);
-      const count = res?.data?.count ?? res?.count ?? 0;
+      const count = (res as any)?.data?.count ?? res?.count ?? 0;
       toast.success(`Generated ${count} starter categories!`);
       await fetchCategories();
     } catch (err: any) {
@@ -460,6 +566,7 @@ export function CategoriesPage({ organization }: CategoriesPageProps) {
             onAddSubcategory={(parent) => handleOpenCreate(parent.id)}
             onMoveUp={handleMoveUp}
             onMoveDown={handleMoveDown}
+            onNavigateToProducts={onNavigateToProducts}
             expandedIds={expandedIds}
             onToggleExpand={toggleNodeExpand}
           />
@@ -479,40 +586,139 @@ export function CategoriesPage({ organization }: CategoriesPageProps) {
       {/* Delete Confirmation Modal */}
       {categoryToDelete && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs animate-in fade-in duration-150">
-          <div className="bg-[#181a20] border border-[#2d3139] rounded-sm max-w-sm w-full p-6 text-slate-100 shadow-2xl relative">
-            <div className="w-11 h-11 rounded-sm bg-rose-500/15 text-rose-400 flex items-center justify-center mb-4">
-              <AlertTriangle className="w-5 h-5" />
+          <div className="bg-[#181a20] border border-[#2d3139] rounded-xl max-w-md w-full p-6 text-slate-100 shadow-2xl relative">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-rose-500/15 text-rose-400 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white tracking-tight">Archive Category</h3>
+                <p className="text-xs text-slate-400">Manage category lifecycle and product integrity</p>
+              </div>
             </div>
 
-            <h3 className="text-base font-bold text-white tracking-tight">Delete Category</h3>
-            <p className="text-xs text-slate-400 mt-2 leading-relaxed">
-              Are you sure you want to delete <span className="text-white font-semibold">&quot;{categoryToDelete.name}&quot;</span>?
-              If this category has subcategories, deletion will be blocked to protect your inventory structure.
-            </p>
+            {usageLoading ? (
+              <div className="py-8 flex flex-col items-center justify-center text-slate-400 gap-2">
+                <Loader2 className="w-5 h-5 animate-spin text-[#985184]" />
+                <p className="text-xs">Checking assigned products and subcategories...</p>
+              </div>
+            ) : categoryUsage?.childCount && categoryUsage.childCount > 0 ? (
+              <div className="space-y-3">
+                <div className="bg-rose-500/10 border border-rose-500/25 rounded-lg p-3.5 text-xs text-rose-300">
+                  <div className="font-semibold flex items-center gap-1.5 mb-1.5 text-rose-200">
+                    <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+                    Cannot Delete: Subcategories Detected
+                  </div>
+                  Category <strong className="text-white">"{categoryToDelete.name}"</strong> has{' '}
+                  <span className="font-bold text-white">{categoryUsage.childCount} subcategory/subcategories</span>.
+                  You must delete or move child categories first before archiving this category.
+                </div>
 
-            <div className="flex items-center justify-end gap-2.5 pt-5">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setCategoryToDelete(null)}
-                disabled={isDeleting}
-                className="border-[#2d3139] text-slate-300 hover:bg-white/5 text-xs h-9 cursor-pointer"
-              >
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                onClick={confirmDelete}
-                disabled={isDeleting}
-                className="bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs h-9 px-4 cursor-pointer shadow-sm flex items-center gap-1.5"
-                data-testid="confirm-delete-category-btn"
-              >
-                {isDeleting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                <span>Delete</span>
-              </Button>
-            </div>
+                <div className="flex items-center justify-end gap-2.5 pt-3">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCategoryToDelete(null)}
+                    className="border-[#2d3139] text-slate-300 hover:bg-white/5 text-xs h-9 cursor-pointer"
+                  >
+                    Close
+                  </Button>
+                </div>
+              </div>
+            ) : categoryUsage?.productCount && categoryUsage.productCount > 0 ? (
+              <div className="space-y-4">
+                <div className="bg-amber-500/10 border border-amber-500/25 rounded-lg p-3.5 text-xs text-amber-300">
+                  <div className="font-semibold flex items-center gap-1.5 mb-1.5 text-amber-200">
+                    <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                    Active Products Assigned
+                  </div>
+                  This category contains{' '}
+                  <span className="font-bold text-white">
+                    {categoryUsage.productCount} active product{categoryUsage.productCount > 1 ? 's' : ''}
+                  </span>.
+                  To protect your catalog and prevent orphaned items, select a destination category to reassign them to:
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                    Reassign Products To <span className="text-rose-400">*</span>
+                  </label>
+                  <select
+                    value={reassignTargetCategoryId}
+                    onChange={(e) => setReassignTargetCategoryId(e.target.value)}
+                    className="w-full bg-[#121316] border border-[#2d3139] rounded-md px-3 py-2 text-xs text-white focus:outline-none focus:border-[#985184] transition-colors"
+                    required
+                  >
+                    <option value="">Select destination category...</option>
+                    {reassignCategoryOptions.map((opt) => (
+                      <option key={opt.id} value={opt.id}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    All {categoryUsage.productCount} product(s) will be atomically moved to this category.
+                  </p>
+                </div>
+
+                <div className="flex items-center justify-end gap-2.5 pt-3">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCategoryToDelete(null)}
+                    disabled={isDeleting}
+                    className="border-[#2d3139] text-slate-300 hover:bg-white/5 text-xs h-9 cursor-pointer"
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={confirmDelete}
+                    disabled={isDeleting || !reassignTargetCategoryId}
+                    className="bg-amber-600 hover:bg-amber-700 text-white font-semibold text-xs h-9 px-4 cursor-pointer shadow-sm flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                    data-testid="confirm-delete-category-btn"
+                  >
+                    {isDeleting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                    <span>Reassign & Archive</span>
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  Are you sure you want to archive{' '}
+                  <span className="text-white font-semibold">&quot;{categoryToDelete.name}&quot;</span>?
+                  It has no subcategories and 0 assigned products.
+                </p>
+
+                <div className="flex items-center justify-end gap-2.5 pt-3">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCategoryToDelete(null)}
+                    disabled={isDeleting}
+                    className="border-[#2d3139] text-slate-300 hover:bg-white/5 text-xs h-9 cursor-pointer"
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={confirmDelete}
+                    disabled={isDeleting}
+                    className="bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs h-9 px-4 cursor-pointer shadow-sm flex items-center gap-1.5"
+                    data-testid="confirm-delete-category-btn"
+                  >
+                    {isDeleting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                    <span>Archive Category</span>
+                  </Button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

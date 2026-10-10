@@ -7,6 +7,11 @@ import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
 import type { PrismaClient } from '@prisma/client';
 
+import fastifyMultipart from '@fastify/multipart';
+import fastifyStatic from '@fastify/static';
+import path from 'node:path';
+import fs from 'node:fs';
+
 import { env } from './config/env.js';
 import { prisma as defaultPrisma } from './infrastructure/database/client.js';
 import { emailSender as defaultEmailSender, type EmailSender } from './modules/email/index.js';
@@ -130,6 +135,25 @@ export function buildApp(deps?: AppDeps): FastifyInstance {
     global: false,
     max: 100,
     timeWindow: '1 minute',
+  });
+
+  // Multipart upload support
+  app.register(fastifyMultipart, {
+    limits: {
+      fileSize: 10 * 1024 * 1024, // 10MB max per file
+      files: 10,
+    },
+  });
+
+  // Static serving for uploads
+  const uploadsDir = path.resolve(process.cwd(), 'uploads');
+  if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+  }
+  app.register(fastifyStatic, {
+    root: uploadsDir,
+    prefix: '/uploads/',
+    decorateReply: false,
   });
 
   // Swagger OpenAPI Documentation & Swagger UI at /docs

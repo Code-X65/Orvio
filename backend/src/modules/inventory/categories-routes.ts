@@ -5,6 +5,7 @@ import {
   updateCategorySchema,
   reorderCategoriesSchema,
   listCategoriesQuerySchema,
+  deleteCategoryQuerySchema,
 } from './categories-schemas.js';
 import { prisma as defaultPrisma } from '../../infrastructure/database/client.js';
 import { requireAuth } from '../../middleware/auth.js';
@@ -151,26 +152,63 @@ export async function categoryRoutes(app: FastifyInstance) {
     }
   );
 
-  // PUT /categories/:id
+  // PUT /categories/:id & PATCH /categories/:id
+  const handleUpdateCategory = async (request: FastifyRequest, reply: FastifyReply) => {
+    const orgId = getOrgId(request);
+    const { id } = z.object({ id: z.string().min(1) }).parse(request.params);
+    const body = updateCategorySchema.parse(request.body);
+    const db = (request.server as { prisma?: typeof defaultPrisma }).prisma ?? defaultPrisma;
+    const service = new CategoryService(db);
+
+    const category = await service.updateCategory(orgId, id, body);
+    return sendData(reply, { category }, 200);
+  };
+
   app.put(
     '/:id',
     {
       preHandler: [requireAuth],
       schema: {
         tags: ['Inventory Categories'],
-        summary: 'Update category details',
+        summary: 'Update category details (PUT)',
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    handleUpdateCategory
+  );
+
+  app.patch(
+    '/:id',
+    {
+      preHandler: [requireAuth],
+      schema: {
+        tags: ['Inventory Categories'],
+        summary: 'Update category details (PATCH)',
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    handleUpdateCategory
+  );
+
+  // GET /categories/:id/usage
+  app.get(
+    '/:id/usage',
+    {
+      preHandler: [requireAuth],
+      schema: {
+        tags: ['Inventory Categories'],
+        summary: 'Get product and subcategory count for category',
         security: [{ bearerAuth: [] }],
       },
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const orgId = getOrgId(request);
       const { id } = z.object({ id: z.string().min(1) }).parse(request.params);
-      const body = updateCategorySchema.parse(request.body);
       const db = (request.server as { prisma?: typeof defaultPrisma }).prisma ?? defaultPrisma;
       const service = new CategoryService(db);
 
-      const category = await service.updateCategory(orgId, id, body);
-      return sendData(reply, { category }, 200);
+      const usage = await service.getCategoryUsage(orgId, id);
+      return sendData(reply, { usage }, 200);
     }
   );
 
@@ -181,17 +219,23 @@ export async function categoryRoutes(app: FastifyInstance) {
       preHandler: [requireAuth],
       schema: {
         tags: ['Inventory Categories'],
-        summary: 'Delete category if it has no child categories',
+        summary: 'Delete or archive category with optional product reassignment',
         security: [{ bearerAuth: [] }],
       },
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const orgId = getOrgId(request);
       const { id } = z.object({ id: z.string().min(1) }).parse(request.params);
+      const query = deleteCategoryQuerySchema.parse(request.query ?? {});
+      const body = (request.body && typeof request.body === 'object')
+        ? (request.body as { reassignToCategoryId?: string })
+        : {};
+      const reassignToCategoryId = query.reassignToCategoryId || body.reassignToCategoryId;
+
       const db = (request.server as { prisma?: typeof defaultPrisma }).prisma ?? defaultPrisma;
       const service = new CategoryService(db);
 
-      const result = await service.deleteCategory(orgId, id);
+      const result = await service.deleteCategory(orgId, id, reassignToCategoryId);
       return sendData(reply, result, 200);
     }
   );
@@ -214,6 +258,60 @@ export async function categoryRoutes(app: FastifyInstance) {
       const service = new CategoryService(db);
 
       const category = await service.toggleCategoryStatus(orgId, id);
+      return sendData(reply, { category }, 200);
+    }
+  );
+
+  // POST /categories/:categoryId/image
+  app.post(
+    '/:categoryId/image',
+    {
+      preHandler: [requireAuth],
+      schema: {
+        tags: ['Inventory Categories'],
+        summary: 'Upload category thumbnail image',
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const orgId = getOrgId(request);
+      const { categoryId } = z.object({ categoryId: z.string().min(1) }).parse(request.params);
+      const db = (request.server as { prisma?: typeof defaultPrisma }).prisma ?? defaultPrisma;
+      const service = new CategoryService(db);
+
+      const part = await request.file();
+      if (!part) {
+        throw new AppError('VALIDATION_ERROR', 'No image file uploaded', 400);
+      }
+      const buffer = await part.toBuffer();
+
+      const category = await service.uploadCategoryImage(orgId, categoryId, {
+        buffer,
+        mimeType: part.mimetype,
+      });
+
+      return sendData(reply, { category }, 200);
+    }
+  );
+
+  // DELETE /categories/:categoryId/image
+  app.delete(
+    '/:categoryId/image',
+    {
+      preHandler: [requireAuth],
+      schema: {
+        tags: ['Inventory Categories'],
+        summary: 'Remove category thumbnail image',
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const orgId = getOrgId(request);
+      const { categoryId } = z.object({ categoryId: z.string().min(1) }).parse(request.params);
+      const db = (request.server as { prisma?: typeof defaultPrisma }).prisma ?? defaultPrisma;
+      const service = new CategoryService(db);
+
+      const category = await service.deleteCategoryImage(orgId, categoryId);
       return sendData(reply, { category }, 200);
     }
   );
