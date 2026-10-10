@@ -32,6 +32,7 @@ import { Button } from '../../components/ui/button';
 import { SeoHead } from '../../components/seo/SeoHead';
 import { Link } from 'react-router-dom';
 import { CategoriesPage } from '../../features/inventory/components/CategoriesPage';
+import { ProductsPage } from '../../features/inventory/components/ProductsPage';
 
 interface InventoryWorkspacePageProps {
   organization: {
@@ -275,7 +276,7 @@ export function InventoryWorkspacePage({
                     onClick={() => {
                       setActiveTab(item.name);
                       setMobileMenuOpen(false);
-                      if (item.name !== 'Dashboard' && item.name !== 'Categories') {
+                      if (item.name !== 'Dashboard' && item.name !== 'Categories' && item.name !== 'Products') {
                         setActiveModal(item.name);
                       }
                     }}
@@ -407,6 +408,8 @@ export function InventoryWorkspacePage({
           <main className="flex-1 p-4 sm:p-6 lg:p-8 space-y-6 w-full mx-auto">
             {activeTab === 'Categories' ? (
               <CategoriesPage organization={organization} />
+            ) : activeTab === 'Products' ? (
+              <ProductsPage organization={organization} />
             ) : (
               <>
                 {/* ROW 1: TOP 4 METRIC CARDS */}
