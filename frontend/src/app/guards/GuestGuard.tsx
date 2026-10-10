@@ -19,8 +19,8 @@ export function GuestGuard({ children }: GuestGuardProps) {
 
   if (!isHydrated || status === 'authenticating') {
     return (
-      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-slate-100">
-        <Loader2 className="h-8 w-8 animate-spin text-indigo-500 mb-2" />
+      <div className="min-h-screen bg-[#111215] flex flex-col items-center justify-center text-slate-100">
+        <Loader2 className="h-8 w-8 animate-spin text-[#985184] mb-2" />
         <p className="text-xs text-slate-400">Loading...</p>
       </div>
     );

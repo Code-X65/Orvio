@@ -83,3 +83,19 @@
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
 }
+
+/* Orvio Brand Palette: Primary #985184 (Plum), Secondary #fbb945 (Warm Gold) - Plain Solid Colors */
+.brand-btn-primary {
+  background-color: #985184;
+  color: #ffffff;
+}
+.brand-btn-primary:hover {
+  background-color: #854372;
+}
+.brand-text-primary {
+  color: #985184;
+}
+.brand-text-secondary {
+  color: #fbb945;
+}
+

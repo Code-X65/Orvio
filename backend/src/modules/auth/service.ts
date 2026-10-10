@@ -24,6 +24,7 @@ import { AppError } from '../../lib/errors.js';
 import crypto from 'node:crypto';
 import { isDisposableEmail, type RegisterInput, type UpdateProfileInput } from './schemas.js';
 import type { StartTrialInput, SetupPasswordAndVerifyInput } from './trial.schema.js';
+import { defaultAppCache } from '../../infrastructure/cache/in-memory-cache.js';
 
 export function getTenantUrl(subdomain: string): string {
   const protocol = env.NODE_ENV === 'production' ? 'https' : 'http';
@@ -185,8 +186,10 @@ export class AuthService {
               data: {
                 name: input.organizationName.trim(),
                 status: 'pending',
-                plan_code: 'trial',
+                plan_code: input.planCode || input.plan || 'trial',
                 trial_ends_at: trialEndsAt,
+                timezone: input.timezone || 'Africa/Lagos',
+                currency: input.currency || 'NGN',
                 description: input.organizationSize ? `Organization size: ${input.organizationSize}` : undefined,
               },
             })
@@ -195,10 +198,10 @@ export class AuthService {
                 name: input.organizationName.trim(),
                 subdomain: cleanSubdomain,
                 status: 'pending',
-                plan_code: 'trial',
+                plan_code: input.planCode || input.plan || 'trial',
                 trial_ends_at: trialEndsAt,
-                timezone: 'Africa/Lagos',
-                currency: 'NGN',
+                timezone: input.timezone || 'Africa/Lagos',
+                currency: input.currency || 'NGN',
                 country: input.country || 'NG',
                 description: input.organizationSize ? `Organization size: ${input.organizationSize}` : undefined,
               },
@@ -513,6 +516,9 @@ export class AuthService {
       selectedApps: input.selectedApps,
       primaryApp: input.primaryApp,
       marketingOptIn: input.marketingOptIn,
+      planCode: input.planCode || input.plan || 'bundle',
+      timezone: input.timezone || 'Africa/Lagos',
+      currency: input.currency || 'NGN',
       country: 'Nigeria',
       language: 'English',
       organizationSize: '1 - 5 employees',

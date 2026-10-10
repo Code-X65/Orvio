@@ -28,6 +28,10 @@ export const startTrialSchema = z
     organizationSize: z.string().optional().default('1 - 5 employees'),
     primaryInterest: z.string().optional().default('Use it in my organization'),
     password: z.string().min(12).optional(),
+    plan: z.string().optional(),
+    planCode: z.string().optional(),
+    timezone: z.string().optional().default('Africa/Lagos'),
+    currency: z.string().optional().default('NGN'),
     termsAccepted: z.literal(true, {
       errorMap: () => ({ message: 'You must accept the Terms of Service to continue' }),
     }),

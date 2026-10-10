@@ -89,12 +89,14 @@ model Organization {
   created_at      DateTime     @default(now())
   updated_at      DateTime     @updatedAt
 
-  memberships     Membership[]
-  branches        Branch[]
-  products        WorkspaceProduct[]
-  invitations     WorkspaceInvitation[]
-  onboarding_flow OnboardingFlow?
-  audit_logs      AuditLog[]
+  memberships          Membership[]
+  branches             Branch[]
+  products             WorkspaceProduct[]
+  invitations          WorkspaceInvitation[]
+  onboarding_flow      OnboardingFlow?
+  inventory_onboarding InventoryOnboarding?
+  categories           Category[]
+  audit_logs           AuditLog[]
 
   @@map("organizations")
 }
@@ -118,20 +120,22 @@ model Membership {
 }
 
 model Branch {
-  id          String        @id @default(cuid())
-  org_id      String
-  name        String
-  type        branch_type   @default(store)
-  status      branch_status @default(active)
-  product_key String?       @default("inventory")
-  is_primary  Boolean       @default(true)
-  phone       String?
-  email       String?
-  address     Json?
-  created_at  DateTime      @default(now())
-  updated_at  DateTime      @updatedAt
+  id                    String                @id @default(cuid())
+  org_id                String
+  name                  String
+  code                  String?
+  type                  branch_type           @default(store)
+  status                branch_status         @default(active)
+  product_key           String?               @default("inventory")
+  is_primary            Boolean               @default(true)
+  phone                 String?
+  email                 String?
+  address               Json?
+  created_at            DateTime              @default(now())
+  updated_at            DateTime              @updatedAt
 
-  organization Organization @relation(fields: [org_id], references: [id], onDelete: Cascade)
+  organization          Organization          @relation(fields: [org_id], references: [id], onDelete: Cascade)
+  inventory_onboardings InventoryOnboarding[]
 
   @@index([org_id])
   @@map("branches")
@@ -188,6 +192,24 @@ model OnboardingFlow {
   organization Organization @relation(fields: [org_id], references: [id], onDelete: Cascade)
 
   @@map("onboarding_flows")
+}
+
+model InventoryOnboarding {
+  id           String    @id @default(cuid())
+  org_id       String    @unique
+  branch_id    String?
+  status       String    @default("pending") // pending | completed
+  step_data    Json?
+  completed_at DateTime?
+  created_at   DateTime  @default(now())
+  updated_at   DateTime  @updatedAt
+
+  organization Organization @relation(fields: [org_id], references: [id], onDelete: Cascade)
+  branch       Branch?      @relation(fields: [branch_id], references: [id], onDelete: SetNull)
+
+  @@index([org_id])
+  @@index([branch_id])
+  @@map("inventory_onboardings")
 }
 
 model VerificationToken {
@@ -270,4 +292,26 @@ model AuditLog {
   @@index([event])
   @@index([created_at])
   @@map("audit_logs")
+}
+
+model Category {
+  id            String    @id @default(cuid())
+  org_id        String
+  name          String
+  slug          String
+  description   String?
+  parent_id     String?
+  sort_order    Int       @default(0)
+  is_active     Boolean   @default(true)
+  created_at    DateTime  @default(now())
+  updated_at    DateTime  @updatedAt
+
+  organization  Organization  @relation(fields: [org_id], references: [id], onDelete: Cascade)
+  parent        Category?     @relation("CategoryHierarchy", fields: [parent_id], references: [id], onDelete: Cascade)
+  children      Category[]    @relation("CategoryHierarchy")
+
+  @@unique([org_id, slug])
+  @@index([org_id])
+  @@index([parent_id])
+  @@map("categories")
 }

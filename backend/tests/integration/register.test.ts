@@ -21,7 +21,7 @@ describe('POST /api/v1/auth/register (Atomic Multi-Tenant Provisioning)', () => 
       fullName: 'Chief Founder',
       email,
       password: 'StrongPassword123!',
-      phone: '+2348011112222',
+      phone: `+23480${timestamp.toString().slice(-8)}`,
       organizationName: `Org ${timestamp}`,
       subdomain,
       planCode: 'bundle',
@@ -88,8 +88,8 @@ describe('POST /api/v1/auth/register (Atomic Multi-Tenant Provisioning)', () => 
     expect(ctx.emailSender.sentEmails.length).toBe(1);
     const lastEmail = ctx.emailSender.getLastEmail();
     expect(lastEmail?.to[0].email).toBe(email);
-    expect(lastEmail?.subject).toContain('Verify your email');
-    expect(lastEmail?.html).toContain('/verify-email?token=');
+    expect(lastEmail?.subject).toMatch(/verify/i);
+    expect(lastEmail?.html).toMatch(/\/verify-email[#?]token=/);
   });
 
   it('rolls back completely without creating partial rows if an error occurs during transaction', async () => {

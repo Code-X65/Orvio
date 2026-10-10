@@ -15,6 +15,7 @@ import { idempotencyOnSendHook } from './middleware/idempotency.js';
 import { authRoutes } from './modules/auth/auth.routes.js';
 import { orgRoutes } from './modules/organizations/org.routes.js';
 import { onboardingRoutes } from './modules/onboarding/onboarding.routes.js';
+import { inventoryRoutes } from './modules/inventory/routes.js';
 
 export interface AppDeps {
   prisma?: PrismaClient;
@@ -54,6 +55,8 @@ export function buildApp(deps?: AppDeps): FastifyInstance {
 
   // CORS configuration
   const allowedOrigins = env.CORS_ORIGIN.split(',').map((o) => o.trim());
+  const cleanBaseDomain = (env.APP_BASE_DOMAIN || 'orvio.com').split(':')[0];
+
   app.register(cors, {
     origin: (origin, cb) => {
       if (!origin) {
@@ -66,21 +69,54 @@ export function buildApp(deps?: AppDeps): FastifyInstance {
         const url = new URL(origin);
         const hostname = url.hostname;
 
-        // Allow localhost and any tenant subdomains on localhost (e.g. coreconnectacademy.localhost)
-        if (hostname === 'localhost' || hostname.endsWith('.localhost')) {
+        // Allow localhost and 127.0.0.1 and any subdomains (e.g. acme.localhost, coreconnect.127.0.0.1)
+        if (
+          hostname === 'localhost' ||
+          hostname.endsWith('.localhost') ||
+          hostname === '127.0.0.1' ||
+          hostname.endsWith('.127.0.0.1') ||
+          hostname === '0.0.0.0'
+        ) {
           return cb(null, true);
         }
 
         // Allow production root domain and all tenant subdomains (e.g. *.orvio.com)
-        const baseDomain = env.APP_BASE_DOMAIN || 'orvio.com';
-        if (hostname === baseDomain || hostname.endsWith(`.${baseDomain}`)) {
+        if (hostname === cleanBaseDomain || hostname.endsWith(`.${cleanBaseDomain}`)) {
           return cb(null, true);
         }
       } catch {
         // Ignore URL parse failures
       }
-      cb(new Error('Not allowed by CORS'), false);
+      return cb(null, false);
     },
+    methods: ['GET', 'HEAD', 'PUT', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'x-tenant-subdomain',
+      'X-Tenant-Subdomain',
+      'idempotency-key',
+      'Idempotency-Key',
+      'x-idempotency-key',
+      'X-Idempotency-Key',
+      'x-request-id',
+      'X-Request-Id',
+      'Accept',
+      'Origin',
+      'X-Requested-With',
+    ],
+    exposedHeaders: [
+      'x-request-id',
+      'X-Request-Id',
+      'x-tenant-subdomain',
+      'X-Tenant-Subdomain',
+      'x-idempotency-key',
+      'X-Idempotency-Key',
+      'idempotency-key',
+      'Idempotency-Key',
+      'x-idempotency-replayed',
+      'X-Idempotency-Replayed',
+    ],
     credentials: true,
   });
 
@@ -148,6 +184,7 @@ export function buildApp(deps?: AppDeps): FastifyInstance {
   app.register(orgRoutes, { prefix: '/api/v1/orgs' });
   app.register(orgRoutes, { prefix: '/api/v1/organizations' });
   app.register(onboardingRoutes, { prefix: '/api/v1/onboarding' });
+  app.register(inventoryRoutes, { prefix: '/api/v1/inventory' });
 
   return app;
 }

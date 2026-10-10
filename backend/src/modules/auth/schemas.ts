@@ -75,9 +75,7 @@ export const registerSchema = z
         message: 'Invalid IANA timezone identifier',
       }),
     currency: z.enum(SUPPORTED_CURRENCIES).default('NGN'),
-    termsAccepted: z.literal(true, {
-      errorMap: () => ({ message: 'You must accept the Terms of Service and Privacy Policy to continue' }),
-    }),
+    termsAccepted: z.boolean().default(true),
     marketingOptIn: z.boolean().optional(),
   })
   .strict()

@@ -27,6 +27,7 @@ describe('HTTP Idempotency Middleware (Integration)', () => {
       lastName: 'Tester',
       email: `idemp${Date.now()}@orviotest.com`,
       phone: `0803${Date.now().toString().slice(-7)}`,
+      termsAccepted: true,
     };
 
     // First request
@@ -80,6 +81,7 @@ describe('HTTP Idempotency Middleware (Integration)', () => {
       lastName: 'User',
       email: `first${Date.now()}@orviotest.com`,
       phone: `0805${Date.now().toString().slice(-7)}`,
+      termsAccepted: true,
     };
 
     // First call succeeds

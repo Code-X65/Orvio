@@ -27,7 +27,7 @@ export function WorkspaceNotFoundPage({ subdomain }: WorkspaceNotFoundPageProps)
         {/* Minimal Header */}
         <header className="p-6 max-w-7xl mx-auto w-full flex items-center justify-between z-10">
           <a href={accountsUrl} className="flex items-center gap-2.5 group">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-tr from-indigo-500 to-sky-400 text-white font-bold shadow-md shadow-indigo-500/25 group-hover:scale-105 transition-transform">
+            <div className="flex h-9 w-9 items-center justify-center rounded-sm bg-[#985184] text-white font-bold shadow-md group-hover:scale-105 transition-transform">
               <Building2 className="h-5 w-5" />
             </div>
             <span className="font-extrabold text-white text-lg tracking-tight">Orvio</span>
@@ -38,12 +38,12 @@ export function WorkspaceNotFoundPage({ subdomain }: WorkspaceNotFoundPageProps)
         <main className="flex-1 flex items-center justify-center px-4 sm:px-6 py-12 z-10">
           <div className="max-w-md w-full text-center space-y-6">
             {/* Warning Badge Icon */}
-            <div className="mx-auto w-16 h-16 rounded-3xl bg-rose-500/10 border border-rose-500/30 text-rose-400 flex items-center justify-center shadow-lg shadow-rose-500/10">
-              <ShieldAlert className="h-8 w-8" />
+            <div className="mx-auto w-14 h-14 rounded-sm bg-rose-500/10 border border-rose-500/30 text-rose-400 flex items-center justify-center shadow-lg shadow-rose-500/10">
+              <ShieldAlert className="h-7 w-7" />
             </div>
 
             <div className="space-y-2">
-              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-mono font-bold bg-rose-500/10 text-rose-300 border border-rose-500/30">
+              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-sm text-xs font-mono font-bold bg-rose-500/10 text-rose-300 border border-rose-500/30">
                 <span>404 · Unclaimed Subdomain</span>
               </div>
               <h1 className="text-3xl font-extrabold text-white tracking-tight">
@@ -59,7 +59,7 @@ export function WorkspaceNotFoundPage({ subdomain }: WorkspaceNotFoundPageProps)
             </div>
 
             {/* Action Cards */}
-            <div className="p-5 rounded-3xl bg-slate-900/80 border border-slate-800/80 space-y-4 backdrop-blur-md shadow-2xl">
+            <div className="p-5 rounded-sm bg-transparent border-t border-white/5 space-y-4">
               <div className="text-xs text-slate-300 font-medium">
                 Want to claim this business address for your organization?
               </div>
@@ -68,12 +68,12 @@ export function WorkspaceNotFoundPage({ subdomain }: WorkspaceNotFoundPageProps)
                 <Button
                   type="button"
                   variant="primary"
-                  className="w-full h-11 text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl shadow-lg shadow-indigo-600/30 flex items-center justify-center gap-2 cursor-pointer"
+                  className="w-full h-10 text-xs font-bold bg-[#985184] hover:bg-[#854372] text-white rounded-sm shadow-sm flex items-center justify-center gap-2 cursor-pointer"
                   onClick={() => {
                     window.location.href = claimUrl;
                   }}
                 >
-                  <Sparkles className="h-4 w-4 text-indigo-200" />
+                  <Sparkles className="h-4 w-4 text-[#fbb945]" />
                   <span>Claim "{subdomain}" with 14-Day Free Trial</span>
                   <ArrowRight className="h-4 w-4" />
                 </Button>
@@ -81,7 +81,7 @@ export function WorkspaceNotFoundPage({ subdomain }: WorkspaceNotFoundPageProps)
                 <Button
                   type="button"
                   variant="outline"
-                  className="w-full h-10 text-xs font-bold border-slate-800 text-slate-400 hover:text-white hover:bg-slate-800/60 rounded-xl cursor-pointer"
+                  className="w-full h-10 text-xs font-bold border border-white/10 text-slate-400 hover:text-white hover:bg-white/5 rounded-sm cursor-pointer"
                   onClick={() => {
                     window.location.href = accountsUrl;
                   }}

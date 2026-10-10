@@ -4,6 +4,8 @@
  * In production: points to https://accounts.orvio.com or configured VITE_ACCOUNTS_URL.
  */
 
+export const ALLOWED_WORKSPACE_ROUTES = ['/inventory', '/dashboard', '/orvio'];
+
 export function getAccountsBaseUrl(): string {
   if (typeof window !== 'undefined') {
     const hostname = window.location.hostname;
@@ -35,10 +37,10 @@ export function getTrialUrl(): string {
   return `${getAccountsBaseUrl()}/trial`;
 }
 
-export function getLoginUrl(): string {
-  return `${getAccountsBaseUrl()}/login`;
+export function getLoginUrl(returnUrl?: string): string {
+  const base = `${getAccountsBaseUrl()}/login`;
+  return returnUrl ? `${base}?returnUrl=${encodeURIComponent(returnUrl)}` : base;
 }
-
 
 /**
  * Extracts any subdomain prefix from the current window location.
@@ -128,4 +130,74 @@ export function getSubdomainDisplaySuffix(): string {
     (typeof import.meta !== 'undefined' && import.meta.env?.VITE_APP_BASE_DOMAIN) ||
     'orvio.com';
   return `.${baseDomain}`;
+}
+
+/**
+ * Sanitizes and validates a requested returnUrl to ensure it is a safe relative workspace path.
+ * Fallback defaults to "/orvio" (Launchpad).
+ */
+export function sanitizeReturnUrl(rawUrl: string | null | undefined, fallback: string = '/orvio'): string {
+  if (!rawUrl || typeof rawUrl !== 'string') return fallback;
+
+  try {
+    const decoded = decodeURIComponent(rawUrl).trim();
+
+    // Prevent open redirects (must start with single '/', no protocol or protocol-relative slashes)
+    if (!decoded.startsWith('/') || decoded.startsWith('//') || decoded.startsWith('/\\')) {
+      return fallback;
+    }
+
+    const pathname = decoded.split('?')[0].split('#')[0].toLowerCase();
+
+    // Reject authentication routes
+    const isAuthRoute = [
+      '/login',
+      '/signup',
+      '/forgot-password',
+      '/reset-password',
+      '/verify-email',
+      '/trial',
+    ].some((authPath) => pathname === authPath || pathname.startsWith(`${authPath}/`));
+
+    if (isAuthRoute) return fallback;
+
+    // Strict validation against registered workspace product routes
+    const isAllowed = ALLOWED_WORKSPACE_ROUTES.some(
+      (route) => pathname === route || pathname.startsWith(`${route}/`)
+    );
+
+    if (!isAllowed) return fallback;
+
+    return decoded;
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * Stores the user's last visited workspace path for seamless resume.
+ */
+export function saveLastVisitedPath(subdomainOrOrgId: string, path: string): void {
+  if (typeof window === 'undefined' || !subdomainOrOrgId) return;
+  const sanitized = sanitizeReturnUrl(path, '');
+  if (!sanitized) return;
+
+  try {
+    localStorage.setItem(`orvio_last_path_${subdomainOrOrgId.toLowerCase()}`, sanitized);
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+/**
+ * Retrieves the user's last visited workspace path for an organization.
+ */
+export function getLastVisitedPath(subdomainOrOrgId: string): string | null {
+  if (typeof window === 'undefined' || !subdomainOrOrgId) return null;
+  try {
+    const stored = localStorage.getItem(`orvio_last_path_${subdomainOrOrgId.toLowerCase()}`);
+    return sanitizeReturnUrl(stored, '') || null;
+  } catch {
+    return null;
+  }
 }

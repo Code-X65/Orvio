@@ -8,6 +8,7 @@ import {
 } from './subdomain.js';
 import { AppError } from '../../lib/errors.js';
 import { env } from '../../config/env.js';
+import { defaultAppCache } from '../../infrastructure/cache/in-memory-cache.js';
 
 export interface SubdomainAvailabilityResult {
   available: boolean;
@@ -54,23 +55,31 @@ export class OrgService {
       };
     }
 
-    const existing = await this.db.organization.findUnique({
-      where: { subdomain },
-    });
+    const cacheKey = `subdomain_avail:${subdomain}`;
+    return await defaultAppCache.fetchOrCompute(
+      cacheKey,
+      async () => {
+        const existing = await this.db.organization.findUnique({
+          where: { subdomain },
+          select: { id: true },
+        });
 
-    if (existing) {
-      return {
-        available: false,
-        subdomain,
-        reason: 'ALREADY_TAKEN',
-        suggestions: nextAvailableCandidates(subdomain),
-      };
-    }
+        if (existing) {
+          return {
+            available: false,
+            subdomain,
+            reason: 'ALREADY_TAKEN',
+            suggestions: nextAvailableCandidates(subdomain),
+          };
+        }
 
-    return {
-      available: true,
-      subdomain,
-    };
+        return {
+          available: true,
+          subdomain,
+        };
+      },
+      10_000 // 10s TTL
+    );
   }
 
   // Backwards compatible method name
@@ -85,26 +94,34 @@ export class OrgService {
     status?: string;
   }> {
     const subdomain = deriveSubdomain(rawSubdomain);
-    const org = await this.db.organization.findUnique({
-      where: { subdomain },
-      select: {
-        id: true,
-        name: true,
-        subdomain: true,
-        status: true,
+    const cacheKey = `public_org_info:${subdomain}`;
+
+    return await defaultAppCache.fetchOrCompute(
+      cacheKey,
+      async () => {
+        const org = await this.db.organization.findUnique({
+          where: { subdomain },
+          select: {
+            id: true,
+            name: true,
+            subdomain: true,
+            status: true,
+          },
+        });
+
+        if (!org) {
+          return { exists: false, subdomain };
+        }
+
+        return {
+          exists: true,
+          name: org.name,
+          subdomain: org.subdomain,
+          status: org.status,
+        };
       },
-    });
-
-    if (!org) {
-      return { exists: false, subdomain };
-    }
-
-    return {
-      exists: true,
-      name: org.name,
-      subdomain: org.subdomain,
-      status: org.status,
-    };
+      60_000 // 60s TTL
+    );
   }
 
   async getOrganizationById(id: string): Promise<Organization | null> {
@@ -114,42 +131,50 @@ export class OrgService {
   }
 
   async getOrganizationDetails(orgId: string, userId: string): Promise<OrganizationDetailsResult> {
-    const org = await this.db.organization.findUnique({
-      where: { id: orgId },
-      include: {
-        branches: {
-          orderBy: { created_at: 'asc' },
-        },
-        products: {
-          orderBy: { created_at: 'asc' },
-        },
+    const cacheKey = `org_details:${orgId}:${userId}`;
+
+    return await defaultAppCache.fetchOrCompute(
+      cacheKey,
+      async () => {
+        const org = await this.db.organization.findUnique({
+          where: { id: orgId },
+          include: {
+            branches: {
+              orderBy: { created_at: 'asc' },
+            },
+            products: {
+              orderBy: { created_at: 'asc' },
+            },
+          },
+        });
+
+        if (!org) {
+          throw new AppError('ORGANIZATION_NOT_FOUND', 'Organization not found', 404);
+        }
+
+        const membership = await this.db.membership.findFirst({
+          where: {
+            org_id: orgId,
+            user_id: userId,
+          },
+        });
+
+        const defaultBranch = org.branches.find((b) => b.type === 'store') ?? org.branches[0] ?? null;
+        const orgUrl = this.computeOrgUrl(org.subdomain);
+
+        return {
+          organization: {
+            ...org,
+            url: orgUrl,
+          },
+          membership,
+          branch: defaultBranch,
+          branches: org.branches,
+          products: org.products,
+        };
       },
-    });
-
-    if (!org) {
-      throw new AppError('ORGANIZATION_NOT_FOUND', 'Organization not found', 404);
-    }
-
-    const membership = await this.db.membership.findFirst({
-      where: {
-        org_id: orgId,
-        user_id: userId,
-      },
-    });
-
-    const defaultBranch = org.branches.find((b) => b.type === 'store') ?? org.branches[0] ?? null;
-    const orgUrl = this.computeOrgUrl(org.subdomain);
-
-    return {
-      organization: {
-        ...org,
-        url: orgUrl,
-      },
-      membership,
-      branch: defaultBranch,
-      branches: org.branches,
-      products: org.products,
-    };
+      30_000 // 30s TTL
+    );
   }
 
   async addProduct(orgId: string, productKey: string): Promise<WorkspaceProduct[]> {
@@ -174,6 +199,9 @@ export class OrgService {
         },
       });
     }
+
+    // Invalidate cached organization details
+    defaultAppCache.clearPrefix(`org_details:${orgId}`);
 
     return this.db.workspaceProduct.findMany({
       where: { org_id: orgId },
@@ -218,6 +246,9 @@ export class OrgService {
       }
     });
 
+    // Invalidate cached organization details
+    defaultAppCache.clearPrefix(`org_details:${orgId}`);
+
     return this.db.workspaceProduct.findMany({
       where: { org_id: orgId },
       orderBy: { created_at: 'asc' },
@@ -243,6 +274,9 @@ export class OrgService {
         data: { is_primary: true },
       });
     });
+
+    // Invalidate cached organization details
+    defaultAppCache.clearPrefix(`org_details:${orgId}`);
 
     return this.db.workspaceProduct.findMany({
       where: { org_id: orgId },
@@ -272,7 +306,7 @@ export class OrgService {
     const currentSettings = (existing.settings && typeof existing.settings === 'object' ? existing.settings : {}) as Record<string, any>;
     const mergedSettings = { ...currentSettings, ...newSettings };
 
-    return this.db.workspaceProduct.update({
+    const updated = await this.db.workspaceProduct.update({
       where: {
         org_id_product_key: {
           org_id: orgId,
@@ -284,6 +318,11 @@ export class OrgService {
         updated_at: new Date(),
       },
     });
+
+    // Invalidate cached organization details
+    defaultAppCache.clearPrefix(`org_details:${orgId}`);
+
+    return updated;
   }
 
   async listMembers(orgId: string): Promise<{
@@ -297,38 +336,46 @@ export class OrgService {
     }>;
     count: number;
   }> {
-    const memberships = await this.db.membership.findMany({
-      where: { org_id: orgId },
-      include: {
-        user: {
-          select: {
-            id: true,
-            full_name: true,
-            email: true,
-            status: true,
-          },
-        },
-      },
-      orderBy: { created_at: 'asc' },
-    });
+    const cacheKey = `org_members:${orgId}`;
 
-    return {
-      count: memberships.length,
-      members: memberships.map((m) => ({
-        id: m.id,
-        fullName: m.user.full_name,
-        email: m.user.email,
-        role: m.role,
-        status: m.status,
-        createdAt: m.created_at.toISOString(),
-      })),
-    };
+    return await defaultAppCache.fetchOrCompute(
+      cacheKey,
+      async () => {
+        const memberships = await this.db.membership.findMany({
+          where: { org_id: orgId },
+          include: {
+            user: {
+              select: {
+                id: true,
+                full_name: true,
+                email: true,
+                status: true,
+              },
+            },
+          },
+          orderBy: { created_at: 'asc' },
+        });
+
+        return {
+          count: memberships.length,
+          members: memberships.map((m) => ({
+            id: m.id,
+            fullName: m.user.full_name,
+            email: m.user.email,
+            role: m.role,
+            status: m.status,
+            createdAt: m.created_at.toISOString(),
+          })),
+        };
+      },
+      20_000 // 20s TTL
+    );
   }
 
   async createOrganizationWithOwner(params: CreateOrgWithOwnerParams): Promise<Organization> {
     assertValidSubdomain(params.subdomain);
 
-    return this.db.$transaction(async (tx) => {
+    const result = await this.db.$transaction(async (tx) => {
       const existing = await tx.organization.findUnique({
         where: { subdomain: params.subdomain },
       });
@@ -380,6 +427,12 @@ export class OrgService {
 
       return org;
     });
+
+    // Invalidate subdomain availability and public info
+    defaultAppCache.delete(`subdomain_avail:${params.subdomain}`);
+    defaultAppCache.delete(`public_org_info:${params.subdomain}`);
+
+    return result;
   }
 }
 

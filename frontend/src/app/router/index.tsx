@@ -23,6 +23,7 @@ import { VerifyEmailPage } from '../../pages/auth/VerifyEmailPage';
 import { TrialPage } from '../../pages/marketing/TrialPage';
 import { TrialThanksPage } from '../../pages/marketing/TrialThanksPage';
 import { TenantDashboardPage } from '../../pages/app/TenantDashboardPage';
+import { InventoryPage } from '../../pages/app/InventoryPage';
 import { AuthGuard } from '../guards/AuthGuard';
 import { GuestGuard } from '../guards/GuestGuard';
 import { SubdomainGuard } from '../guards/SubdomainGuard';
@@ -72,6 +73,14 @@ export const marketingRouter = createBrowserRouter([
     element: (
       <AuthGuard>
         <TenantDashboardPage />
+      </AuthGuard>
+    ),
+  },
+  {
+    path: '/inventory',
+    element: (
+      <AuthGuard>
+        <InventoryPage />
       </AuthGuard>
     ),
   },
@@ -144,6 +153,14 @@ export const tenantRouter = createBrowserRouter([
     element: (
       <AuthGuard>
         <TenantDashboardPage />
+      </AuthGuard>
+    ),
+  },
+  {
+    path: '/inventory',
+    element: (
+      <AuthGuard>
+        <InventoryPage />
       </AuthGuard>
     ),
   },

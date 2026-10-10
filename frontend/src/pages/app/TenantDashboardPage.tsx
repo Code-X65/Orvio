@@ -24,6 +24,7 @@ import { toast } from 'sonner';
 import { logout } from '../../lib/api/auth';
 import { ApiError } from '../../lib/api/client';
 import { useAuthStore } from '../../stores/auth-store';
+import { useNavigate } from 'react-router-dom';
 
 function getErrorMessage(err: unknown, fallback: string): string {
   if (err instanceof ApiError) {
@@ -56,6 +57,7 @@ function TenantDashboardInner() {
   } = useWorkspace();
 
   const currentSubdomain = getSubdomainFromHostname() || organization?.subdomain || 'demo';
+  const navigate = useNavigate();
 
   const [resendingEmail, setResendingEmail] = React.useState(false);
   const [resendCooldown, setResendCooldown] = React.useState(0);
@@ -105,11 +107,11 @@ function TenantDashboardInner() {
 
   const userInitials = user?.fullName
     ? user.fullName
-        .split(' ')
-        .map((n) => n[0])
-        .slice(0, 2)
-        .join('')
-        .toUpperCase()
+      .split(' ')
+      .map((n) => n[0])
+      .slice(0, 2)
+      .join('')
+      .toUpperCase()
     : 'J';
 
   // Build the icon renderer helper without background colors
@@ -162,6 +164,10 @@ function TenantDashboardInner() {
       isPrimary: p.is_primary,
       iconRenderer: getAppTileIcon(p.product_key),
       onClick: () => {
+        if (p.product_key.toLowerCase() === 'inventory') {
+          navigate('/inventory');
+          return;
+        }
         setSelectedAppId(p.product_key);
         showRedirectPopup(appName, `Opening workspace module for ${appName}...`);
       },
@@ -216,7 +222,7 @@ function TenantDashboardInner() {
     name: 'Settings',
     iconRenderer: (
       <div className="w-14 h-14 bg-transparent flex items-center justify-center group-hover:scale-105 transition-transform">
-        <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-amber-500 to-orange-500 flex items-center justify-center shadow-md">
+        <div className="w-10 h-10 rounded-xl bg-[#985184] flex items-center justify-center shadow-md">
           <div className="w-4 h-4 rounded-full bg-[#111215]" />
         </div>
       </div>
@@ -243,14 +249,14 @@ function TenantDashboardInner() {
       />
 
       <div
-        className="min-h-screen bg-[#111215] text-slate-100 flex flex-col selection:bg-indigo-500 selection:text-white relative overflow-x-hidden font-sans"
+        className="min-h-screen bg-[#111215] text-slate-100 flex flex-col selection:bg-[#985184] selection:text-white relative overflow-x-hidden font-sans"
         style={{
           backgroundImage: 'radial-gradient(circle, rgba(255, 255, 255, 0.07) 1px, transparent 1px)',
           backgroundSize: '24px 24px',
         }}
       >
-        {/* Subtle Ambient Glow */}
-        <div className="fixed top-1/3 left-1/2 -translate-x-1/2 w-[600px] h-[300px] bg-indigo-900/10 rounded-full blur-[140px] pointer-events-none -z-10" />
+        {/* Subtle Ambient Glow with #985184 */}
+        <div className="fixed top-1/3 left-1/2 -translate-x-1/2 w-[600px] h-[300px] bg-[#985184]/12 rounded-full blur-[140px] pointer-events-none -z-10" />
 
         {/* Top Header Bar */}
         <header className="h-14 bg-transparent px-4 sm:px-8 flex items-center justify-between sticky top-0 z-40">
@@ -272,7 +278,7 @@ function TenantDashboardInner() {
               className="flex items-center gap-1 px-1.5 py-1 text-slate-400 hover:text-white rounded-lg transition-colors cursor-pointer group"
               title="AI Assistant"
             >
-              <span className="text-xs font-black bg-gradient-to-r from-amber-400 via-rose-400 to-indigo-400 bg-clip-text text-transparent group-hover:brightness-125">
+              <span className="text-xs font-black text-[#fbb945] group-hover:brightness-125">
                 AI
               </span>
             </button>
@@ -295,7 +301,7 @@ function TenantDashboardInner() {
               title="Recent Notifications"
             >
               <Clock className="h-4 w-4" />
-              <span className="absolute -top-0.5 -right-0.5 bg-rose-500 text-[9px] font-bold text-white w-3.5 h-3.5 rounded-full flex items-center justify-center shadow">
+              <span className="absolute -top-0.5 -right-0.5 bg-[#fbb945] text-[9px] font-bold text-[#111215] w-3.5 h-3.5 rounded-full flex items-center justify-center shadow">
                 3
               </span>
             </button>
@@ -310,7 +316,7 @@ function TenantDashboardInner() {
               <button
                 type="button"
                 onClick={() => setIsProfileMenuOpen(!isProfileMenuOpen)}
-                className="w-7 h-7 rounded-full bg-[#185a53] text-teal-200 font-bold text-xs flex items-center justify-center shadow cursor-pointer hover:ring-2 hover:ring-teal-400/30 transition-all"
+                className="w-7 h-7 rounded-full bg-[#985184] text-white font-bold text-xs flex items-center justify-center shadow cursor-pointer hover:ring-2 hover:ring-[#fbb945]/40 transition-all"
               >
                 {userInitials}
               </button>
@@ -435,11 +441,10 @@ function TenantDashboardInner() {
 
                     {/* App Label */}
                     <span
-                      className={`text-xs font-medium mt-2.5 text-center transition-colors truncate max-w-[85px] ${
-                        isSelected
+                      className={`text-xs font-medium mt-2.5 text-center transition-colors truncate max-w-[85px] ${isSelected
                           ? 'text-white font-semibold'
                           : 'text-slate-300 group-hover:text-white'
-                      }`}
+                        }`}
                     >
                       {app.name}
                     </span>
@@ -453,18 +458,18 @@ function TenantDashboardInner() {
 
       {/* Redirecting Interactive Popup Dialog */}
       {activeAppModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-in fade-in duration-150">
-          <div className="bg-[#181a20] border border-white/10 rounded-3xl p-6 max-w-sm w-full text-center space-y-4 shadow-2xl relative">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-md animate-in fade-in duration-150">
+          <div className="bg-[#111215] border border-white/10 rounded-sm p-6 max-w-sm w-full text-center space-y-4 shadow-2xl relative">
             <button
               type="button"
               onClick={() => setActiveAppModal(null)}
-              className="absolute top-4 right-4 p-1 text-slate-400 hover:text-white rounded-lg hover:bg-white/5"
+              className="absolute top-4 right-4 p-1 text-slate-400 hover:text-white rounded-sm hover:bg-white/5 cursor-pointer"
             >
               <X className="h-4 w-4" />
             </button>
 
-            <div className="w-12 h-12 rounded-2xl bg-indigo-500/10 text-indigo-400 mx-auto flex items-center justify-center">
-              <Loader2 className="h-6 w-6 animate-spin text-indigo-400" />
+            <div className="w-10 h-10 rounded-sm bg-[#fbb945]/10 text-[#985184] mx-auto flex items-center justify-center">
+              <Loader2 className="h-5 w-5 animate-spin text-[#985184]" />
             </div>
 
             <div>
@@ -480,7 +485,7 @@ function TenantDashboardInner() {
                 variant="outline"
                 size="sm"
                 onClick={() => setActiveAppModal(null)}
-                className="h-8 text-xs font-semibold border-white/10 text-slate-300 hover:text-white"
+                className="h-8 text-xs font-semibold rounded-sm border border-white/10 bg-transparent text-slate-300 hover:text-white hover:bg-white/5 cursor-pointer"
               >
                 Stay on Launchpad
               </Button>

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -19,8 +19,6 @@ import {
 } from 'lucide-react';
 import { SeoHead } from '../../components/seo/SeoHead';
 import { Button } from '../../components/ui/button';
-import { Input } from '../../components/ui/input';
-import { Card } from '../../components/ui/card';
 import { loginUser, checkSubdomainAvailability, requestMagicLogin } from '../../domains/auth/api';
 import { ApiError } from '../../lib/api';
 import { useAuthStore } from '../../stores/auth-store';
@@ -32,6 +30,8 @@ import {
   getMainMarketingUrl,
   getTrialUrl,
   getSubdomainDisplaySuffix,
+  sanitizeReturnUrl,
+  getLastVisitedPath,
 } from '../../app/config/authUrls';
 
 const LoginSchema = z.object({
@@ -70,6 +70,10 @@ export function LoginPage() {
     },
   });
 
+  const location = useLocation();
+  const searchParams = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '');
+  const rawReturnUrl = searchParams.get('returnUrl') || (location.state as { returnUrl?: string; from?: { pathname?: string } })?.returnUrl || (location.state as { from?: { pathname?: string } })?.from?.pathname;
+
   // 1. Handle Central Subdomain Lookup (on root domain or accounts subdomain)
   const handleSubdomainLookup = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -91,7 +95,8 @@ export function LoginPage() {
 
       // If available is FALSE and reason is ALREADY_TAKEN, the organization exists in database!
       if (!res.available && res.reason === 'ALREADY_TAKEN') {
-        const targetUrl = `${getTenantWorkspaceUrl(clean)}/login`;
+        const queryParam = rawReturnUrl ? `?returnUrl=${encodeURIComponent(rawReturnUrl)}` : '';
+        const targetUrl = `${getTenantWorkspaceUrl(clean)}/login${queryParam}`;
         window.location.href = targetUrl;
       } else {
         setSubdomainError(`No organization workspace found for "${clean}".`);
@@ -126,14 +131,18 @@ export function LoginPage() {
       toast.success(`Welcome back, ${response.user.fullName}!`);
 
       const currentSubdomain = getSubdomainFromHostname();
-      const targetSubdomain = response.organization?.subdomain;
+      const targetSubdomain = response.organization?.subdomain || tenantSlug;
+
+      // Determine return path: query param -> last visited path -> default to /orvio
+      const lastPath = targetSubdomain ? getLastVisitedPath(targetSubdomain) : null;
+      const targetDestination = sanitizeReturnUrl(rawReturnUrl || lastPath || '/orvio', '/orvio');
 
       if (targetSubdomain && currentSubdomain && currentSubdomain.toLowerCase() !== targetSubdomain.toLowerCase()) {
-        window.location.href = `${getTenantWorkspaceUrl(targetSubdomain)}/orvio?token=${encodeURIComponent(response.accessToken)}`;
+        window.location.href = `${getTenantWorkspaceUrl(targetSubdomain)}${targetDestination}?token=${encodeURIComponent(response.accessToken)}`;
       } else if (!currentSubdomain && targetSubdomain) {
-        window.location.href = `${getTenantWorkspaceUrl(targetSubdomain)}/orvio?token=${encodeURIComponent(response.accessToken)}`;
+        window.location.href = `${getTenantWorkspaceUrl(targetSubdomain)}${targetDestination}?token=${encodeURIComponent(response.accessToken)}`;
       } else {
-        navigate('/orvio');
+        navigate(targetDestination);
       }
     } catch (err) {
       if (err instanceof ApiError) {
@@ -188,47 +197,54 @@ export function LoginPage() {
         description="Access your Orvio Hub inventory, POS cashier desk, and business management apps."
       />
 
-      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-center py-12 px-4 sm:px-6 lg:px-8 relative overflow-hidden">
-        {/* Ambient atmospheric glows */}
-        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[300px] bg-indigo-600/10 rounded-full blur-3xl pointer-events-none" />
+      <div
+        className="min-h-screen bg-[#111215] text-slate-100 flex flex-col justify-center py-12 px-4 sm:px-6 lg:px-8 relative overflow-x-hidden font-sans selection:bg-[#985184] selection:text-white"
+        style={{
+          backgroundImage: 'radial-gradient(circle, rgba(255, 255, 255, 0.07) 1px, transparent 1px)',
+          backgroundSize: '24px 24px',
+        }}
+      >
+        {/* Subtle Ambient Glow with #985184 */}
+        <div className="fixed top-1/3 left-1/2 -translate-x-1/2 w-[600px] h-[300px] bg-[#985184]/12 rounded-full blur-[140px] pointer-events-none -z-10" />
 
         <div className="sm:mx-auto sm:w-full sm:max-w-md text-center z-10">
           <a
             href={getMainMarketingUrl()}
             className="inline-flex items-center gap-2.5 group"
           >
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-tr from-indigo-500 via-indigo-600 to-sky-400 text-white shadow-lg shadow-indigo-500/25 group-hover:scale-105 transition-transform">
-              <Zap className="h-5 w-5 fill-white" />
+            <div className="flex h-8 w-8 items-center justify-center rounded-sm bg-[#985184] text-white shadow-sm group-hover:scale-105 transition-transform">
+              <Zap className="h-4 w-4 fill-white" />
             </div>
-            <span className="text-2xl font-black tracking-tight text-white">
-              Orvio<span className="text-indigo-400">Hub</span>
+            <span className="text-xl font-black tracking-tight text-white">
+              Orvio<span className="text-[#fbb945]">Hub</span>
             </span>
           </a>
 
-          <h2 className="mt-4 text-3xl font-black tracking-tight text-white">
+          <h1 className="mt-4 text-2xl font-black tracking-tight text-white">
             {isTenant ? `Sign In to ${tenantSlug}` : 'Sign In to Your Workspace'}
-          </h2>
-          <p className="mt-1.5 text-xs text-slate-400">
+          </h1>
+          <p className="mt-1 text-xs text-slate-400">
             {isTenant
               ? 'Enter your credentials to access your organization dashboard'
               : 'Enter your organization subdomain to continue to your workspace'}
           </p>
         </div>
 
-        <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md z-10">
-          <Card className="bg-slate-900/90 border-slate-800 text-white shadow-2xl p-6 sm:p-8 backdrop-blur-xl rounded-3xl">
+        {/* Form Container (No card background, no borders, max rounded-sm) */}
+        <div className="mt-6 sm:mx-auto sm:w-full sm:max-w-md z-10">
+          <div className="bg-transparent text-white p-4 sm:p-6 w-full">
             {!isTenant ? (
               /* ============================================================ */
               /* 1. CENTRAL SUBDOMAIN LOOKUP FORM                             */
               /* ============================================================ */
-              <form onSubmit={handleSubdomainLookup} className="space-y-4">
-                <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-slate-300">
-                    Organization Subdomain <span className="text-rose-400">*</span>
+              <form onSubmit={handleSubdomainLookup} className="space-y-5">
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                    Organization Subdomain <span className="text-[#fbb945]">*</span>
                   </label>
 
-                  <div className="flex items-center rounded-xl bg-slate-950 border border-slate-800 focus-within:border-indigo-500 focus-within:ring-1 focus-within:ring-indigo-500/20 transition-all overflow-hidden">
-                    <span className="pl-3.5 pr-1 text-xs font-semibold text-slate-500 select-none">
+                  <div className="flex items-center border-0 border-b border-white/20 focus-within:border-[#985184] transition-colors">
+                    <span className="pr-1 text-xs text-slate-500 select-none font-mono">
                       https://
                     </span>
                     <input
@@ -244,10 +260,10 @@ export function LoginPage() {
                         );
                         if (subdomainError) setSubdomainError(null);
                       }}
-                      className="w-full bg-transparent px-1 py-3 text-xs text-white placeholder:text-slate-600 focus:outline-none font-medium"
+                      className="w-full bg-transparent py-2.5 text-xs text-white placeholder:text-slate-600 focus:outline-none font-medium"
                       autoFocus
                     />
-                    <span className="pr-3.5 pl-1 text-xs font-bold text-indigo-400 select-none">
+                    <span className="pl-1 text-xs font-mono text-[#fbb945] select-none font-bold">
                       {displaySuffix}
                     </span>
                   </div>
@@ -262,27 +278,26 @@ export function LoginPage() {
 
                 <Button
                   type="submit"
-                  variant="primary"
-                  size="lg"
+                  size="sm"
                   disabled={checkingSubdomain || !subdomainInput.trim()}
-                  className="w-full font-bold h-12 mt-2 shadow-lg shadow-indigo-600/30 rounded-xl cursor-pointer"
+                  className="w-full font-semibold h-10 mt-2 bg-[#985184] hover:bg-[#854372] text-white rounded-sm shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer text-xs"
                 >
                   {checkingSubdomain ? (
                     <>
-                      <Loader2 className="h-4 w-4 animate-spin" />
+                      <Loader2 className="h-3.5 w-3.5 animate-spin text-white" />
                       <span>Locating Workspace...</span>
                     </>
                   ) : (
                     <>
                       <span>Continue to Workspace</span>
-                      <ArrowRight className="h-4 w-4" />
+                      <ArrowRight className="h-3.5 w-3.5" />
                     </>
                   )}
                 </Button>
 
-                <div className="pt-4 border-t border-slate-800 text-center text-xs text-slate-400">
+                <div className="pt-4 border-t border-white/5 text-center text-xs text-slate-400">
                   Don't have a workspace yet?{' '}
-                  <a href={getTrialUrl()} className="text-indigo-400 hover:underline font-bold">
+                  <a href={getTrialUrl()} className="text-[#fbb945] hover:underline font-semibold">
                     Start 14-Day Free Trial
                   </a>
                 </div>
@@ -291,17 +306,17 @@ export function LoginPage() {
               /* ============================================================ */
               /* 2. DEDICATED TENANT SUBDOMAIN LOGIN FORM                     */
               /* ============================================================ */
-              <form onSubmit={handleSubmit(onTenantSubmit)} className="space-y-4">
+              <form onSubmit={handleSubmit(onTenantSubmit)} className="space-y-5">
                 {/* Active Subdomain Badge */}
-                <div className="flex items-center justify-between p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs">
+                <div className="flex items-center justify-between py-2 border-b border-white/10 text-xs">
                   <div className="flex items-center gap-2">
-                    <Building2 className="h-4 w-4 text-indigo-400" />
-                    <span className="font-mono text-slate-300 font-semibold">{tenantSlug}{displaySuffix}</span>
+                    <Building2 className="h-3.5 w-3.5 text-[#fbb945]" />
+                    <span className="font-mono text-slate-200 font-semibold">{tenantSlug}{displaySuffix}</span>
                   </div>
                   <a
                     href={`${getAccountsBaseUrl()}/login?switch=true`}
                     onClick={() => useAuthStore.getState().clearSession()}
-                    className="text-[11px] text-indigo-400 hover:underline font-medium cursor-pointer"
+                    className="text-[11px] text-[#fbb945] hover:underline font-medium cursor-pointer"
                   >
                     Switch
                   </a>
@@ -309,15 +324,15 @@ export function LoginPage() {
 
                 {/* Email Field */}
                 <div className="space-y-1">
-                  <label className="text-xs font-semibold text-slate-300">
-                    Business Email <span className="text-rose-400">*</span>
+                  <label className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                    Business Email <span className="text-[#fbb945]">*</span>
                   </label>
-                  <div className="relative">
-                    <Mail className="h-4 w-4 absolute left-3.5 top-3.5 text-slate-500" />
-                    <Input
+                  <div className="relative border-0 border-b border-white/20 focus-within:border-[#985184] transition-colors">
+                    <Mail className="h-3.5 w-3.5 absolute left-0 top-3 text-slate-500" />
+                    <input
                       type="email"
                       placeholder="admin@company.com"
-                      className="bg-slate-950 border-slate-800 pl-10 text-white text-xs h-11 rounded-xl"
+                      className="w-full bg-transparent pl-6 py-2 text-xs text-white placeholder:text-slate-600 focus:outline-none"
                       {...register('email')}
                     />
                   </div>
@@ -329,31 +344,31 @@ export function LoginPage() {
                 {/* Password Field */}
                 <div className="space-y-1">
                   <div className="flex items-center justify-between">
-                    <label className="text-xs font-semibold text-slate-300">
-                      Password <span className="text-rose-400">*</span>
+                    <label className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                      Password <span className="text-[#fbb945]">*</span>
                     </label>
                     <Link
                       to="/forgot-password"
-                      className="text-[11px] text-indigo-400 hover:underline"
+                      className="text-[11px] text-[#fbb945] hover:underline"
                     >
                       Forgot password?
                     </Link>
                   </div>
-                  <div className="relative">
-                    <Lock className="h-4 w-4 absolute left-3.5 top-3.5 text-slate-500" />
-                    <Input
+                  <div className="relative border-0 border-b border-white/20 focus-within:border-[#985184] transition-colors">
+                    <Lock className="h-3.5 w-3.5 absolute left-0 top-3 text-slate-500" />
+                    <input
                       type={showPassword ? 'text' : 'password'}
                       autoComplete="current-password"
                       placeholder="••••••••"
-                      className="bg-slate-950 border-slate-800 pl-10 pr-10 text-white text-xs h-11 rounded-xl"
+                      className="w-full bg-transparent pl-6 pr-8 py-2 text-xs text-white placeholder:text-slate-600 focus:outline-none"
                       {...register('password')}
                     />
                     <button
                       type="button"
                       onClick={() => setShowPassword(!showPassword)}
-                      className="absolute right-3.5 top-3.5 text-slate-500 hover:text-slate-300 cursor-pointer"
+                      className="absolute right-0 top-2.5 text-slate-500 hover:text-slate-300 cursor-pointer"
                     >
-                      {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      {showPassword ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                     </button>
                   </div>
                   {errors.password && (
@@ -364,33 +379,32 @@ export function LoginPage() {
                 {/* Submit Sign In Button */}
                 <Button
                   type="submit"
-                  variant="primary"
-                  size="lg"
+                  size="sm"
                   disabled={isSubmitting}
-                  className="w-full font-bold h-12 mt-2 shadow-lg shadow-indigo-600/30 rounded-xl cursor-pointer"
+                  className="w-full font-semibold h-10 mt-2 bg-[#985184] hover:bg-[#854372] text-white rounded-sm shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer text-xs"
                 >
                   {isSubmitting ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-white" />
                   ) : (
                     <>
                       <span>Sign In</span>
-                      <ArrowRight className="h-4 w-4" />
+                      <ArrowRight className="h-3.5 w-3.5" />
                     </>
                   )}
                 </Button>
 
-                {/* Passwordless Magic Sign-In / Setup Option for Owners */}
+                {/* Passwordless Magic Sign-In */}
                 <div className="pt-2 text-center">
                   <button
                     type="button"
                     onClick={handleRequestMagicLink}
                     disabled={sendingMagicLink}
-                    className="text-xs text-slate-400 hover:text-indigo-300 underline inline-flex items-center gap-1.5 cursor-pointer"
+                    className="text-xs text-slate-400 hover:text-[#fbb945] underline inline-flex items-center gap-1.5 cursor-pointer"
                   >
                     {sendingMagicLink ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      <Loader2 className="h-3.5 w-3.5 animate-spin text-[#985184]" />
                     ) : (
-                      <Sparkles className="h-3.5 w-3.5 text-indigo-400" />
+                      <Sparkles className="h-3.5 w-3.5 text-[#fbb945]" />
                     )}
                     <span>No password yet? Email me a sign-in setup link</span>
                   </button>
@@ -403,17 +417,18 @@ export function LoginPage() {
                   )}
                 </div>
 
-                <div className="pt-3 border-t border-slate-800 text-center text-xs text-slate-400">
+                <div className="pt-4 border-t border-white/5 text-center text-xs text-slate-400">
                   Need a new workspace?{' '}
-                  <a href={getTrialUrl()} className="text-indigo-400 hover:underline font-bold">
+                  <a href={getTrialUrl()} className="text-[#fbb945] hover:underline font-semibold">
                     Start 14-Day Free Trial
                   </a>
                 </div>
               </form>
             )}
-          </Card>
+          </div>
         </div>
       </div>
     </>
   );
 }
+export default LoginPage;

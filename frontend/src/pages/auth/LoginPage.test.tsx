@@ -1,18 +1,17 @@
 import { describe, expect, it, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { LoginPage } from './LoginPage';
 
-function renderLoginPage() {
+function renderLoginPage(initialEntries?: string[]) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
 
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
+      <MemoryRouter initialEntries={initialEntries || ['/login']}>
         <LoginPage />
       </MemoryRouter>
     </QueryClientProvider>
@@ -22,6 +21,7 @@ function renderLoginPage() {
 describe('LoginPage Component', () => {
   beforeEach(() => {
     sessionStorage.clear();
+    localStorage.clear();
   });
 
   it('renders Central Organization Subdomain discovery lookup on root domain', () => {
@@ -47,20 +47,20 @@ describe('LoginPage Component', () => {
     }, { timeout: 8000 });
   });
 
-  it('renders dedicated tenant email and password form when on tenant subdomain', () => {
-    // Mock hostname to tenant subdomain
+  it('renders dedicated tenant email and password form when on tenant subdomain and preserves returnUrl', () => {
+    // Mock hostname to tenant subdomain with returnUrl query parameter
     const originalLocation = window.location;
     delete (window as any).location;
     (window as any).location = {
-      href: 'http://fashben.localhost:4000/login',
+      href: 'http://fashben.localhost:4000/login?returnUrl=%2Finventory',
       hostname: 'fashben.localhost',
       port: '4000',
       protocol: 'http:',
-      search: '',
+      search: '?returnUrl=%2Finventory',
       pathname: '/login',
     };
 
-    renderLoginPage();
+    renderLoginPage(['/login?returnUrl=%2Finventory']);
 
     expect(screen.getByText(/Sign In to fashben/i)).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/admin@company.com/i)).toBeInTheDocument();

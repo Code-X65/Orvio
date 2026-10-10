@@ -1,9 +1,8 @@
 import * as React from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Sparkles, Zap, ArrowRight, CheckCircle2, Shield } from 'lucide-react';
+import { Sparkles, Zap, ArrowRight, CheckCircle2 } from 'lucide-react';
 import { SeoHead } from '../../components/seo/SeoHead';
 import { Button } from '../../components/ui/button';
-import { Card } from '../../components/ui/card';
 import { getTenantWorkspaceUrl } from '../../app/config/authUrls';
 
 export function TrialThanksPage() {
@@ -60,79 +59,85 @@ export function TrialThanksPage() {
         description="Your dedicated organization trial workspace is being initialized."
       />
 
-      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-center items-center py-12 px-4 relative overflow-hidden">
-        {/* Ambient atmospheric glows */}
-        <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-[700px] h-[400px] bg-indigo-600/20 rounded-full blur-3xl pointer-events-none animate-pulse" />
-        <div className="absolute bottom-10 left-1/3 w-[500px] h-[300px] bg-sky-500/15 rounded-full blur-3xl pointer-events-none" />
+      <div
+        className="min-h-screen bg-[#111215] text-slate-100 flex flex-col justify-center items-center py-12 px-4 relative overflow-x-hidden font-sans selection:bg-[#985184] selection:text-white"
+        style={{
+          backgroundImage: 'radial-gradient(circle, rgba(255, 255, 255, 0.07) 1px, transparent 1px)',
+          backgroundSize: '24px 24px',
+        }}
+      >
+        {/* Subtle Ambient Glow with #985184 */}
+        <div className="fixed top-1/3 left-1/2 -translate-x-1/2 w-[600px] h-[300px] bg-[#985184]/12 rounded-full blur-[140px] pointer-events-none -z-10" />
 
-        <div className="w-full max-w-lg z-10 space-y-6 text-center">
-          {/* Brand Logo & Animated Pulse */}
-          <div className="inline-flex items-center justify-center p-3 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 mb-2">
-            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-tr from-indigo-500 via-indigo-600 to-sky-400 text-white shadow-xl shadow-indigo-500/30 animate-bounce">
-              <Zap className="h-6 w-6 fill-white" />
+        <div className="w-full max-w-md z-10 space-y-6 text-center">
+          {/* Brand Logo */}
+          <div className="inline-flex items-center justify-center p-2 mb-1">
+            <div className="flex h-10 w-10 items-center justify-center rounded-sm bg-[#985184] text-white shadow-sm">
+              <Zap className="h-5 w-5 fill-white" />
             </div>
           </div>
 
-          <div className="space-y-2">
-            <h2 className="text-sm font-bold uppercase tracking-widest text-indigo-400">
+          <div className="space-y-1">
+            <div className="text-xs font-mono uppercase tracking-widest text-[#fbb945]">
               Workspace Provisioning
-            </h2>
-            <div className="font-mono text-xs text-slate-300 bg-slate-900/80 border border-slate-800 rounded-full px-4 py-1.5 inline-block">
+            </div>
+            <div className="font-mono text-xs text-slate-400">
               {subdomain}.localhost:4000
             </div>
           </div>
 
-          {/* Sequential Pop-up Cards Container */}
-          <div className="space-y-4">
+          {/* Sequential Pop-up Messages */}
+          <div className="space-y-4 pt-2">
             {/* Pop-up 1: "Welcome to Orvio" (t = 0.5s) */}
             {step1Active && (
-              <Card className="bg-slate-900/95 border-indigo-500/40 text-white p-6 shadow-2xl backdrop-blur-xl rounded-3xl animate-in zoom-in-95 slide-in-from-bottom-4 duration-500">
-                <div className="flex items-center gap-3 justify-center mb-2">
-                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                    <CheckCircle2 className="h-5 w-5" />
-                  </div>
-                  <h3 className="text-2xl font-black text-white tracking-tight">
+              <div className="bg-transparent p-4 text-center animate-in fade-in zoom-in-95 duration-300">
+                <div className="flex items-center gap-2 justify-center mb-1.5">
+                  <CheckCircle2 className="h-4 w-4 text-[#fbb945]" />
+                  <h3 className="text-xl font-bold text-white tracking-tight">
                     Welcome to Orvio
                   </h3>
                 </div>
-                <p className="text-xs text-slate-300">
-                  Your 14-day organization trial has been created and customized.
+                <p className="text-xs text-slate-400">
+                  Your 14-day organization trial has been initialized.
                 </p>
-              </Card>
+              </div>
             )}
 
             {/* Pop-up 2: "The One Platform you will ever need..." (t = 3.0s) */}
             {step2Active && (
-              <Card className="bg-gradient-to-br from-indigo-950/90 to-slate-900/90 border-indigo-400/50 text-white p-6 shadow-2xl backdrop-blur-xl rounded-3xl animate-in zoom-in-95 slide-in-from-bottom-4 duration-500">
-                <div className="flex items-center gap-2 justify-center mb-2">
-                  <Sparkles className="h-5 w-5 text-indigo-400 animate-spin" />
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-indigo-300">
+              <div className="bg-transparent p-4 text-center border-t border-white/5 animate-in fade-in zoom-in-95 duration-300">
+                <div className="flex items-center gap-1.5 justify-center mb-1.5">
+                  <Sparkles className="h-4 w-4 text-[#fbb945] animate-pulse" />
+                  <span className="text-[10px] font-mono uppercase tracking-wider text-[#fbb945]">
                     Orvio Operating System
                   </span>
                 </div>
-                <h4 className="text-lg sm:text-xl font-extrabold text-white leading-snug">
-                  "The One Platform you will ever need to transform your activities."
+                <h4 className="text-sm sm:text-base font-semibold text-white leading-snug">
+                  "The One Platform you will ever need to transform your operations."
                 </h4>
-              </Card>
+              </div>
             )}
           </div>
 
           {/* Redirection Progress Indicator */}
-          <div className="space-y-3 pt-2">
-            <div className="w-full bg-slate-900 rounded-full h-2 overflow-hidden border border-slate-800">
+          <div className="space-y-3 pt-4 border-t border-white/5">
+            <div className="w-full bg-white/10 rounded-none h-1 overflow-hidden">
               <div
-                className="bg-gradient-to-r from-indigo-500 via-sky-400 to-emerald-400 h-full transition-all duration-100 ease-out"
+                className="bg-[#985184] h-full transition-all duration-100 ease-out"
                 style={{ width: `${redirectProgress}%` }}
               />
             </div>
-            <p className="text-xs text-slate-400 flex items-center justify-center gap-2">
-              <span>Redirecting to your organization dashboard...</span>
+            <p className="text-xs text-slate-500 font-mono">
+              Redirecting to your organization launchpad...
             </p>
 
-            <a href={targetUrl} className="inline-block pt-2">
-              <Button variant="emerald" size="sm" className="font-bold text-xs shadow-lg shadow-emerald-500/20">
+            <a href={targetUrl} className="inline-block pt-1">
+              <Button
+                size="sm"
+                className="font-semibold text-xs h-8 px-4 rounded-sm bg-[#985184] hover:bg-[#854372] text-white shadow-sm flex items-center gap-1.5 cursor-pointer"
+              >
                 <span>Enter Dashboard Now</span>
-                <ArrowRight className="h-3.5 w-3.5 ml-1.5" />
+                <ArrowRight className="h-3.5 w-3.5" />
               </Button>
             </a>
           </div>
@@ -141,3 +146,4 @@ export function TrialThanksPage() {
     </>
   );
 }
+export default TrialThanksPage;

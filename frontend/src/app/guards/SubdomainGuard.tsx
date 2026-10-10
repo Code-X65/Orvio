@@ -102,14 +102,13 @@ export function SubdomainGuard({ children }: SubdomainGuardProps) {
   // Loading state with rich dark skeleton
   if (loading || !isHydrated) {
     return (
-      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-slate-400 selection:bg-indigo-500 selection:text-white">
+      <div className="min-h-screen bg-[#111215] flex flex-col items-center justify-center text-slate-400 selection:bg-[#985184] selection:text-white">
         <div className="flex flex-col items-center gap-4 animate-in fade-in duration-300">
-          <div className="relative flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-tr from-indigo-500 to-sky-400 text-white shadow-xl shadow-indigo-500/20">
-            <Zap className="h-6 w-6 fill-white" />
-            <div className="absolute inset-0 rounded-2xl border border-indigo-400/40 animate-ping opacity-25" />
+          <div className="relative flex h-10 w-10 items-center justify-center rounded-sm bg-[#985184] text-white shadow-sm">
+            <Zap className="h-5 w-5 fill-white" />
           </div>
           <div className="flex items-center gap-2 text-xs font-mono text-slate-400">
-            <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-400" />
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-[#985184]" />
             <span>Resolving workspace {currentSubdomain ? `${currentSubdomain}.orvio.app` : 'environment'}...</span>
           </div>
         </div>
