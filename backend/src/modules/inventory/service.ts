@@ -44,8 +44,8 @@ export class InventoryOnboardingService {
               },
             },
             branches: {
-              where: { status: 'active' },
-              orderBy: { created_at: 'asc' },
+              where: { status: 'active', is_deleted: false },
+              orderBy: [{ is_primary: 'desc' }, { created_at: 'asc' }],
             },
           },
         });
@@ -56,7 +56,11 @@ export class InventoryOnboardingService {
 
         const onboarding = org.inventory_onboarding;
         const isCompleted = onboarding?.status === 'completed';
-        const activeBranch = onboarding?.branch ?? org.branches[0] ?? null;
+        const activeBranch =
+          (onboarding?.branch && !onboarding.branch.is_deleted ? onboarding.branch : null) ??
+          org.branches.find((b) => b.is_primary) ??
+          org.branches[0] ??
+          null;
 
         return {
           completed: isCompleted,
@@ -177,6 +181,7 @@ export class InventoryOnboardingService {
         where: {
           org_id: orgId,
           name: { equals: input.branchName.trim(), mode: 'insensitive' },
+          is_deleted: false,
         },
       });
 

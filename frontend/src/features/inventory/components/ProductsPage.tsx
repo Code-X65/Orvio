@@ -26,6 +26,7 @@ import {
   X,
   Eye,
   ImageIcon,
+  Store,
 } from 'lucide-react';
 import { Button } from '../../../components/ui/button';
 import { Input } from '../../../components/ui/input';
@@ -65,12 +66,16 @@ interface ProductsPageProps {
     currency?: string;
     business_type?: string;
   };
+  branchId?: string;
+  branchName?: string;
   initialCategoryId?: string;
   onClearInitialCategory?: () => void;
 }
 
 export function ProductsPage({
   organization,
+  branchId,
+  branchName,
   initialCategoryId,
   onClearInitialCategory,
 }: ProductsPageProps) {
@@ -183,6 +188,7 @@ export function ProductsPage({
         categoryId: selectedCategoryId !== 'all' ? selectedCategoryId : undefined,
         status: statusFilter,
         lowStock: lowStockFilter || undefined,
+        branchId: branchId || undefined,
       });
 
       setProducts(res.products);
@@ -195,7 +201,12 @@ export function ProductsPage({
     } finally {
       setLoading(false);
     }
-  }, [currentPage, searchQuery, selectedCategoryId, statusFilter, lowStockFilter]);
+  }, [currentPage, searchQuery, selectedCategoryId, statusFilter, lowStockFilter, branchId]);
+
+  // Reset page when branch changes
+  React.useEffect(() => {
+    setCurrentPage(1);
+  }, [branchId]);
 
   // Initial load
   React.useEffect(() => {
@@ -304,7 +315,11 @@ export function ProductsPage({
       }
       toast.success('Product updated successfully');
     } else {
-      const res = await productApi.createProduct(data as CreateProductPayload);
+      const createPayload: CreateProductPayload = {
+        ...(data as CreateProductPayload),
+        branchId: branchId || undefined,
+      };
+      const res = await productApi.createProduct(createPayload);
       productId = res.product.id;
       toast.success('Product created successfully');
     }
@@ -386,7 +401,11 @@ export function ProductsPage({
       });
       toast.success('Variant updated successfully');
     } else {
-      const vRes = await productApi.createVariant(variantTargetProduct.id, data);
+      const createPayload: CreateVariantPayload = {
+        ...(data as CreateVariantPayload),
+        branchId: branchId || undefined,
+      };
+      const vRes = await productApi.createVariant(variantTargetProduct.id, createPayload);
       variantId = vRes.variant.id;
       toast.success('Variant added successfully');
     }
@@ -529,6 +548,13 @@ export function ProductsPage({
                 className="bg-[#252830] border-[#363a45] text-slate-300 text-xs font-normal"
               >
                 {totalCount} Items
+              </Badge>
+              <Badge
+                variant="outline"
+                className="bg-[#252830] border-[#363a45] text-[#fbb945] text-xs font-medium flex items-center gap-1.5 px-2 py-0.5"
+              >
+                <Store className="w-3 h-3 text-[#fbb945]" />
+                <span>{branchName || (branchId ? 'Selected Branch' : 'All Branches')}</span>
               </Badge>
             </div>
             <p className="text-xs text-slate-400 mt-1">

@@ -148,6 +148,10 @@ model Branch {
   phone                 String?
   email                 String?
   address               Json?
+  is_deleted            Boolean               @default(false)
+  deleted_at            DateTime?
+  deleted_by_user_id    String?
+  deleted_reason        String?               @db.Text
   created_at            DateTime              @default(now())
   updated_at            DateTime              @updatedAt
 
@@ -156,6 +160,7 @@ model Branch {
   stock_levels          StockLevel[]
 
   @@index([org_id])
+  @@index([org_id, is_deleted])
   @@map("branches")
 }
 

@@ -3,12 +3,16 @@ import { InventoryOnboardingService } from './service.js';
 import { inventoryBranchSetupSchema, saveOnboardingDraftSchema } from './schemas.js';
 import { categoryRoutes } from './categories-routes.js';
 import { productRoutes } from './products-routes.js';
+import { branchRoutes } from './branches-routes.js';
 import { prisma as defaultPrisma } from '../../infrastructure/database/client.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { sendData } from '../../lib/envelope.js';
 import { AppError } from '../../lib/errors.js';
 
 export async function inventoryRoutes(app: FastifyInstance) {
+  // Register branch management routes under /branches
+  app.register(branchRoutes, { prefix: '/branches' });
+
   // Register category management routes under /categories
   app.register(categoryRoutes, { prefix: '/categories' });
 

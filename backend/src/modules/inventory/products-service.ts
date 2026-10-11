@@ -226,7 +226,7 @@ export class ProductService {
       let branchId = input.branchId;
       if (!branchId) {
         const primaryBranch = await this.db.branch.findFirst({
-          where: { org_id: orgId, is_primary: true },
+          where: { org_id: orgId, is_primary: true, is_deleted: false },
           select: { id: true },
         });
         branchId = primaryBranch?.id;
@@ -906,7 +906,7 @@ export class ProductService {
       let branchId = input.branchId;
       if (!branchId) {
         const primaryBranch = await this.db.branch.findFirst({
-          where: { org_id: orgId, is_primary: true },
+          where: { org_id: orgId, is_primary: true, is_deleted: false },
           select: { id: true },
         });
         branchId = primaryBranch?.id;

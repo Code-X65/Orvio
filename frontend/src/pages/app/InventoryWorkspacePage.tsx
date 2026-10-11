@@ -33,9 +33,12 @@ import { SeoHead } from '../../components/seo/SeoHead';
 import { Link } from 'react-router-dom';
 import { CategoriesPage } from '../../features/inventory/components/CategoriesPage';
 import { ProductsPage } from '../../features/inventory/components/ProductsPage';
+import { BranchManagementModal } from '../../features/inventory/components/BranchManagementModal';
+import { branchApi } from '../../features/inventory/branches-api';
 
 interface InventoryWorkspacePageProps {
   organization: {
+    id?: string;
     name: string;
     subdomain: string;
     currency: string;
@@ -44,12 +47,16 @@ interface InventoryWorkspacePageProps {
   branch: {
     id: string;
     name: string;
+    code?: string | null;
     type: string;
+    is_primary?: boolean;
   } | null;
   branches: Array<{
     id: string;
     name: string;
+    code?: string | null;
     type: string;
+    is_primary?: boolean;
   }>;
 }
 
@@ -58,7 +65,57 @@ export function InventoryWorkspacePage({
   branch,
   branches,
 }: InventoryWorkspacePageProps) {
-  const [selectedBranch, setSelectedBranch] = React.useState(branch || branches[0]);
+  const [branchList, setBranchList] = React.useState(branches || []);
+  const [isBranchModalOpen, setIsBranchModalOpen] = React.useState(false);
+  const orgKey = organization.id || organization.subdomain;
+
+  // Initialize selectedBranchId from URL query param (?branch=...) or sessionStorage or default branch
+  const [selectedBranchId, setSelectedBranchId] = React.useState<string>(() => {
+    const params = new URLSearchParams(window.location.search);
+    const paramBranch = params.get('branch');
+    if (paramBranch) {
+      if (paramBranch === 'all') return 'all';
+      if (branches.some((b) => b.id === paramBranch)) return paramBranch;
+    }
+    const sessionBranch = sessionStorage.getItem(`orvio.selectedBranch.${orgKey}`);
+    if (sessionBranch) {
+      if (sessionBranch === 'all') return 'all';
+      if (branches.some((b) => b.id === sessionBranch)) return sessionBranch;
+    }
+    return branch?.id || branches[0]?.id || 'all';
+  });
+
+  const selectedBranch = React.useMemo(() => {
+    if (selectedBranchId === 'all') return null;
+    return branchList.find((b) => b.id === selectedBranchId) || branchList[0] || null;
+  }, [selectedBranchId, branchList]);
+
+  const handleSelectBranchId = React.useCallback(
+    (id: string) => {
+      setSelectedBranchId(id);
+      sessionStorage.setItem(`orvio.selectedBranch.${orgKey}`, id);
+      const url = new URL(window.location.href);
+      url.searchParams.set('branch', id);
+      window.history.replaceState({}, '', url.toString());
+    },
+    [orgKey]
+  );
+
+  const handleRefreshBranches = React.useCallback(async () => {
+    try {
+      const res = await branchApi.getBranches({ activeOnly: true });
+      if (res.branches) {
+        setBranchList(res.branches);
+        if (selectedBranchId !== 'all' && !res.branches.some((b) => b.id === selectedBranchId)) {
+          const primary = res.branches.find((b) => b.is_primary) || res.branches[0];
+          handleSelectBranchId(primary?.id || 'all');
+        }
+      }
+    } catch (err) {
+      console.error('Failed to refresh branches:', err);
+    }
+  }, [selectedBranchId, handleSelectBranchId]);
+
   const [currentCurrency, setCurrentCurrency] = React.useState(organization.currency || 'USD');
   const [activeTab, setActiveTab] = React.useState('Dashboard');
   const [selectedProductCategoryId, setSelectedProductCategoryId] = React.useState<string | undefined>(undefined);
@@ -295,27 +352,36 @@ export function InventoryWorkspacePage({
           </div>
 
           {/* Bottom Active Branch & POS Card */}
-          <div className="bg-[#181a20] p-4 rounded-sm space-y-3 mt-6">
+          <div className="bg-[#181a20] p-4 rounded-sm space-y-3 mt-6 border border-[#2d3139]/40">
             <div className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-sm bg-[#fbb945]/15 text-[#fbb945] flex items-center justify-center">
+              <div className="w-7 h-7 rounded-sm bg-[#fbb945]/15 text-[#fbb945] flex items-center justify-center shrink-0">
                 <Store className="w-4 h-4" />
               </div>
               <div className="truncate">
-                <div className="text-xs font-bold text-white truncate">{selectedBranch?.name || 'Primary Store'}</div>
-                <div className="text-[10px] text-slate-400 font-mono">Terminal 01 • Active</div>
+                <div className="text-xs font-bold text-white truncate">
+                  {selectedBranchId === 'all' ? 'All Branches' : selectedBranch?.name || 'Primary Store'}
+                </div>
+                <div className="text-[10px] text-slate-400 font-mono">
+                  {selectedBranchId === 'all'
+                    ? 'Aggregated Org View'
+                    : `${selectedBranch?.code || selectedBranch?.type?.toUpperCase() || 'STORE'} • Active`}
+                </div>
               </div>
             </div>
 
             <p className="text-[11px] text-slate-400 leading-relaxed">
-              Stock synced in real-time across checkout counters.
+              {selectedBranchId === 'all'
+                ? 'Displaying organization-wide consolidated stock totals across all branches.'
+                : 'Stock synced in real-time across checkout counters and registers.'}
             </p>
 
             <Button
               type="button"
               size="sm"
-              onClick={() => setActiveModal('Branch Settings')}
+              onClick={() => setIsBranchModalOpen(true)}
               className="w-full bg-[#985184] hover:bg-[#854372] text-white font-semibold text-xs h-8 rounded-sm shadow-sm flex items-center justify-center gap-1.5 cursor-pointer"
             >
+              <Settings className="w-3.5 h-3.5" />
               <span>Branch Settings</span>
             </Button>
           </div>
@@ -348,8 +414,42 @@ export function InventoryWorkspacePage({
               </div>
             </div>
 
-            {/* Right: Currency Toggle, Alerts, Launchpad, Avatar */}
+            {/* Right: Branch Selector, Currency Toggle, Alerts, Launchpad, Avatar */}
             <div className="flex items-center gap-2 sm:gap-4">
+              {/* Branch Selector Dropdown */}
+              <div className="relative">
+                <div className="flex items-center gap-1.5 bg-[#181a20] border border-[#2d3139] hover:border-[#3d424e] px-2.5 py-1.5 rounded-sm">
+                  <Store className="w-3.5 h-3.5 text-[#fbb945] shrink-0" />
+                  <select
+                    value={selectedBranchId}
+                    onChange={(e) => {
+                      if (e.target.value === '__manage__') {
+                        setIsBranchModalOpen(true);
+                      } else {
+                        handleSelectBranchId(e.target.value);
+                      }
+                    }}
+                    className="bg-transparent text-xs font-semibold text-slate-200 pr-5 appearance-none cursor-pointer focus:outline-hidden"
+                  >
+                    <option value="all" className="bg-[#181a20] text-white">
+                      All Branches (Org-wide)
+                    </option>
+                    {branchList.map((b) => (
+                      <option key={b.id} value={b.id} className="bg-[#181a20] text-white">
+                        {b.is_primary ? '★ ' : ''}{b.name} ({b.type})
+                      </option>
+                    ))}
+                    <option disabled className="bg-[#181a20] text-slate-500">
+                      ──────────
+                    </option>
+                    <option value="__manage__" className="bg-[#181a20] text-[#fbb945] font-bold">
+                      ⚙ Manage Branches...
+                    </option>
+                  </select>
+                  <ChevronDown className="w-3.5 h-3.5 absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                </div>
+              </div>
+
               {/* Currency Selector */}
               <div className="relative">
                 <select
@@ -418,6 +518,8 @@ export function InventoryWorkspacePage({
             ) : activeTab === 'Products' ? (
               <ProductsPage
                 organization={organization}
+                branchId={selectedBranchId === 'all' ? undefined : selectedBranchId}
+                branchName={selectedBranchId === 'all' ? 'All Branches' : (selectedBranch?.name || 'Selected Branch')}
                 initialCategoryId={selectedProductCategoryId}
                 onClearInitialCategory={() => setSelectedProductCategoryId(undefined)}
               />
@@ -976,6 +1078,14 @@ export function InventoryWorkspacePage({
           </div>
         </div>
       )}
+      {/* ================= BRANCH MANAGEMENT MODAL ================= */}
+      <BranchManagementModal
+        isOpen={isBranchModalOpen}
+        onClose={() => setIsBranchModalOpen(false)}
+        currentBranchId={selectedBranchId}
+        onSelectBranch={(b) => handleSelectBranchId(b.id)}
+        onBranchesUpdated={handleRefreshBranches}
+      />
     </div>
   );
 }
