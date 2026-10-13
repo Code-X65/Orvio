@@ -32,6 +32,7 @@ import {
   getSubdomainDisplaySuffix,
   sanitizeReturnUrl,
   getLastVisitedPath,
+  buildSafeWorkspaceUrl,
 } from '../../app/config/authUrls';
 
 const LoginSchema = z.object({
@@ -72,7 +73,15 @@ export function LoginPage() {
 
   const location = useLocation();
   const searchParams = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '');
-  const rawReturnUrl = searchParams.get('returnUrl') || (location.state as { returnUrl?: string; from?: { pathname?: string } })?.returnUrl || (location.state as { from?: { pathname?: string } })?.from?.pathname;
+  const locationState = location.state as
+    | { returnUrl?: string; from?: { pathname?: string; search?: string } }
+    | undefined;
+  const rawReturnUrl =
+    searchParams.get('returnUrl') ||
+    locationState?.returnUrl ||
+    (locationState?.from
+      ? `${locationState.from.pathname || ''}${locationState.from.search || ''}`
+      : undefined);
 
   // 1. Handle Central Subdomain Lookup (on root domain or accounts subdomain)
   const handleSubdomainLookup = async (e: React.FormEvent) => {
@@ -95,8 +104,11 @@ export function LoginPage() {
 
       // If available is FALSE and reason is ALREADY_TAKEN, the organization exists in database!
       if (!res.available && res.reason === 'ALREADY_TAKEN') {
-        const queryParam = rawReturnUrl ? `?returnUrl=${encodeURIComponent(rawReturnUrl)}` : '';
-        const targetUrl = `${getTenantWorkspaceUrl(clean)}/login${queryParam}`;
+        const targetUrl = buildSafeWorkspaceUrl(
+          clean,
+          '/login',
+          rawReturnUrl ? { returnUrl: rawReturnUrl } : undefined
+        );
         window.location.href = targetUrl;
       } else {
         setSubdomainError(`No organization workspace found for "${clean}".`);
@@ -133,14 +145,17 @@ export function LoginPage() {
       const currentSubdomain = getSubdomainFromHostname();
       const targetSubdomain = response.organization?.subdomain || tenantSlug;
 
-      // Determine return path: query param -> last visited path -> default to /orvio
+      // Determine return path: query param -> last visited path -> default to /inventory (or /orvio)
       const lastPath = targetSubdomain ? getLastVisitedPath(targetSubdomain) : null;
-      const targetDestination = sanitizeReturnUrl(rawReturnUrl || lastPath || '/orvio', '/orvio');
+      const defaultFallback = isTenantSubdomain() ? '/inventory' : '/orvio';
+      const targetDestination = sanitizeReturnUrl(rawReturnUrl || lastPath || defaultFallback, defaultFallback);
 
       if (targetSubdomain && currentSubdomain && currentSubdomain.toLowerCase() !== targetSubdomain.toLowerCase()) {
-        window.location.href = `${getTenantWorkspaceUrl(targetSubdomain)}${targetDestination}?token=${encodeURIComponent(response.accessToken)}`;
+        const targetUrl = buildSafeWorkspaceUrl(targetSubdomain, targetDestination, { token: response.accessToken });
+        window.location.href = targetUrl;
       } else if (!currentSubdomain && targetSubdomain) {
-        window.location.href = `${getTenantWorkspaceUrl(targetSubdomain)}${targetDestination}?token=${encodeURIComponent(response.accessToken)}`;
+        const targetUrl = buildSafeWorkspaceUrl(targetSubdomain, targetDestination, { token: response.accessToken });
+        window.location.href = targetUrl;
       } else {
         navigate(targetDestination);
       }

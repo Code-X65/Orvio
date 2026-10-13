@@ -58,6 +58,7 @@ export const createProductSchema = z
     sku: z.string().trim().max(50, 'SKU cannot exceed 50 characters').optional().or(z.literal('')),
     barcode: z.string().trim().max(50, 'Barcode cannot exceed 50 characters').nullable().optional().or(z.literal('')),
     categoryId: z.string().trim().nullable().optional(),
+    brandId: z.string().trim().nullable().optional(),
     costPrice: z.number().min(0, 'Cost price must be >= 0'),
     sellingPrice: z.number().min(0, 'Selling price must be >= 0'),
     compareAtPrice: z.number().min(0, 'Compare-at price must be >= 0').nullable().optional(),
@@ -83,6 +84,7 @@ export const updateProductSchema = z
     sku: z.string().trim().max(50).optional(),
     barcode: z.string().trim().max(50).nullable().optional(),
     categoryId: z.string().trim().nullable().optional(),
+    brandId: z.string().trim().nullable().optional(),
     costPrice: z.number().min(0).optional(),
     sellingPrice: z.number().min(0).optional(),
     compareAtPrice: z.number().min(0).nullable().optional(),
@@ -172,11 +174,17 @@ export const listProductsQuerySchema = z.object({
   sortBy: z.enum(['name', 'sku', 'cost_price', 'selling_price', 'created_at']).default('created_at'),
   sortOrder: z.enum(['asc', 'desc']).default('desc'),
   branchId: z.string().optional(),
+  brandId: z.string().optional(),
+  includeExcluded: z
+    .string()
+    .optional()
+    .transform((val) => val === 'true'),
 });
 
 export const searchProductsQuerySchema = z.object({
   q: z.string().trim().min(1, 'Search query required'),
   branchId: z.string().optional(),
+  brandId: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(50).default(10),
 });
 

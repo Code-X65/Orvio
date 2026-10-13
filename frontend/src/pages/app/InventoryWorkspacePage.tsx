@@ -27,14 +27,27 @@ import {
   Sparkles,
   Store,
   LayoutGrid,
+  Award,
+  Layers,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { SeoHead } from '../../components/seo/SeoHead';
-import { Link } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { CategoriesPage } from '../../features/inventory/components/CategoriesPage';
+import { BrandsPage } from '../../features/inventory/components/BrandsPage';
 import { ProductsPage } from '../../features/inventory/components/ProductsPage';
+import { StockManagementPage } from '../../features/inventory/components/StockManagementPage';
+import { OperationalSectionView, type OperationalSection } from '../../features/inventory/components/OperationalSectionView';
 import { BranchManagementModal } from '../../features/inventory/components/BranchManagementModal';
+import { AddBranchWizardModal } from '../../features/inventory/components/AddBranchWizardModal';
+import { BranchSwitchingOverlay } from '../../components/ui/BranchSwitchingOverlay';
 import { branchApi } from '../../features/inventory/branches-api';
+import { useOrgWebSocket } from '../../hooks/useOrgWebSocket';
+import { useAuthStore } from '../../stores/auth-store';
+import { toast } from 'sonner';
+import { useUrlActionState } from '../../hooks/useUrlActionState';
 
 interface InventoryWorkspacePageProps {
   organization: {
@@ -65,9 +78,50 @@ export function InventoryWorkspacePage({
   branch,
   branches,
 }: InventoryWorkspacePageProps) {
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  const accessToken = useAuthStore((s) => s.accessToken);
+  const { status: wsStatus } = useOrgWebSocket(organization.id, accessToken);
+
   const [branchList, setBranchList] = React.useState(branches || []);
   const [isBranchModalOpen, setIsBranchModalOpen] = React.useState(false);
+  const [isAddBranchWizardOpen, setIsAddBranchWizardOpen] = React.useState(false);
+  const [isSwitchingBranch, setIsSwitchingBranch] = React.useState(false);
+  const [switchingTargetName, setSwitchingTargetName] = React.useState('');
+  const [switchingSourceName, setSwitchingSourceName] = React.useState<string | null>(null);
   const orgKey = organization.id || organization.subdomain;
+
+  // URL Action State for deep-linking & session resumption
+  const {
+    activeAction,
+    openAction,
+    closeAction,
+  } = useUrlActionState<'manage-branches' | 'add-branch'>({
+    actionParam: 'action',
+  });
+
+  // Notify user when workflow session is restored from URL
+  const restoredToastRef = React.useRef(false);
+  React.useEffect(() => {
+    if (activeAction && !restoredToastRef.current) {
+      restoredToastRef.current = true;
+      toast.info('Session restored — resumed where you left off', {
+        description: `Active workflow: ${activeAction.replace('-', ' ')}`,
+      });
+    }
+  }, [activeAction]);
+
+  // Sync active action with branch modals
+  React.useEffect(() => {
+    if (activeAction === 'manage-branches') {
+      setIsBranchModalOpen(true);
+      setIsAddBranchWizardOpen(false);
+    } else if (activeAction === 'add-branch') {
+      setIsAddBranchWizardOpen(true);
+      setIsBranchModalOpen(false);
+    }
+  }, [activeAction]);
 
   // Initialize selectedBranchId from URL query param (?branch=...) or sessionStorage or default branch
   const [selectedBranchId, setSelectedBranchId] = React.useState<string>(() => {
@@ -92,13 +146,33 @@ export function InventoryWorkspacePage({
 
   const handleSelectBranchId = React.useCallback(
     (id: string) => {
-      setSelectedBranchId(id);
-      sessionStorage.setItem(`orvio.selectedBranch.${orgKey}`, id);
-      const url = new URL(window.location.href);
-      url.searchParams.set('branch', id);
-      window.history.replaceState({}, '', url.toString());
+      if (id === selectedBranchId) return;
+
+      const fromName = selectedBranchId === 'all' ? 'All Branches (Overview)' : (branchList.find((b) => b.id === selectedBranchId)?.name || 'Previous Location');
+      const toName = id === 'all' ? 'All Branches (Overview)' : (branchList.find((b) => b.id === id)?.name || 'Selected Location');
+
+      setSwitchingSourceName(fromName);
+      setSwitchingTargetName(toName);
+      setIsSwitchingBranch(true);
+
+      setTimeout(() => {
+        setSelectedBranchId(id);
+        sessionStorage.setItem(`orvio.selectedBranch.${orgKey}`, id);
+        const params = new URLSearchParams(location.search);
+        params.set('branch', id);
+        navigate(
+          {
+            pathname: location.pathname,
+            search: `?${params.toString()}`,
+          },
+          { replace: true }
+        );
+        setTimeout(() => {
+          setIsSwitchingBranch(false);
+        }, 350);
+      }, 550);
     },
-    [orgKey]
+    [selectedBranchId, branchList, orgKey, location.pathname, location.search, navigate]
   );
 
   const handleRefreshBranches = React.useCallback(async () => {
@@ -117,8 +191,65 @@ export function InventoryWorkspacePage({
   }, [selectedBranchId, handleSelectBranchId]);
 
   const [currentCurrency, setCurrentCurrency] = React.useState(organization.currency || 'USD');
-  const [activeTab, setActiveTab] = React.useState('Dashboard');
-  const [selectedProductCategoryId, setSelectedProductCategoryId] = React.useState<string | undefined>(undefined);
+
+  // Normalize pathname (strip trailing slash)
+  const currentPath = React.useMemo(() => {
+    const raw = location.pathname.toLowerCase().replace(/\/+$/, '') || '/inventory';
+    return raw;
+  }, [location.pathname]);
+
+  // Handle redirects for singular or alias paths to standard plural routes
+  React.useEffect(() => {
+    const aliasMap: Record<string, string> = {
+      '/inventory/product': '/inventory/products',
+      '/inventory/category': '/inventory/categories',
+      '/inventory/brand': '/inventory/brands',
+      '/inventory/order': '/inventory/orders',
+      '/inventory/supplier': '/inventory/suppliers',
+      '/inventory/purchase-order': '/inventory/purchase-orders',
+      '/inventory/return': '/inventory/returns',
+      '/inventory/report': '/inventory/reports',
+      '/inventory/setting': '/inventory/settings',
+      '/inventory/inventory': '/inventory/stock',
+    };
+    if (aliasMap[currentPath]) {
+      navigate({ pathname: aliasMap[currentPath], search: location.search }, { replace: true });
+    }
+  }, [currentPath, location.search, navigate]);
+
+  // Derive active tab directly from URL
+  const activeTab = React.useMemo(() => {
+    if (currentPath === '/inventory/products' || currentPath === '/inventory/product') return 'Products';
+    if (currentPath === '/inventory/categories' || currentPath === '/inventory/category') return 'Categories';
+    if (currentPath === '/inventory/brands' || currentPath === '/inventory/brand') return 'Brands';
+    if (currentPath === '/inventory/stock' || currentPath === '/inventory/inventory') return 'Inventory';
+    if (currentPath === '/inventory/orders' || currentPath === '/inventory/order') return 'Orders';
+    if (currentPath === '/inventory/suppliers' || currentPath === '/inventory/supplier') return 'Suppliers';
+    if (currentPath === '/inventory/purchase-orders' || currentPath === '/inventory/purchase-order') return 'Purchase Orders';
+    if (currentPath === '/inventory/returns' || currentPath === '/inventory/return') return 'Returns';
+    if (currentPath === '/inventory/reports' || currentPath === '/inventory/report') return 'Reports';
+    if (currentPath === '/inventory/settings' || currentPath === '/inventory/setting') return 'Settings';
+    return 'Dashboard';
+  }, [currentPath]);
+
+  // Read category parameter from URL query string
+  const categoryParam = React.useMemo(() => {
+    const params = new URLSearchParams(location.search);
+    return params.get('category') || undefined;
+  }, [location.search]);
+
+  // Navigation handler that preserves active search params (?branch=... etc.)
+  const handleNavigateSection = React.useCallback(
+    (targetPath: string) => {
+      setMobileMenuOpen(false);
+      navigate({
+        pathname: targetPath,
+        search: location.search,
+      });
+    },
+    [navigate, location.search]
+  );
+
   const [mobileMenuOpen, setMobileMenuOpen] = React.useState(false);
   const [activeModal, setActiveModal] = React.useState<string | null>(null);
   const [categoryTimeRange, setCategoryTimeRange] = React.useState<'All time' | 'Weekly' | 'Monthly'>('Monthly');
@@ -127,18 +258,67 @@ export function InventoryWorkspacePage({
 
   const currencySymbol = currentCurrency === 'NGN' ? '₦' : '$';
 
-  // Navigation Items
-  const navItems = [
-    { name: 'Dashboard', icon: LayoutDashboard },
-    { name: 'Products', icon: Package },
-    { name: 'Categories', icon: FolderTree },
-    { name: 'Inventory', icon: Boxes },
-    { name: 'Orders', icon: ShoppingCart },
-    { name: 'Suppliers', icon: Users },
-    { name: 'Purchase Orders', icon: FileText },
-    { name: 'Returns', icon: RotateCcw },
-    { name: 'Reports', icon: BarChart3 },
-    { name: 'Settings', icon: Settings },
+  // Sidebar Display Mode: 'icon-and-name' (default/expanded) vs 'icon-only' (collapsed)
+  type SidebarMode = 'icon-and-name' | 'icon-only';
+
+  const [sidebarMode, setSidebarMode] = React.useState<SidebarMode>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('orvio.sidebar.mode');
+      if (saved === 'icon-only' || saved === 'icon-and-name') return saved as SidebarMode;
+    }
+    return 'icon-and-name';
+  });
+
+  const handleSetSidebarMode = React.useCallback((mode: SidebarMode) => {
+    setSidebarMode(mode);
+    try {
+      localStorage.setItem('orvio.sidebar.mode', mode);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const toggleSidebarMode = React.useCallback(() => {
+    handleSetSidebarMode(sidebarMode === 'icon-and-name' ? 'icon-only' : 'icon-and-name');
+  }, [sidebarMode, handleSetSidebarMode]);
+
+  // Catalog Section & Dropdown State
+  const isCatalogSectionActive =
+    activeTab === 'Products' || activeTab === 'Categories' || activeTab === 'Brands';
+  const [isCatalogOpen, setIsCatalogOpen] = React.useState(true);
+  const [isCatalogFlyoutOpen, setIsCatalogFlyoutOpen] = React.useState(false);
+  const catalogFlyoutRef = React.useRef<HTMLDivElement>(null);
+
+  // Close flyout when clicking outside
+  React.useEffect(() => {
+    if (!isCatalogFlyoutOpen) return;
+    const handleClickOutside = (event: MouseEvent) => {
+      if (catalogFlyoutRef.current && !catalogFlyoutRef.current.contains(event.target as Node)) {
+        setIsCatalogFlyoutOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isCatalogFlyoutOpen]);
+
+  // Catalog Sub-Items (Consolidating Products, Categories, Brands under parent CATALOG)
+  const catalogSubItems = [
+    { name: 'Products', icon: Package, path: '/inventory/products' },
+    { name: 'Categories', icon: FolderTree, path: '/inventory/categories' },
+    { name: 'Brands', icon: Award, path: '/inventory/brands' },
+  ];
+
+  // Secondary Navigation Items following CATALOG
+  const secondaryNavItems = [
+    { name: 'Inventory', icon: Boxes, path: '/inventory/stock' },
+    { name: 'Orders', icon: ShoppingCart, path: '/inventory/orders' },
+    { name: 'Suppliers', icon: Users, path: '/inventory/suppliers' },
+    { name: 'Purchase Orders', icon: FileText, path: '/inventory/purchase-orders' },
+    { name: 'Returns', icon: RotateCcw, path: '/inventory/returns' },
+    { name: 'Reports', icon: BarChart3, path: '/inventory/reports' },
+    { name: 'Settings', icon: Settings, path: '/inventory/settings' },
   ];
 
   // Daily Orders & Profit Data (May 1 - May 15)
@@ -280,8 +460,8 @@ export function InventoryWorkspacePage({
   return (
     <div className="min-h-screen bg-[#111215] text-slate-100 flex flex-col font-sans selection:bg-[#985184] selection:text-white">
       <SeoHead
-        title={`${organization.name} | Inventory Management Dashboard`}
-        description="Comprehensive inventory workspace, product sales, retail analytics, and stock catalog."
+        title={`${activeTab} — ${organization.name} Inventory`}
+        description={`Manage ${activeTab.toLowerCase()} records, stock tracking, and sales operations in ${organization.name}.`}
       />
 
       {/* Main Layout Container */}
@@ -296,102 +476,336 @@ export function InventoryWorkspacePage({
         )}
 
         <aside
-          className={`fixed inset-y-0 left-0 z-50 w-64 bg-[#141519] flex flex-col justify-between p-4 transition-transform duration-200 lg:static lg:translate-x-0 ${mobileMenuOpen ? 'translate-x-0' : '-translate-x-full'
-            }`}
+          data-testid="inventory-sidebar"
+          data-sidebar-mode={sidebarMode}
+          className={`fixed inset-y-0 left-0 z-50 bg-[#141519] flex flex-col justify-between transition-all duration-200 lg:static lg:translate-x-0 ${
+            mobileMenuOpen ? 'translate-x-0' : '-translate-x-full'
+          } ${
+            sidebarMode === 'icon-only'
+              ? 'w-20 p-2.5 items-center'
+              : 'w-64 p-4'
+          }`}
         >
           {/* Top Brand & Navigation */}
-          <div className="space-y-6">
-            {/* Organization Branding */}
-            <div className="flex items-center justify-between px-2 pt-1">
-              <div className="flex items-center gap-3">
+          <div className="space-y-4 w-full">
+            {/* Organization Branding & Header */}
+            {sidebarMode === 'icon-and-name' ? (
+              <div className="flex items-center justify-between px-2 pt-1">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-sm bg-[#985184] flex items-center justify-center text-white font-black text-lg shadow-sm shrink-0">
+                    {organization.name.charAt(0).toUpperCase()}
+                  </div>
+                  <div className="leading-tight truncate max-w-[120px]">
+                    <div className="font-bold text-white text-sm truncate">{organization.name}</div>
+                    <div className="text-[11px] text-slate-400 font-medium">Inventory Management</div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    data-testid="sidebar-collapse-btn"
+                    onClick={() => handleSetSidebarMode('icon-only')}
+                    title="Switch to Icon Only mode"
+                    aria-label="Switch to Icon Only mode"
+                    className="hidden lg:flex p-1.5 text-slate-400 hover:text-white hover:bg-white/5 rounded-sm transition-colors cursor-pointer"
+                  >
+                    <PanelLeftClose className="w-4 h-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMobileMenuOpen(false)}
+                    className="lg:hidden p-1 text-slate-400 hover:text-white rounded-sm"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+              </div>
+            ) : (
+              /* Icon Only Header */
+              <div className="flex flex-col items-center gap-2 pt-1 w-full">
                 <div className="w-9 h-9 rounded-sm bg-[#985184] flex items-center justify-center text-white font-black text-lg shadow-sm">
                   {organization.name.charAt(0).toUpperCase()}
                 </div>
-                <div className="leading-tight truncate max-w-[140px]">
-                  <div className="font-bold text-white text-sm truncate">{organization.name}</div>
-                  <div className="text-[11px] text-slate-400 font-medium">Inventory Management</div>
-                </div>
+                <button
+                  type="button"
+                  data-testid="sidebar-expand-btn"
+                  onClick={() => handleSetSidebarMode('icon-and-name')}
+                  title="Switch to Icon + Name mode"
+                  aria-label="Switch to Icon + Name mode"
+                  className="p-1.5 text-slate-400 hover:text-white hover:bg-white/5 rounded-sm transition-colors cursor-pointer"
+                >
+                  <PanelLeftOpen className="w-4 h-4 text-[#fbb945]" />
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => setMobileMenuOpen(false)}
-                className="lg:hidden p-1 text-slate-400 hover:text-white rounded-sm"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
+            )}
 
             {/* Navigation Menu */}
-            <nav className="space-y-1">
-              {navItems.map((item) => {
+            <nav className="space-y-1 w-full">
+              {/* 1. Dashboard */}
+              {sidebarMode === 'icon-and-name' ? (
+                <Link
+                  to={{ pathname: '/inventory', search: location.search }}
+                  onClick={() => setMobileMenuOpen(false)}
+                  className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-sm text-xs font-semibold transition-all cursor-pointer text-left ${
+                    activeTab === 'Dashboard'
+                      ? 'bg-[#985184] text-white shadow-sm'
+                      : 'text-slate-400 hover:text-white hover:bg-white/5'
+                  }`}
+                >
+                  <LayoutDashboard className={`w-4 h-4 shrink-0 ${activeTab === 'Dashboard' ? 'text-white' : 'text-slate-400'}`} />
+                  <span>Dashboard</span>
+                </Link>
+              ) : (
+                <div className="flex justify-center">
+                  <Link
+                    to={{ pathname: '/inventory', search: location.search }}
+                    onClick={() => setMobileMenuOpen(false)}
+                    title="Dashboard"
+                    className={`w-10 h-10 flex items-center justify-center rounded-sm text-xs font-semibold transition-all cursor-pointer relative group ${
+                      activeTab === 'Dashboard'
+                        ? 'bg-[#985184] text-white shadow-sm'
+                        : 'text-slate-400 hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    <LayoutDashboard className={`w-4 h-4 ${activeTab === 'Dashboard' ? 'text-white' : 'text-slate-400'}`} />
+                    <span className="absolute left-full ml-3 px-2 py-1 bg-[#1e2026] text-white text-[11px] font-medium rounded-xs shadow-lg border border-[#2d3139] whitespace-nowrap opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity z-50">
+                      Dashboard
+                    </span>
+                  </Link>
+                </div>
+              )}
+
+              {/* 2. CATALOG - Consolidated Dropdown Menu */}
+              {sidebarMode === 'icon-and-name' ? (
+                <div className="space-y-1">
+                  <button
+                    type="button"
+                    data-testid="catalog-menu-toggle"
+                    aria-expanded={isCatalogOpen}
+                    aria-controls="catalog-submenu"
+                    onClick={() => setIsCatalogOpen((prev) => !prev)}
+                    className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-sm text-xs font-semibold transition-all cursor-pointer text-left ${
+                      isCatalogSectionActive
+                        ? 'bg-[#985184]/20 text-white border border-[#985184]/40 shadow-xs'
+                        : 'text-slate-400 hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <Layers className={`w-4 h-4 shrink-0 ${isCatalogSectionActive ? 'text-[#fbb945]' : 'text-slate-400'}`} />
+                      <span className="tracking-wide">CATALOG</span>
+                    </div>
+                    <ChevronDown
+                      className={`w-3.5 h-3.5 shrink-0 transition-transform duration-200 ${
+                        isCatalogOpen ? 'rotate-180 text-white' : 'text-slate-400'
+                      }`}
+                    />
+                  </button>
+
+                  {/* Dropdown sub-items */}
+                  {isCatalogOpen && (
+                    <div
+                      id="catalog-submenu"
+                      data-testid="catalog-submenu"
+                      className="ml-4 pl-3 py-1 space-y-1 border-l-2 border-[#2d3139] transition-all"
+                    >
+                      {catalogSubItems.map((subItem) => {
+                        const SubIcon = subItem.icon;
+                        const isSubActive = activeTab === subItem.name;
+
+                        return (
+                          <Link
+                            key={subItem.name}
+                            to={{ pathname: subItem.path, search: location.search }}
+                            onClick={() => setMobileMenuOpen(false)}
+                            className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-sm text-xs font-medium transition-all cursor-pointer text-left ${
+                              isSubActive
+                                ? 'bg-[#985184] text-white shadow-xs font-semibold'
+                                : 'text-slate-400 hover:text-white hover:bg-white/5'
+                            }`}
+                          >
+                            <SubIcon className={`w-3.5 h-3.5 shrink-0 ${isSubActive ? 'text-white' : 'text-slate-400'}`} />
+                            <span>{subItem.name}</span>
+                          </Link>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                /* Icon Only CATALOG with Flyout Dropdown */
+                <div className="relative flex justify-center" ref={catalogFlyoutRef}>
+                  <button
+                    type="button"
+                    data-testid="catalog-menu-toggle"
+                    aria-expanded={isCatalogFlyoutOpen}
+                    title="CATALOG"
+                    aria-label="CATALOG"
+                    onClick={() => setIsCatalogFlyoutOpen((prev) => !prev)}
+                    className={`w-10 h-10 flex items-center justify-center rounded-sm text-xs font-semibold transition-all cursor-pointer relative group ${
+                      isCatalogSectionActive
+                        ? 'bg-[#985184]/25 text-white ring-1 ring-[#985184]'
+                        : 'text-slate-400 hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    <Layers className={`w-4 h-4 ${isCatalogSectionActive ? 'text-[#fbb945]' : 'text-slate-400'}`} />
+                    {isCatalogSectionActive && (
+                      <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-[#fbb945]" />
+                    )}
+                    {!isCatalogFlyoutOpen && (
+                      <span className="absolute left-full ml-3 px-2 py-1 bg-[#1e2026] text-white text-[11px] font-medium rounded-xs shadow-lg border border-[#2d3139] whitespace-nowrap opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity z-50">
+                        CATALOG
+                      </span>
+                    )}
+                  </button>
+
+                  {/* Flyout Dropdown */}
+                  {isCatalogFlyoutOpen && (
+                    <div
+                      data-testid="catalog-flyout-menu"
+                      className="absolute left-full top-0 ml-3 w-48 bg-[#181a20] border border-[#2d3139] rounded-sm p-1.5 shadow-2xl z-50 space-y-1 animate-in fade-in zoom-in-95 duration-100"
+                    >
+                      <div className="px-2.5 py-1 text-[10px] font-bold text-slate-400 tracking-wider uppercase border-b border-[#2d3139]/60 flex items-center justify-between">
+                        <span>CATALOG</span>
+                        <span className="text-[9px] text-[#fbb945] font-mono">3 items</span>
+                      </div>
+                      {catalogSubItems.map((subItem) => {
+                        const SubIcon = subItem.icon;
+                        const isSubActive = activeTab === subItem.name;
+                        return (
+                          <Link
+                            key={subItem.name}
+                            to={{ pathname: subItem.path, search: location.search }}
+                            onClick={() => {
+                              setIsCatalogFlyoutOpen(false);
+                              setMobileMenuOpen(false);
+                            }}
+                            className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-sm text-xs font-medium transition-all cursor-pointer ${
+                              isSubActive
+                                ? 'bg-[#985184] text-white shadow-xs font-semibold'
+                                : 'text-slate-300 hover:text-white hover:bg-white/5'
+                            }`}
+                          >
+                            <SubIcon className={`w-3.5 h-3.5 shrink-0 ${isSubActive ? 'text-white' : 'text-slate-400'}`} />
+                            <span>{subItem.name}</span>
+                          </Link>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 3. Secondary Nav Items */}
+              {secondaryNavItems.map((item) => {
                 const Icon = item.icon;
                 const isActive = activeTab === item.name;
 
-                return (
-                  <button
-                    key={item.name}
-                    type="button"
-                    onClick={() => {
-                      setActiveTab(item.name);
-                      setMobileMenuOpen(false);
-                      if (item.name !== 'Dashboard' && item.name !== 'Categories' && item.name !== 'Products') {
-                        setActiveModal(item.name);
-                      }
-                    }}
-                    className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-sm text-xs font-semibold transition-all cursor-pointer text-left ${isActive
-                        ? 'bg-[#985184] text-white shadow-sm'
-                        : 'text-slate-400 hover:text-white hover:bg-white/5'
+                if (sidebarMode === 'icon-and-name') {
+                  return (
+                    <Link
+                      key={item.name}
+                      to={{ pathname: item.path, search: location.search }}
+                      onClick={() => setMobileMenuOpen(false)}
+                      className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-sm text-xs font-semibold transition-all cursor-pointer text-left ${
+                        isActive
+                          ? 'bg-[#985184] text-white shadow-sm'
+                          : 'text-slate-400 hover:text-white hover:bg-white/5'
                       }`}
-                  >
-                    <Icon className={`w-4 h-4 ${isActive ? 'text-white' : 'text-slate-400'}`} />
-                    <span>{item.name}</span>
-                  </button>
+                    >
+                      <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-white' : 'text-slate-400'}`} />
+                      <span>{item.name}</span>
+                    </Link>
+                  );
+                }
+
+                return (
+                  <div key={item.name} className="flex justify-center">
+                    <Link
+                      to={{ pathname: item.path, search: location.search }}
+                      onClick={() => setMobileMenuOpen(false)}
+                      title={item.name}
+                      className={`w-10 h-10 flex items-center justify-center rounded-sm text-xs font-semibold transition-all cursor-pointer relative group ${
+                        isActive
+                          ? 'bg-[#985184] text-white shadow-sm'
+                          : 'text-slate-400 hover:text-white hover:bg-white/5'
+                      }`}
+                    >
+                      <Icon className={`w-4 h-4 ${isActive ? 'text-white' : 'text-slate-400'}`} />
+                      <span className="absolute left-full ml-3 px-2 py-1 bg-[#1e2026] text-white text-[11px] font-medium rounded-xs shadow-lg border border-[#2d3139] whitespace-nowrap opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity z-50">
+                        {item.name}
+                      </span>
+                    </Link>
+                  </div>
                 );
               })}
             </nav>
           </div>
 
           {/* Bottom Active Branch & POS Card */}
-          <div className="bg-[#181a20] p-4 rounded-sm space-y-3 mt-6 border border-[#2d3139]/40">
-            <div className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-sm bg-[#fbb945]/15 text-[#fbb945] flex items-center justify-center shrink-0">
-                <Store className="w-4 h-4" />
-              </div>
-              <div className="truncate">
-                <div className="text-xs font-bold text-white truncate">
-                  {selectedBranchId === 'all' ? 'All Branches' : selectedBranch?.name || 'Primary Store'}
+          {sidebarMode === 'icon-and-name' ? (
+            <div className="bg-[#181a20] p-4 rounded-sm space-y-3 mt-6 border border-[#2d3139]/40 w-full">
+              <div className="flex items-center gap-2">
+                <div className="w-7 h-7 rounded-sm bg-[#fbb945]/15 text-[#fbb945] flex items-center justify-center shrink-0">
+                  <Store className="w-4 h-4" />
                 </div>
-                <div className="text-[10px] text-slate-400 font-mono">
-                  {selectedBranchId === 'all'
-                    ? 'Aggregated Org View'
-                    : `${selectedBranch?.code || selectedBranch?.type?.toUpperCase() || 'STORE'} • Active`}
+                <div className="truncate">
+                  <div className="text-xs font-bold text-white truncate">
+                    {selectedBranchId === 'all' ? 'All Branches' : selectedBranch?.name || 'Primary Store'}
+                  </div>
+                  <div className="text-[10px] text-slate-400 font-mono">
+                    {selectedBranchId === 'all'
+                      ? 'Aggregated Org View'
+                      : `${selectedBranch?.code || selectedBranch?.type?.toUpperCase() || 'STORE'} • Active`}
+                  </div>
                 </div>
               </div>
+
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                {selectedBranchId === 'all'
+                  ? 'Displaying organization-wide consolidated stock totals across all branches.'
+                  : 'Stock synced in real-time across checkout counters and registers.'}
+              </p>
+
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => {
+                  openAction('manage-branches');
+                  setIsBranchModalOpen(true);
+                }}
+                className="w-full bg-[#985184] hover:bg-[#854372] text-white font-semibold text-xs h-8 rounded-sm shadow-sm flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <Settings className="w-3.5 h-3.5" />
+                <span>Branch Settings</span>
+              </Button>
             </div>
-
-            <p className="text-[11px] text-slate-400 leading-relaxed">
-              {selectedBranchId === 'all'
-                ? 'Displaying organization-wide consolidated stock totals across all branches.'
-                : 'Stock synced in real-time across checkout counters and registers.'}
-            </p>
-
-            <Button
-              type="button"
-              size="sm"
-              onClick={() => setIsBranchModalOpen(true)}
-              className="w-full bg-[#985184] hover:bg-[#854372] text-white font-semibold text-xs h-8 rounded-sm shadow-sm flex items-center justify-center gap-1.5 cursor-pointer"
-            >
-              <Settings className="w-3.5 h-3.5" />
-              <span>Branch Settings</span>
-            </Button>
-          </div>
+          ) : (
+            /* Icon Only Bottom Store Button */
+            <div className="flex flex-col items-center gap-2 pt-3 border-t border-[#2d3139]/40 w-full">
+              <button
+                type="button"
+                onClick={() => {
+                  openAction('manage-branches');
+                  setIsBranchModalOpen(true);
+                }}
+                title={`Branch Settings (${selectedBranchId === 'all' ? 'All Branches' : selectedBranch?.name || 'Primary Store'})`}
+                aria-label="Branch Settings"
+                className="w-10 h-10 rounded-sm bg-[#181a20] hover:bg-[#985184]/20 border border-[#2d3139] text-[#fbb945] flex items-center justify-center transition-colors cursor-pointer relative group"
+              >
+                <Store className="w-4 h-4" />
+                <span className="absolute left-full ml-3 px-2 py-1 bg-[#1e2026] text-white text-[11px] font-medium rounded-xs shadow-lg border border-[#2d3139] whitespace-nowrap opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity z-50">
+                  {selectedBranchId === 'all' ? 'All Branches' : selectedBranch?.name || 'Branch Settings'}
+                </span>
+              </button>
+            </div>
+          )}
         </aside>
 
         {/* ================= MAIN CONTENT AREA ================= */}
         <div className="flex-1 flex flex-col min-w-0">
           {/* Top Header Bar */}
           <header className="h-16 bg-[#141519] px-4 sm:px-6 flex items-center justify-between sticky top-0 z-30">
-            {/* Left: Mobile Toggle & Global Search */}
+            {/* Left: Mobile Toggle, Desktop Mode Toggle & Global Search */}
             <div className="flex items-center gap-3 sm:gap-4 flex-1 max-w-md">
               <button
                 type="button"
@@ -399,6 +813,21 @@ export function InventoryWorkspacePage({
                 className="lg:hidden p-2 text-slate-400 hover:text-white rounded-sm hover:bg-white/5"
               >
                 <Menu className="w-5 h-5" />
+              </button>
+
+              <button
+                type="button"
+                data-testid="header-sidebar-toggle"
+                onClick={toggleSidebarMode}
+                title={sidebarMode === 'icon-only' ? 'Switch to Icon + Name mode' : 'Switch to Icon Only mode'}
+                aria-label={sidebarMode === 'icon-only' ? 'Switch to Icon + Name mode' : 'Switch to Icon Only mode'}
+                className="hidden lg:flex p-2 text-slate-400 hover:text-white rounded-sm hover:bg-white/5 transition-colors cursor-pointer"
+              >
+                {sidebarMode === 'icon-only' ? (
+                  <PanelLeftOpen className="w-4 h-4 text-[#fbb945]" />
+                ) : (
+                  <PanelLeftClose className="w-4 h-4" />
+                )}
               </button>
 
               <div className="relative w-full">
@@ -423,7 +852,11 @@ export function InventoryWorkspacePage({
                   <select
                     value={selectedBranchId}
                     onChange={(e) => {
-                      if (e.target.value === '__manage__') {
+                      if (e.target.value === '__add_branch__') {
+                        openAction('add-branch');
+                        setIsAddBranchWizardOpen(true);
+                      } else if (e.target.value === '__manage__') {
+                        openAction('manage-branches');
                         setIsBranchModalOpen(true);
                       } else {
                         handleSelectBranchId(e.target.value);
@@ -442,8 +875,11 @@ export function InventoryWorkspacePage({
                     <option disabled className="bg-[#181a20] text-slate-500">
                       ──────────
                     </option>
-                    <option value="__manage__" className="bg-[#181a20] text-[#fbb945] font-bold">
-                      ⚙ Manage Branches...
+                    <option value="__add_branch__" className="bg-[#181a20] text-[#fbb945] font-semibold">
+                      ＋ Add New Branch...
+                    </option>
+                    <option value="__manage__" className="bg-[#181a20] text-slate-300">
+                      ⚙ Manage Branches Hub...
                     </option>
                   </select>
                   <ChevronDown className="w-3.5 h-3.5 absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
@@ -463,6 +899,31 @@ export function InventoryWorkspacePage({
                   <option value="GBP">GBP</option>
                 </select>
                 <ChevronDown className="w-3.5 h-3.5 absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+              </div>
+
+              {/* Realtime Live Sync Status */}
+              <div
+                className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-sm border border-[#2d3139] bg-[#181a20] text-xs transition-colors"
+                title={
+                  wsStatus === 'connected'
+                    ? 'Realtime sync active: Live inventory updates are automatically synchronized'
+                    : wsStatus === 'connecting'
+                    ? 'Connecting to realtime inventory sync...'
+                    : 'Realtime sync disconnected: Reconnecting...'
+                }
+              >
+                <span
+                  className={`w-2 h-2 rounded-full ${
+                    wsStatus === 'connected'
+                      ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]'
+                      : wsStatus === 'connecting'
+                      ? 'bg-amber-400 animate-pulse'
+                      : 'bg-rose-500'
+                  }`}
+                />
+                <span className="text-[11px] font-medium text-slate-300 hidden md:inline">
+                  {wsStatus === 'connected' ? 'Live' : wsStatus === 'connecting' ? 'Connecting' : 'Offline'}
+                </span>
               </div>
 
               {/* Notification Bell */}
@@ -510,20 +971,70 @@ export function InventoryWorkspacePage({
             {activeTab === 'Categories' ? (
               <CategoriesPage
                 organization={organization}
+                branchId={selectedBranchId === 'all' ? undefined : selectedBranchId}
                 onNavigateToProducts={(catId) => {
-                  setSelectedProductCategoryId(catId);
-                  setActiveTab('Products');
+                  const params = new URLSearchParams(location.search);
+                  if (catId) {
+                    params.set('category', catId);
+                  } else {
+                    params.delete('category');
+                  }
+                  navigate({
+                    pathname: '/inventory/products',
+                    search: params.toString() ? `?${params.toString()}` : '',
+                  });
                 }}
+              />
+            ) : activeTab === 'Brands' ? (
+              <BrandsPage
+                organization={organization}
+                branchId={selectedBranchId === 'all' ? undefined : selectedBranchId}
               />
             ) : activeTab === 'Products' ? (
               <ProductsPage
                 organization={organization}
                 branchId={selectedBranchId === 'all' ? undefined : selectedBranchId}
                 branchName={selectedBranchId === 'all' ? 'All Branches' : (selectedBranch?.name || 'Selected Branch')}
-                initialCategoryId={selectedProductCategoryId}
-                onClearInitialCategory={() => setSelectedProductCategoryId(undefined)}
+                initialCategoryId={categoryParam}
+                onClearInitialCategory={() => {
+                  const params = new URLSearchParams(location.search);
+                  params.delete('category');
+                  navigate(
+                    {
+                      pathname: '/inventory/products',
+                      search: params.toString() ? `?${params.toString()}` : '',
+                    },
+                    { replace: true }
+                  );
+                }}
+                onCategoryChange={(catId) => {
+                  const params = new URLSearchParams(location.search);
+                  if (catId && catId !== 'all') {
+                    params.set('category', catId);
+                  } else {
+                    params.delete('category');
+                  }
+                  navigate(
+                    {
+                      pathname: '/inventory/products',
+                      search: params.toString() ? `?${params.toString()}` : '',
+                    },
+                    { replace: true }
+                  );
+                }}
               />
-            ) : (
+            ) : activeTab === 'Inventory' ? (
+              <StockManagementPage
+                organization={organization}
+                branchId={selectedBranchId === 'all' ? undefined : selectedBranchId}
+                branchName={selectedBranchId === 'all' ? 'All Branches' : (selectedBranch?.name || 'Primary Store')}
+                branches={branchList}
+                onOpenBranchModal={() => {
+                  openAction('manage-branches');
+                  setIsBranchModalOpen(true);
+                }}
+              />
+            ) : activeTab === 'Dashboard' ? (
               <>
                 {/* ROW 1: TOP 4 METRIC CARDS */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5">
@@ -1038,6 +1549,19 @@ export function InventoryWorkspacePage({
               </div>
             </div>
               </>
+            ) : (
+              <OperationalSectionView
+                section={activeTab as OperationalSection}
+                organization={organization}
+                branchName={selectedBranchId === 'all' ? 'All Branches' : (selectedBranch?.name || 'Primary Store')}
+                isAllBranches={selectedBranchId === 'all'}
+                currencySymbol={currencySymbol}
+                onOpenBranchModal={() => {
+                  openAction('manage-branches');
+                  setIsBranchModalOpen(true);
+                }}
+                onNavigate={(path) => handleNavigateSection(path)}
+              />
             )}
           </main>
         </div>
@@ -1081,10 +1605,41 @@ export function InventoryWorkspacePage({
       {/* ================= BRANCH MANAGEMENT MODAL ================= */}
       <BranchManagementModal
         isOpen={isBranchModalOpen}
-        onClose={() => setIsBranchModalOpen(false)}
+        onClose={() => {
+          setIsBranchModalOpen(false);
+          closeAction();
+        }}
         currentBranchId={selectedBranchId}
         onSelectBranch={(b) => handleSelectBranchId(b.id)}
         onBranchesUpdated={handleRefreshBranches}
+        onOpenAddWizard={() => {
+          setIsBranchModalOpen(false);
+          openAction('add-branch');
+          setIsAddBranchWizardOpen(true);
+        }}
+      />
+
+      {/* ================= ADD BRANCH ONBOARDING WIZARD ================= */}
+      <AddBranchWizardModal
+        isOpen={isAddBranchWizardOpen}
+        onClose={() => {
+          setIsAddBranchWizardOpen(false);
+          closeAction();
+        }}
+        organization={organization}
+        branches={branchList}
+        onBranchCreated={(newBranch) => {
+          handleRefreshBranches();
+          handleSelectBranchId(newBranch.id);
+          closeAction();
+        }}
+      />
+
+      {/* ================= FULL-SCREEN BRANCH SWITCHING OVERLAY ================= */}
+      <BranchSwitchingOverlay
+        isVisible={isSwitchingBranch}
+        fromBranchName={switchingSourceName}
+        toBranchName={switchingTargetName}
       />
     </div>
   );

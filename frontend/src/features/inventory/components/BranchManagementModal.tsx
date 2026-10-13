@@ -30,6 +30,7 @@ import {
   type CreateBranchPayload,
   type UpdateBranchPayload,
 } from '../branches-api';
+import { BranchCatalogModal } from './BranchCatalogModal';
 
 interface BranchManagementModalProps {
   isOpen: boolean;
@@ -37,6 +38,7 @@ interface BranchManagementModalProps {
   currentBranchId?: string;
   onSelectBranch?: (branch: Branch) => void;
   onBranchesUpdated?: () => void;
+  onOpenAddWizard?: () => void;
 }
 
 export function BranchManagementModal({
@@ -45,6 +47,7 @@ export function BranchManagementModal({
   currentBranchId,
   onSelectBranch,
   onBranchesUpdated,
+  onOpenAddWizard,
 }: BranchManagementModalProps) {
   const [branches, setBranches] = React.useState<Branch[]>([]);
   const [loading, setLoading] = React.useState(true);
@@ -53,6 +56,7 @@ export function BranchManagementModal({
   // Form View state: 'list' | 'create' | 'edit' | 'archive'
   const [view, setView] = React.useState<'list' | 'create' | 'edit' | 'archive'>('list');
   const [activeBranch, setActiveBranch] = React.useState<Branch | null>(null);
+  const [catalogBranch, setCatalogBranch] = React.useState<Branch | null>(null);
 
   // Form fields
   const [name, setName] = React.useState('');
@@ -312,7 +316,7 @@ export function BranchManagementModal({
                 </div>
                 <Button
                   size="sm"
-                  onClick={openCreateForm}
+                  onClick={onOpenAddWizard || openCreateForm}
                   className="bg-[#985184] hover:bg-[#854372] text-white text-xs h-8 px-3 rounded-sm flex items-center gap-1.5 cursor-pointer"
                 >
                   <Plus className="w-3.5 h-3.5" />
@@ -331,8 +335,8 @@ export function BranchManagementModal({
                   <p className="text-sm text-slate-300 font-medium">No branches configured yet</p>
                   <Button
                     size="sm"
-                    onClick={openCreateForm}
-                    className="bg-[#985184] hover:bg-[#854372] text-white text-xs"
+                    onClick={onOpenAddWizard || openCreateForm}
+                    className="bg-[#985184] hover:bg-[#854372] text-white text-xs cursor-pointer"
                   >
                     Create First Branch
                   </Button>
@@ -432,6 +436,16 @@ export function BranchManagementModal({
                                 Switch
                               </Button>
                             )}
+
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => setCatalogBranch(b)}
+                              className="h-7 px-2 text-[11px] border-[#2d3139] bg-[#181a20] text-[#fbb945] hover:text-white hover:bg-[#252830]"
+                              title="Manage Branch Catalog"
+                            >
+                              Catalog
+                            </Button>
 
                             <Button
                               size="sm"
@@ -721,6 +735,16 @@ export function BranchManagementModal({
           )}
         </div>
       </div>
+
+      {catalogBranch && (
+        <BranchCatalogModal
+          isOpen={Boolean(catalogBranch)}
+          onClose={() => setCatalogBranch(null)}
+          branch={catalogBranch}
+          branches={branches}
+          onCatalogUpdated={fetchBranches}
+        />
+      )}
     </div>
   );
 }

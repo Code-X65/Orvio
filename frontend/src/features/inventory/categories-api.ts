@@ -33,6 +33,7 @@ export interface CreateCategoryPayload {
   description?: string | null;
   parentId?: string | null;
   isActive?: boolean;
+  branchId?: string;
 }
 
 export interface UpdateCategoryPayload {
@@ -71,7 +72,7 @@ export interface CategoryUsageResponse {
 }
 
 export const categoryApi = {
-  getCategories: async (params?: { activeOnly?: boolean; parentId?: string; includeInactive?: boolean }) => {
+  getCategories: async (params?: { activeOnly?: boolean; parentId?: string; includeInactive?: boolean; branchId?: string }) => {
     return await api.get<CategoriesListResponse>('/inventory/categories', { params });
   },
   getCategory: async (id: string) => {
@@ -98,8 +99,8 @@ export const categoryApi = {
   toggleCategoryStatus: async (id: string) => {
     return await api.patch<CategoryResponse>(`/inventory/categories/${id}/toggle-status`);
   },
-  seedDefaultCategories: async (businessType?: string) => {
-    return await api.post<SeedCategoriesResponse>('/inventory/categories/seed', { businessType });
+  seedDefaultCategories: async (businessType?: string, branchId?: string) => {
+    return await api.post<SeedCategoriesResponse>('/inventory/categories/seed', { businessType, branchId });
   },
   uploadCategoryImage: async (categoryId: string, file: File) => {
     const formData = new FormData();

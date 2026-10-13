@@ -4,7 +4,45 @@
  * In production: points to https://accounts.orvio.com or configured VITE_ACCOUNTS_URL.
  */
 
-export const ALLOWED_WORKSPACE_ROUTES = ['/inventory', '/dashboard', '/orvio'];
+export const ALLOWED_WORKSPACE_ROUTES = ['/', '/inventory', '/dashboard', '/orvio'];
+
+/**
+ * Safely constructs a workspace URL combining base URL or subdomain, target path (which may already have query params),
+ * and any optional extra query parameters (such as token or returnUrl) without ever producing double-`?` syntax.
+ */
+export function buildSafeWorkspaceUrl(
+  subdomainOrBaseUrl: string,
+  targetPathWithQuery: string = '/orvio',
+  extraParams?: Record<string, string | null | undefined>
+): string {
+  const base = subdomainOrBaseUrl.startsWith('http')
+    ? subdomainOrBaseUrl
+    : getTenantWorkspaceUrl(subdomainOrBaseUrl);
+
+  const cleanPath = targetPathWithQuery.startsWith('/') ? targetPathWithQuery : `/${targetPathWithQuery}`;
+
+  // Parse path and query
+  const [pathname, queryString] = cleanPath.split('?');
+  const baseClean = base.replace(/\/+$/, '');
+  const url = new URL(`${baseClean}${pathname}`);
+
+  if (queryString) {
+    const existingParams = new URLSearchParams(queryString);
+    existingParams.forEach((val, key) => {
+      url.searchParams.set(key, val);
+    });
+  }
+
+  if (extraParams) {
+    Object.entries(extraParams).forEach(([key, val]) => {
+      if (val !== undefined && val !== null && val !== '') {
+        url.searchParams.set(key, val);
+      }
+    });
+  }
+
+  return url.toString();
+}
 
 export function getAccountsBaseUrl(): string {
   if (typeof window !== 'undefined') {

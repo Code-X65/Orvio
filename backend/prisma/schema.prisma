@@ -58,6 +58,25 @@ enum measurement_unit {
   dozen
 }
 
+enum stock_movement_type {
+  opening
+  receipt
+  adjustment
+  transfer_out
+  transfer_in
+  sale
+  sale_void
+}
+
+enum stock_adjustment_reason {
+  damage
+  loss
+  found
+  correction
+  count_reconciliation
+  other
+}
+
 model User {
   id                String              @id @default(cuid())
   email             String              @unique
@@ -76,6 +95,9 @@ model User {
   verification_tokens VerificationToken[]
   refresh_tokens    RefreshToken[]
   audit_logs        AuditLog[]
+  branch_products_added BranchProduct[] @relation("BranchProductAddedBy")
+  catalog_imports_imported CatalogImport[] @relation("CatalogImportImportedBy")
+  stock_movements_authored StockMovement[] @relation("StockMovementActor")
 
   @@index([phone])
   @@map("users")
@@ -108,9 +130,13 @@ model Organization {
   onboarding_flow      OnboardingFlow?
   inventory_onboarding InventoryOnboarding?
   categories           Category[]
+  brands               Brand[]
   catalog_products     Product[]
   product_variants     ProductVariant[]
+  branch_products      BranchProduct[]
+  catalog_imports      CatalogImport[]
   stock_levels         StockLevel[]
+  stock_movements      StockMovement[]
   price_histories      ProductPriceHistory[]
   audit_logs           AuditLog[]
   product_images       ProductImage[]
@@ -158,6 +184,13 @@ model Branch {
   organization          Organization          @relation(fields: [org_id], references: [id], onDelete: Cascade)
   inventory_onboardings InventoryOnboarding[]
   stock_levels          StockLevel[]
+  stock_movements       StockMovement[]
+  branch_products       BranchProduct[]       @relation("BranchProductAssignment")
+  sourced_branch_products BranchProduct[]     @relation("BranchProductSource")
+  imports_received      CatalogImport[]       @relation("ImportTarget")
+  imports_sourced       CatalogImport[]       @relation("ImportSource")
+  categories            Category[]            @relation("BranchCategories")
+  brands                Brand[]               @relation("BranchBrands")
 
   @@index([org_id])
   @@index([org_id, is_deleted])
@@ -333,12 +366,17 @@ model Category {
   updated_at    DateTime  @updatedAt
 
   organization  Organization  @relation(fields: [org_id], references: [id], onDelete: Cascade)
+  branch_id     String
+  branch        Branch        @relation("BranchCategories", fields: [branch_id], references: [id], onDelete: Cascade)
   parent        Category?     @relation("CategoryHierarchy", fields: [parent_id], references: [id], onDelete: Cascade)
   children      Category[]    @relation("CategoryHierarchy")
-  products      Product[]
+  products           Product[]
+  branch_products    BranchProduct[] @relation("BranchProductCategory")
 
-  @@unique([org_id, slug])
+  @@unique([org_id, branch_id, slug])
   @@index([org_id])
+  @@index([branch_id])
+  @@index([org_id, branch_id])
   @@index([org_id, is_deleted])
   @@index([parent_id])
   @@map("categories")
@@ -372,14 +410,19 @@ model Product {
 
   organization        Organization          @relation(fields: [org_id], references: [id], onDelete: Cascade)
   category            Category?             @relation(fields: [category_id], references: [id], onDelete: SetNull)
+  brand_id            String?
+  brand               Brand?                @relation(fields: [brand_id], references: [id], onDelete: SetNull)
   variants            ProductVariant[]
   images              ProductImage[]
   stock_levels        StockLevel[]
+  stock_movements     StockMovement[]
   price_history       ProductPriceHistory[]
+  branch_assignments  BranchProduct[]
 
   @@unique([org_id, sku])
   @@index([org_id])
   @@index([category_id])
+  @@index([brand_id])
   @@index([is_active, is_deleted])
   @@index([org_id, is_deleted])
   @@map("products")
@@ -405,6 +448,7 @@ model ProductVariant {
   product          Product               @relation(fields: [product_id], references: [id], onDelete: Cascade)
   images           ProductImage[]
   stock_levels     StockLevel[]
+  stock_movements  StockMovement[]
   price_history    ProductPriceHistory[]
 
   @@unique([org_id, sku])
@@ -465,19 +509,20 @@ model ProductPriceHistory {
 }
 
 model StockLevel {
-  id               String          @id @default(cuid())
-  org_id           String
-  product_id       String?
-  variant_id       String?
-  branch_id        String
-  quantity_on_hand Decimal         @default(0) @db.Decimal(14, 3)
-  reserved         Decimal         @default(0) @db.Decimal(14, 3)
-  updated_at       DateTime        @updatedAt
+  id                  String          @id @default(cuid())
+  org_id              String
+  product_id          String?
+  variant_id          String?
+  branch_id           String
+  quantity_on_hand    Decimal         @default(0) @db.Decimal(14, 3)
+  reserved            Decimal         @default(0) @db.Decimal(14, 3)
+  low_stock_threshold Int?
+  updated_at          DateTime        @updatedAt
 
-  organization     Organization    @relation(fields: [org_id], references: [id], onDelete: Cascade)
-  product          Product?        @relation(fields: [product_id], references: [id], onDelete: Cascade)
-  variant          ProductVariant? @relation(fields: [variant_id], references: [id], onDelete: Cascade)
-  branch           Branch          @relation(fields: [branch_id], references: [id], onDelete: Cascade)
+  organization        Organization    @relation(fields: [org_id], references: [id], onDelete: Cascade)
+  product             Product?        @relation(fields: [product_id], references: [id], onDelete: Cascade)
+  variant             ProductVariant? @relation(fields: [variant_id], references: [id], onDelete: Cascade)
+  branch              Branch          @relation(fields: [branch_id], references: [id], onDelete: Cascade)
 
   @@unique([org_id, product_id, branch_id])
   @@unique([org_id, variant_id, branch_id])
@@ -485,5 +530,124 @@ model StockLevel {
   @@index([branch_id])
   @@map("stock_levels")
 }
+
+model StockMovement {
+  id               String                   @id @default(cuid())
+  org_id           String
+  branch_id        String
+  product_id       String
+  variant_id       String?
+  movement_type    stock_movement_type
+  quantity         Decimal                  @db.Decimal(14, 3)
+  balance_before   Decimal                  @db.Decimal(14, 3)
+  balance_after    Decimal                  @db.Decimal(14, 3)
+  reason           stock_adjustment_reason?
+  reference_id     String?
+  actor_id         String?
+  notes            String?                  @db.Text
+  metadata         Json?
+  created_at       DateTime                 @default(now())
+
+  organization     Organization             @relation(fields: [org_id], references: [id], onDelete: Cascade)
+  branch           Branch                   @relation(fields: [branch_id], references: [id], onDelete: Cascade)
+  product          Product                  @relation(fields: [product_id], references: [id], onDelete: Cascade)
+  variant          ProductVariant?          @relation(fields: [variant_id], references: [id], onDelete: Cascade)
+  actor            User?                    @relation("StockMovementActor", fields: [actor_id], references: [id], onDelete: SetNull)
+
+  @@index([org_id, branch_id])
+  @@index([org_id, product_id])
+  @@index([org_id, movement_type])
+  @@index([org_id, created_at])
+  @@index([reference_id])
+  @@map("stock_movements")
+}
+
+model Brand {
+  id                 String    @id @default(cuid())
+  org_id             String
+  name               String
+  slug               String
+  description        String?   @db.Text
+  logo_url           String?
+  website_url        String?
+  is_active          Boolean   @default(true)
+  is_deleted         Boolean   @default(false)
+  deleted_at         DateTime?
+  deleted_by_user_id String?
+  deleted_reason     String?   @db.Text
+  sort_order         Int       @default(0)
+  metadata           Json?
+  created_at         DateTime  @default(now())
+  updated_at         DateTime  @updatedAt
+
+  organization       Organization @relation(fields: [org_id], references: [id], onDelete: Cascade)
+  branch_id          String
+  branch             Branch       @relation("BranchBrands", fields: [branch_id], references: [id], onDelete: Cascade)
+  products           Product[]
+  branch_products    BranchProduct[] @relation("BranchProductBrand")
+
+  @@unique([org_id, branch_id, slug])
+  @@index([org_id])
+  @@index([branch_id])
+  @@index([org_id, branch_id])
+  @@index([org_id, is_deleted])
+  @@index([org_id, is_active])
+  @@map("brands")
+}
+
+model BranchProduct {
+  id                    String       @id @default(cuid())
+  org_id                String
+  branch_id             String
+  product_id            String
+  category_id           String?
+  brand_id              String?
+  source_branch_id      String?
+  added_by_user_id      String?
+  added_at              DateTime     @default(now())
+  notes                 String?      @db.Text
+  is_excluded           Boolean      @default(false)
+
+  organization          Organization @relation(fields: [org_id], references: [id], onDelete: Cascade)
+  branch                Branch       @relation("BranchProductAssignment", fields: [branch_id], references: [id], onDelete: Cascade)
+  product               Product      @relation(fields: [product_id], references: [id], onDelete: Cascade)
+  category              Category?    @relation("BranchProductCategory", fields: [category_id], references: [id], onDelete: SetNull)
+  brand                 Brand?       @relation("BranchProductBrand", fields: [brand_id], references: [id], onDelete: SetNull)
+  source_branch         Branch?      @relation("BranchProductSource", fields: [source_branch_id], references: [id], onDelete: SetNull)
+  user                  User?        @relation("BranchProductAddedBy", fields: [added_by_user_id], references: [id], onDelete: SetNull)
+
+  @@unique([org_id, branch_id, product_id])
+  @@index([org_id])
+  @@index([branch_id])
+  @@index([product_id])
+  @@index([category_id])
+  @@index([brand_id])
+  @@index([branch_id, category_id])
+  @@index([branch_id, brand_id])
+  @@map("branch_products")
+}
+
+model CatalogImport {
+  id                  String       @id @default(cuid())
+  org_id              String
+  source_branch_id    String
+  target_branch_id    String
+  imported_by_user_id String?
+  product_count       Int
+  copy_stock          Boolean      @default(false)
+  notes               String?      @db.Text
+  created_at          DateTime     @default(now())
+
+  organization        Organization @relation(fields: [org_id], references: [id], onDelete: Cascade)
+  source_branch       Branch       @relation("ImportSource", fields: [source_branch_id], references: [id], onDelete: Cascade)
+  target_branch       Branch       @relation("ImportTarget", fields: [target_branch_id], references: [id], onDelete: Cascade)
+  user                User?        @relation("CatalogImportImportedBy", fields: [imported_by_user_id], references: [id], onDelete: SetNull)
+
+  @@index([org_id])
+  @@index([source_branch_id])
+  @@index([target_branch_id])
+  @@map("catalog_imports")
+}
+
 
 

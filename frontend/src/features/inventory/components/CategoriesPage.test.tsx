@@ -1,7 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CategoriesPage } from './CategoriesPage';
 import { categoryApi } from '../categories-api';
+
+function renderWithProviders(ui: React.ReactElement) {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+    },
+  });
+  return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
+}
 
 vi.mock('../categories-api', () => ({
   categoryApi: {
@@ -71,7 +83,7 @@ describe('CategoriesPage Component', () => {
   });
 
   it('renders category list and tree hierarchy', async () => {
-    render(<CategoriesPage />);
+    renderWithProviders(<CategoriesPage />);
 
     await waitFor(() => {
       expect(screen.getByText('Beverages')).toBeInTheDocument();
@@ -84,7 +96,7 @@ describe('CategoriesPage Component', () => {
       usage: { productCount: 0, childCount: 1 },
     });
 
-    render(<CategoriesPage />);
+    renderWithProviders(<CategoriesPage />);
 
     await waitFor(() => {
       expect(screen.getByText('Beverages')).toBeInTheDocument();
@@ -111,7 +123,7 @@ describe('CategoriesPage Component', () => {
       reassignedProductCount: 5,
     });
 
-    render(<CategoriesPage />);
+    renderWithProviders(<CategoriesPage />);
 
     await waitFor(() => {
       expect(screen.getByText('Pantry Staples')).toBeInTheDocument();
@@ -149,7 +161,7 @@ describe('CategoriesPage Component', () => {
       reassignedProductCount: 0,
     });
 
-    render(<CategoriesPage />);
+    renderWithProviders(<CategoriesPage />);
 
     await waitFor(() => {
       expect(screen.getByText('Pantry Staples')).toBeInTheDocument();
@@ -171,7 +183,7 @@ describe('CategoriesPage Component', () => {
   });
 
   it('displays product count badge with roll-up and breakdown', async () => {
-    render(<CategoriesPage />);
+    renderWithProviders(<CategoriesPage />);
 
     await waitFor(() => {
       expect(screen.getByText('Beverages')).toBeInTheDocument();
@@ -189,7 +201,7 @@ describe('CategoriesPage Component', () => {
 
   it('clicking product count badge calls onNavigateToProducts with category ID', async () => {
     const handleNavigate = vi.fn();
-    render(<CategoriesPage onNavigateToProducts={handleNavigate} />);
+    renderWithProviders(<CategoriesPage onNavigateToProducts={handleNavigate} />);
 
     await waitFor(() => {
       expect(screen.getByText('Beverages')).toBeInTheDocument();
@@ -201,7 +213,7 @@ describe('CategoriesPage Component', () => {
 
   it('clicking view products in catalog button calls onNavigateToProducts', async () => {
     const handleNavigate = vi.fn();
-    render(<CategoriesPage onNavigateToProducts={handleNavigate} />);
+    renderWithProviders(<CategoriesPage onNavigateToProducts={handleNavigate} />);
 
     await waitFor(() => {
       expect(screen.getByText('Pantry Staples')).toBeInTheDocument();
@@ -217,7 +229,7 @@ describe('CategoriesPage Component', () => {
       is_active: false,
     });
 
-    render(<CategoriesPage />);
+    renderWithProviders(<CategoriesPage />);
 
     await waitFor(() => {
       expect(screen.getByText('Pantry Staples')).toBeInTheDocument();

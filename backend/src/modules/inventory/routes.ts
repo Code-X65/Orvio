@@ -4,6 +4,9 @@ import { inventoryBranchSetupSchema, saveOnboardingDraftSchema } from './schemas
 import { categoryRoutes } from './categories-routes.js';
 import { productRoutes } from './products-routes.js';
 import { branchRoutes } from './branches-routes.js';
+import { brandRoutes } from './brands-routes.js';
+import { catalogRoutes } from './catalog-routes.js';
+import { stockRoutes } from './stock-routes.js';
 import { prisma as defaultPrisma } from '../../infrastructure/database/client.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { sendData } from '../../lib/envelope.js';
@@ -16,8 +19,17 @@ export async function inventoryRoutes(app: FastifyInstance) {
   // Register category management routes under /categories
   app.register(categoryRoutes, { prefix: '/categories' });
 
+  // Register brand management routes under /brands
+  app.register(brandRoutes, { prefix: '/brands' });
+
+  // Register catalog management routes under /catalog
+  app.register(catalogRoutes, { prefix: '/catalog' });
+
   // Register product management routes under /products
   app.register(productRoutes, { prefix: '/products' });
+
+  // Register stock management routes under /stock
+  app.register(stockRoutes);
 
   // GET /api/v1/inventory/onboarding/status
   app.get(

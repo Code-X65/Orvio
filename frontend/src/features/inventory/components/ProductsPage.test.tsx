@@ -1,8 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ProductsPage } from './ProductsPage';
 import { productApi } from '../products-api';
 import { categoryApi } from '../categories-api';
+import { brandApi } from '../brands-api';
+
+function renderWithProviders(ui: React.ReactElement) {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+    },
+  });
+  return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
+}
 
 vi.mock('../products-api', () => ({
   productApi: {
@@ -24,6 +37,12 @@ vi.mock('../products-api', () => ({
 vi.mock('../categories-api', () => ({
   categoryApi: {
     getCategories: vi.fn(),
+  },
+}));
+
+vi.mock('../brands-api', () => ({
+  brandApi: {
+    getBrands: vi.fn().mockResolvedValue({ brands: [], pagination: { total: 0, page: 1, limit: 100, totalPages: 1 } }),
   },
 }));
 
@@ -90,7 +109,7 @@ describe('ProductsPage Component', () => {
   });
 
   it('renders products table with item details, prices, and stock', async () => {
-    render(<ProductsPage organization={{ name: 'Test Market', currency: 'NGN' }} />);
+    renderWithProviders(<ProductsPage organization={{ name: 'Test Market', currency: 'NGN' }} />);
 
     await waitFor(() => {
       expect(screen.getByText('Golden Penny Spaghetti')).toBeInTheDocument();
@@ -125,7 +144,7 @@ describe('ProductsPage Component', () => {
     };
     (productApi.getProductById as any).mockResolvedValue(mockDetail);
 
-    render(<ProductsPage organization={{ name: 'Test Market', currency: 'NGN' }} />);
+    renderWithProviders(<ProductsPage organization={{ name: 'Test Market', currency: 'NGN' }} />);
 
     await waitFor(() => {
       expect(screen.getByText('Golden Penny Spaghetti')).toBeInTheDocument();
@@ -136,13 +155,14 @@ describe('ProductsPage Component', () => {
     fireEvent.click(expandBtn);
 
     await waitFor(() => {
+      expect(screen.getByText('Variants for Golden Penny Spaghetti')).toBeInTheDocument();
       expect(screen.getByText('Small Pack')).toBeInTheDocument();
       expect(screen.getByText('GPS-500G-SM')).toBeInTheDocument();
     });
   });
 
   it('displays promotional compare-at price and discount pill in table row', async () => {
-    render(<ProductsPage organization={{ name: 'Test Market', currency: 'NGN' }} />);
+    renderWithProviders(<ProductsPage organization={{ name: 'Test Market', currency: 'NGN' }} />);
 
     await waitFor(() => {
       expect(screen.getByText('Golden Penny Spaghetti')).toBeInTheDocument();
@@ -173,7 +193,7 @@ describe('ProductsPage Component', () => {
     };
     (productApi.getPriceHistory as any).mockResolvedValue(mockHistory);
 
-    render(<ProductsPage organization={{ name: 'Test Market', currency: 'NGN' }} />);
+    renderWithProviders(<ProductsPage organization={{ name: 'Test Market', currency: 'NGN' }} />);
 
     await waitFor(() => {
       expect(screen.getByText('Golden Penny Spaghetti')).toBeInTheDocument();
@@ -205,7 +225,7 @@ describe('ProductsPage Component', () => {
       },
     });
 
-    render(<ProductsPage organization={{ name: 'Test Market', currency: 'NGN' }} />);
+    renderWithProviders(<ProductsPage organization={{ name: 'Test Market', currency: 'NGN' }} />);
 
     await waitFor(() => {
       expect(screen.getByText('Golden Penny Spaghetti')).toBeInTheDocument();
@@ -239,7 +259,7 @@ describe('ProductsPage Component', () => {
     });
     (productApi.deleteProduct as any).mockResolvedValue({ success: true });
 
-    render(<ProductsPage organization={{ name: 'Test Market', currency: 'NGN' }} />);
+    renderWithProviders(<ProductsPage organization={{ name: 'Test Market', currency: 'NGN' }} />);
 
     await waitFor(() => {
       expect(screen.getByText('Golden Penny Spaghetti')).toBeInTheDocument();
@@ -290,7 +310,7 @@ describe('ProductsPage Component', () => {
     });
     (productApi.deleteProduct as any).mockResolvedValue({ success: true });
 
-    render(<ProductsPage organization={{ name: 'Test Market', currency: 'NGN' }} />);
+    renderWithProviders(<ProductsPage organization={{ name: 'Test Market', currency: 'NGN' }} />);
 
     await waitFor(() => {
       expect(screen.getByText('Golden Penny Spaghetti')).toBeInTheDocument();
@@ -330,7 +350,7 @@ describe('ProductsPage Component', () => {
     });
     (productApi.restoreProduct as any).mockResolvedValue({ success: true });
 
-    render(<ProductsPage organization={{ name: 'Test Market', currency: 'NGN' }} />);
+    renderWithProviders(<ProductsPage organization={{ name: 'Test Market', currency: 'NGN' }} />);
 
     await waitFor(() => {
       expect(screen.getByText('Archived Indomie Noodles')).toBeInTheDocument();
@@ -372,7 +392,7 @@ describe('ProductsPage Component', () => {
     });
     (productApi.deleteVariant as any).mockResolvedValue({ success: true });
 
-    render(<ProductsPage organization={{ name: 'Test Market', currency: 'NGN' }} />);
+    renderWithProviders(<ProductsPage organization={{ name: 'Test Market', currency: 'NGN' }} />);
 
     await waitFor(() => {
       expect(screen.getByText('Golden Penny Spaghetti')).toBeInTheDocument();

@@ -11,6 +11,16 @@ export const branchAddressSchema = z.object({
   postalCode: z.string().trim().max(20).optional().nullable(),
 }).passthrough().optional().nullable();
 
+export const catalogSetupSchema = z.object({
+  mode: z.enum(['empty', 'clone_all', 'selective']).default('empty'),
+  sourceBranchId: z.string().trim().optional(),
+  categoryIds: z.array(z.string().trim()).optional().default([]),
+  brandIds: z.array(z.string().trim()).optional().default([]),
+  productIds: z.array(z.string().trim()).optional().default([]),
+  copyStock: z.boolean().optional().default(false),
+  importTaxonomy: z.boolean().optional().default(true),
+}).optional();
+
 export const createBranchSchema = z.object({
   name: z.string().trim().min(1, 'Branch name is required').max(100, 'Cannot exceed 100 characters'),
   code: z.string().trim().max(50, 'Branch code cannot exceed 50 characters').optional().nullable(),
@@ -20,6 +30,7 @@ export const createBranchSchema = z.object({
   phone: z.string().trim().max(50).optional().nullable(),
   email: z.string().trim().email('Invalid email address').max(255).optional().nullable().or(z.literal('')),
   address: branchAddressSchema,
+  catalogSetup: catalogSetupSchema,
 });
 
 export const updateBranchSchema = z.object({

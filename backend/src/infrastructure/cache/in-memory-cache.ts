@@ -1,3 +1,5 @@
+import { Redis } from 'ioredis';
+
 interface CacheEntry<T> {
   value: T;
   expiresAt: number;
@@ -110,6 +112,145 @@ export class InMemoryCache<T = any> {
   }
 }
 
-// Global shared caches
-export const defaultAppCache = new InMemoryCache({ maxEntries: 5000, defaultTtlMs: 60_000 });
-export const inventoryCache = new InMemoryCache({ maxEntries: 2000, defaultTtlMs: 60_000 });
+/**
+ * Hybrid Distributed Cache:
+ * - Uses in-memory cache as Level-1 (L1) for microsecond reads and single-flight coalescing.
+ * - Uses Redis as Level-2 (L2) for multi-pod cache sharing and distributed invalidation.
+ * - If REDIS_URL is not set or Redis is unreachable, operates purely in L1 memory mode with zero failure.
+ */
+export class DistributedCache<T = any> {
+  private readonly l1: InMemoryCache<T>;
+  private redis: Redis | null = null;
+  private isRedisReady = false;
+  private readonly defaultTtlMs: number;
+
+  constructor(options: InMemoryCacheOptions = {}) {
+    this.l1 = new InMemoryCache<T>(options);
+    this.defaultTtlMs = options.defaultTtlMs ?? 60_000;
+
+    const redisUrl =
+      process.env.REDIS_URL ||
+      (process.env.REDIS_HOST
+        ? `redis://${process.env.REDIS_HOST}:${process.env.REDIS_PORT || 6379}`
+        : null);
+
+    if (redisUrl) {
+      try {
+        this.redis = new Redis(redisUrl, {
+          lazyConnect: true,
+          maxRetriesPerRequest: 1,
+          enableReadyCheck: true,
+          retryStrategy: (times: number) => {
+            if (times > 3) return null; // Stop reconnecting after 3 tries
+            return Math.min(times * 100, 2000);
+          },
+        });
+
+        this.redis.on('ready', () => {
+          this.isRedisReady = true;
+        });
+        this.redis.on('error', () => {
+          this.isRedisReady = false;
+        });
+
+        this.redis.connect().catch(() => {
+          this.isRedisReady = false;
+        });
+      } catch {
+        this.redis = null;
+        this.isRedisReady = false;
+      }
+    }
+  }
+
+  get(key: string): T | null {
+    return this.l1.get(key);
+  }
+
+  set(key: string, value: T, ttlMs?: number): void {
+    const ttl = ttlMs ?? this.defaultTtlMs;
+    this.l1.set(key, value, ttl);
+
+    if (this.isRedisReady && this.redis) {
+      const seconds = Math.max(1, Math.ceil(ttl / 1000));
+      this.redis.set(key, JSON.stringify(value), 'EX', seconds).catch(() => {});
+    }
+  }
+
+  delete(key: string): boolean {
+    const res = this.l1.delete(key);
+    if (this.isRedisReady && this.redis) {
+      this.redis.del(key).catch(() => {});
+    }
+    return res;
+  }
+
+  clearPrefix(prefix: string): number {
+    const count = this.l1.clearPrefix(prefix);
+    if (this.isRedisReady && this.redis) {
+      this.clearRedisPrefix(prefix).catch(() => {});
+    }
+    return count;
+  }
+
+  private async clearRedisPrefix(prefix: string): Promise<void> {
+    if (!this.redis) return;
+    try {
+      let cursor = '0';
+      do {
+        const [nextCursor, keys] = await this.redis.scan(cursor, 'MATCH', `${prefix}*`, 'COUNT', 100);
+        cursor = nextCursor;
+        if (keys.length > 0) {
+          await this.redis.unlink(...keys);
+        }
+      } while (cursor !== '0');
+    } catch {
+      // Ignore Redis communication errors
+    }
+  }
+
+  clear(): void {
+    this.l1.clear();
+  }
+
+  async fetchOrCompute(key: string, fetcher: () => Promise<T>, ttlMs?: number): Promise<T> {
+    // 1. Check L1 memory cache
+    const l1Cached = this.l1.get(key);
+    if (l1Cached !== null) {
+      return l1Cached;
+    }
+
+    // 2. Check L2 Redis if available
+    const ttl = ttlMs ?? this.defaultTtlMs;
+    if (this.isRedisReady && this.redis) {
+      try {
+        const raw = await this.redis.get(key);
+        if (raw) {
+          const parsed = JSON.parse(raw) as T;
+          this.l1.set(key, parsed, ttl);
+          return parsed;
+        }
+      } catch {
+        // Fallback to fetcher on Redis error
+      }
+    }
+
+    // 3. Fallback to L1 fetchOrCompute with single-flight deduplication
+    return await this.l1.fetchOrCompute(
+      key,
+      async () => {
+        const result = await fetcher();
+        if (this.isRedisReady && this.redis) {
+          const seconds = Math.max(1, Math.ceil(ttl / 1000));
+          this.redis.set(key, JSON.stringify(result), 'EX', seconds).catch(() => {});
+        }
+        return result;
+      },
+      ttl
+    );
+  }
+}
+
+// Global shared caches (Distributed with automatic in-memory fallback)
+export const defaultAppCache = new DistributedCache({ maxEntries: 5000, defaultTtlMs: 60_000 });
+export const inventoryCache = new DistributedCache({ maxEntries: 2000, defaultTtlMs: 60_000 });

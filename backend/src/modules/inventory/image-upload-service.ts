@@ -22,6 +22,8 @@ export interface ProcessedProductImageFiles {
   thumbnail_1200: string;
   file_size: number;
   mime_type: string;
+  sharpDurationMs: number;
+  storageDurationMs: number;
 }
 
 export class ImageUploadService {
@@ -76,28 +78,64 @@ export class ImageUploadService {
     const imageId = params.imageId || crypto.randomUUID();
     const ext = this.getExtensionFromMime(mimeType, originalFilename);
     const basePath = `products/${orgId}/${productId}`;
+    const originalPath = `${basePath}/${imageId}.${ext}`;
 
     try {
-      // 1. Save original file
-      const originalPath = `${basePath}/${imageId}.${ext}`;
-      const originalUrl = await this.storage.saveFile(originalPath, fileBuffer, mimeType);
+      // 1. Cascading downscaling with Sharp
+      const sharpStart = Date.now();
+      const instance = sharp(fileBuffer);
+      const metadata = await instance.metadata();
+      const origWidth = metadata.width || 2000;
+      const origHeight = metadata.height || 2000;
 
-      // 2. Generate and save 4 thumbnail sizes as WebP with fit: 'inside'
-      const sharpInstance = sharp(fileBuffer);
+      const webpOptions = { quality: 80, effort: 3 };
 
-      const [thumb200, thumb400, thumb800, thumb1200] = await Promise.all([
-        sharpInstance.clone().resize(200, 200, { fit: 'inside' }).webp({ quality: 85 }).toBuffer(),
-        sharpInstance.clone().resize(400, 400, { fit: 'inside' }).webp({ quality: 85 }).toBuffer(),
-        sharpInstance.clone().resize(800, 800, { fit: 'inside' }).webp({ quality: 85 }).toBuffer(),
-        sharpInstance.clone().resize(1200, 1200, { fit: 'inside' }).webp({ quality: 85 }).toBuffer(),
-      ]);
+      // Cascade: Original -> 1200px WebP -> 800px WebP -> 400px WebP -> 200px WebP
+      const thumb1200 = await instance
+        .clone()
+        .resize(Math.min(1200, origWidth), Math.min(1200, origHeight), {
+          fit: 'inside',
+          withoutEnlargement: true,
+        })
+        .webp(webpOptions)
+        .toBuffer();
 
-      const [url200, url400, url800, url1200] = await Promise.all([
+      const thumb800 = await sharp(thumb1200)
+        .resize(Math.min(800, origWidth), Math.min(800, origHeight), {
+          fit: 'inside',
+          withoutEnlargement: true,
+        })
+        .webp(webpOptions)
+        .toBuffer();
+
+      const thumb400 = await sharp(thumb800)
+        .resize(Math.min(400, origWidth), Math.min(400, origHeight), {
+          fit: 'inside',
+          withoutEnlargement: true,
+        })
+        .webp(webpOptions)
+        .toBuffer();
+
+      const thumb200 = await sharp(thumb400)
+        .resize(Math.min(200, origWidth), Math.min(200, origHeight), {
+          fit: 'inside',
+          withoutEnlargement: true,
+        })
+        .webp(webpOptions)
+        .toBuffer();
+
+      const sharpDurationMs = Date.now() - sharpStart;
+
+      // 2. Parallel storage writes for original + 4 thumbnails
+      const storageStart = Date.now();
+      const [originalUrl, url200, url400, url800, url1200] = await Promise.all([
+        this.storage.saveFile(originalPath, fileBuffer, mimeType),
         this.storage.saveFile(`${basePath}/${imageId}-200.webp`, thumb200, 'image/webp'),
         this.storage.saveFile(`${basePath}/${imageId}-400.webp`, thumb400, 'image/webp'),
         this.storage.saveFile(`${basePath}/${imageId}-800.webp`, thumb800, 'image/webp'),
         this.storage.saveFile(`${basePath}/${imageId}-1200.webp`, thumb1200, 'image/webp'),
       ]);
+      const storageDurationMs = Date.now() - storageStart;
 
       return {
         imageId,
@@ -108,6 +146,8 @@ export class ImageUploadService {
         thumbnail_1200: url1200,
         file_size: fileBuffer.length,
         mime_type: mimeType,
+        sharpDurationMs,
+        storageDurationMs,
       };
     } catch (err: any) {
       if (err instanceof AppError) throw err;
@@ -158,8 +198,8 @@ export class ImageUploadService {
 
     try {
       const resized = await sharp(fileBuffer)
-        .resize(400, 400, { fit: 'inside' })
-        .webp({ quality: 85 })
+        .resize(400, 400, { fit: 'inside', withoutEnlargement: true })
+        .webp({ quality: 80, effort: 3 })
         .toBuffer();
 
       const filePath = `categories/${orgId}/${categoryId}.webp`;

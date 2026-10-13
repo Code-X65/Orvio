@@ -22,15 +22,15 @@ export function AuthGuard({ children }: AuthGuardProps) {
     }
   }, [isHydrated, hydrate]);
 
-  // Track and remember last visited workspace path for authenticated user
+  // Track and remember last visited workspace path with full query params for authenticated user
   React.useEffect(() => {
     if (status === 'authenticated') {
       const activeSub = organization?.subdomain || getSubdomainFromHostname();
       if (activeSub) {
-        saveLastVisitedPath(activeSub, location.pathname);
+        saveLastVisitedPath(activeSub, location.pathname + location.search);
       }
     }
-  }, [status, organization?.subdomain, location.pathname]);
+  }, [status, organization?.subdomain, location.pathname, location.search]);
 
   if (!isHydrated || status === 'authenticating') {
     return (

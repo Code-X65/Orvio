@@ -14,10 +14,15 @@ import {
   Percent,
   Tag,
   ImageIcon,
+  Plus,
 } from 'lucide-react';
+import { brandApi, type Brand } from '../brands-api';
+import { BrandForm } from './BrandForm';
 import { Button } from '../../../components/ui/button';
 import { Input } from '../../../components/ui/input';
+import { Badge } from '../../../components/ui/badge';
 import { Textarea } from '../../../components/ui/textarea';
+import { useFormDraft } from '../../../hooks/useFormDraft';
 import type { CategoryTreeNode } from '../categories-api';
 import { flattenCategoriesForSelection } from './CategoryForm';
 import {
@@ -182,11 +187,30 @@ export function ProductForm({
   const [mounted, setMounted] = React.useState(isOpen);
   const [animating, setAnimating] = React.useState(false);
 
+  const draftKey = editingProduct?.id ? `product_${editingProduct.id}` : 'product_new';
+  const { draft, saveDraft, clearDraft, hasDraft } = useFormDraft<{
+    name?: string;
+    sku?: string;
+    barcode?: string;
+    categoryId?: string | null;
+    brandId?: string | null;
+    costPrice?: number | '';
+    costPriceDisplay?: string;
+    sellingPrice?: number | '';
+    sellingPriceDisplay?: string;
+    compareAtPrice?: number | '';
+    compareAtPriceDisplay?: string;
+    description?: string;
+  }>(draftKey, {});
+
   // Form State
   const [name, setName] = React.useState('');
   const [sku, setSku] = React.useState('');
   const [barcode, setBarcode] = React.useState('');
   const [categoryId, setCategoryId] = React.useState<string | null>(null);
+  const [brandId, setBrandId] = React.useState<string | null>(null);
+  const [brands, setBrands] = React.useState<Brand[]>([]);
+  const [isBrandQuickCreateOpen, setIsBrandQuickCreateOpen] = React.useState(false);
   const [costPrice, setCostPrice] = React.useState<number | ''>('');
   const [costPriceDisplay, setCostPriceDisplay] = React.useState('');
   const [sellingPrice, setSellingPrice] = React.useState<number | ''>('');
@@ -201,6 +225,41 @@ export function ProductForm({
   const [description, setDescription] = React.useState('');
   const [isActive, setIsActive] = React.useState(true);
   const [metadata, setMetadata] = React.useState<Record<string, any>>({});
+
+  // Auto-save draft when fields change (for new product)
+  React.useEffect(() => {
+    if (!editingProduct && (name || sku || barcode || description || costPriceDisplay || sellingPriceDisplay)) {
+      saveDraft({
+        name,
+        sku,
+        barcode,
+        description,
+        costPrice,
+        costPriceDisplay,
+        sellingPrice,
+        sellingPriceDisplay,
+        compareAtPrice,
+        compareAtPriceDisplay,
+        categoryId,
+        brandId,
+      });
+    }
+  }, [
+    editingProduct,
+    name,
+    sku,
+    barcode,
+    description,
+    costPrice,
+    costPriceDisplay,
+    sellingPrice,
+    sellingPriceDisplay,
+    compareAtPrice,
+    compareAtPriceDisplay,
+    categoryId,
+    brandId,
+    saveDraft,
+  ]);
 
   // Image Gallery State
   const maxProductImages: number = (businessType && BUSINESS_TYPE_IMAGE_LIMITS[businessType]) ? BUSINESS_TYPE_IMAGE_LIMITS[businessType] : 5;
@@ -231,6 +290,16 @@ export function ProductForm({
     return () => clearTimeout(timer);
   }, [isOpen]);
 
+  // Load brands on open
+  React.useEffect(() => {
+    if (isOpen) {
+      brandApi
+        .getBrands({ activeOnly: true, limit: 100 })
+        .then((res) => setBrands(res.brands || []))
+        .catch(() => {});
+    }
+  }, [isOpen]);
+
   // Sync state on edit / open
   React.useEffect(() => {
     if (editingProduct) {
@@ -238,6 +307,7 @@ export function ProductForm({
       setSku(editingProduct.sku);
       setBarcode(editingProduct.barcode || '');
       setCategoryId(editingProduct.category_id || null);
+      setBrandId(editingProduct.brand_id || null);
 
       const cost = formatInitialPrice(editingProduct.cost_price);
       setCostPrice(cost.numeric);
@@ -319,22 +389,23 @@ export function ProductForm({
         }).catch(() => {});
       }
     } else {
-      setName('');
-      setSku('');
-      setBarcode('');
-      setCategoryId(defaultCategoryId ?? null);
-      setCostPrice('');
-      setCostPriceDisplay('');
-      setSellingPrice('');
-      setSellingPriceDisplay('');
-      setCompareAtPrice('');
-      setCompareAtPriceDisplay('');
+      setName(draft?.name || '');
+      setSku(draft?.sku || '');
+      setBarcode(draft?.barcode || '');
+      setCategoryId(draft?.categoryId || defaultCategoryId || null);
+      setBrandId(draft?.brandId || null);
+      setCostPrice(draft?.costPrice !== undefined ? draft.costPrice : '');
+      setCostPriceDisplay(draft?.costPriceDisplay || '');
+      setSellingPrice(draft?.sellingPrice !== undefined ? draft.sellingPrice : '');
+      setSellingPriceDisplay(draft?.sellingPriceDisplay || '');
+      setCompareAtPrice(draft?.compareAtPrice !== undefined ? draft.compareAtPrice : '');
+      setCompareAtPriceDisplay(draft?.compareAtPriceDisplay || '');
       setUnitOfMeasure('pcs');
       setTrackQuantity(true);
       setInitialStock(0);
       setLowStockThreshold(5);
       setHasVariants(false);
-      setDescription('');
+      setDescription(draft?.description || '');
       setIsActive(true);
       setMetadata({});
       setUploadedImages([]);
@@ -437,6 +508,7 @@ export function ProductForm({
         sku: sku.trim() || undefined,
         barcode: barcode.trim() ? barcode.trim() : null,
         categoryId: categoryId || null,
+        brandId: brandId || null,
         costPrice: Number(costPrice),
         sellingPrice: Number(sellingPrice),
         compareAtPrice: compareNum,
@@ -466,6 +538,7 @@ export function ProductForm({
         sku: sku.trim() || undefined,
         barcode: barcode.trim() || undefined,
         categoryId: categoryId || null,
+        brandId: brandId || null,
         costPrice: Number(costPrice),
         sellingPrice: Number(sellingPrice),
         compareAtPrice: compareNum,
@@ -492,6 +565,7 @@ export function ProductForm({
       } else {
         await onSubmit(payload);
       }
+      clearDraft();
       triggerClose();
     } catch (err: any) {
       setError(err?.message || 'Failed to save product. Please check the fields and try again.');
@@ -535,9 +609,16 @@ export function ProductForm({
                 <Package className="w-5 h-5 text-[#fbb945]" />
               </div>
               <div>
-                <h3 className="text-base font-bold text-white tracking-tight">
-                  {editingProduct ? 'Edit Product' : 'Add New Product'}
-                </h3>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-base font-bold text-white tracking-tight">
+                    {editingProduct ? 'Edit Product' : 'Add New Product'}
+                  </h3>
+                  {hasDraft && !editingProduct && (
+                    <Badge variant="outline" className="text-[10px] bg-amber-500/10 text-amber-300 border-amber-500/30">
+                      Draft Restored
+                    </Badge>
+                  )}
+                </div>
                 <p className="text-xs text-slate-400">
                   {editingProduct
                     ? 'Update product details, pricing, and profitability'
@@ -665,6 +746,37 @@ export function ProductForm({
                     Assign product to a primary category or nested subcategory
                   </span>
                 )}
+              </div>
+
+              {/* Brand Selection (Optional) */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs font-semibold text-slate-300">
+                    Brand / Manufacturer
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setIsBrandQuickCreateOpen(true)}
+                    className="text-[11px] text-[#fbb945] hover:text-[#fbb945]/80 flex items-center gap-1 font-medium transition-colors"
+                  >
+                    <Plus className="w-3 h-3" /> New Brand
+                  </button>
+                </div>
+                <select
+                  value={brandId || ''}
+                  onChange={(e) => setBrandId(e.target.value ? e.target.value : null)}
+                  className="w-full bg-[#121316] border border-[#2d3139] rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-[#985184] transition-colors"
+                >
+                  <option value="">No Brand (Generic / Store Brand)</option>
+                  {brands.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.name}
+                    </option>
+                  ))}
+                </select>
+                <span className="text-[10px] text-slate-500 mt-1 block">
+                  Optional manufacturer or publisher (shared across all branch catalogs)
+                </span>
               </div>
             </div>
 
@@ -1205,6 +1317,20 @@ export function ProductForm({
           </div>
         </div>
       )}
+
+      {/* Quick Brand Create Modal */}
+      <BrandForm
+        isOpen={isBrandQuickCreateOpen}
+        onClose={() => setIsBrandQuickCreateOpen(false)}
+        isQuickCreate={true}
+        onSuccess={(createdBrand) => {
+          setBrands((prev) => {
+            if (prev.some((b) => b.id === createdBrand.id)) return prev;
+            return [...prev, createdBrand];
+          });
+          setBrandId(createdBrand.id);
+        }}
+      />
     </>
   );
 }

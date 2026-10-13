@@ -1,251 +1,335 @@
-# Multi-Branch Inventory Feature Plan
+# Brand Management & Unified Catalog for Multi-Branch Inventory
+
+## Status
+- **Multi-branch inventory (Phase 0)**: COMPLETE — Branch model, BranchService, branches-routes/schemas/service, branches-api, BranchManagementModal, AddBranchWizardModal, multi-branch wiring in InventoryWorkspacePage and ProductsPage all implemented and tested.
+- **Visual assets**: COMPLETE — ProductImage, ImageUploader, ProductGallery, VariantSwatchSelector, CategoryImageBadge all implemented.
+- **Brand Management & Unified Catalog (Phases 1-7)**: COMPLETE — Brand, BranchProduct, CatalogImport models, Prisma migrations (0005 & 0006 backfill), BrandService & routes, CatalogService & routes, ProductService brand integration, Frontend Brand CRUD & BrandForm, CatalogImportModal 4-step wizard, BranchCatalogModal, CatalogImportHistory, ProductsPage brand column & catalog actions, InventoryWorkspacePage /inventory/brands routing & nav. All backend and frontend typechecks and tests passing.
 
 ## Goal
-Enable multi-branch inventory management where each branch maintains its own stock levels (quantity on hand, reserved) for shared organization-level products. The product catalog is shared across all branches; only stock is branch-scoped. This matches the existing data model (`StockLevel.branch_id`, `Branch` model) and requires wiring up the missing backend CRUD + frontend branch selection.
+Introduce a first-class **Brand** entity, integrate it into the existing Category → Product → Variant hierarchy as a **unified catalog**, enable **per-branch catalog assignments** via a `BranchProduct` membership table, and provide **catalog import** between branches with audit logging.
 
-**Key constraint:** Products and categories remain organization-level (shared across all branches). Stock levels are per-branch. This is the existing architecture — no schema redesign needed.
+## Model Decisions
 
----
+### D1: Brands are org-level (shared across branches)
+- Brand is a master entity at the organization level. All branches see the same brand list.
+- Rationale: Brands represent manufacturers/publishers — consistent across all locations.
+- Impact: No branch-level brand CRUD needed; simplifies import (brands come along with products).
 
-## Current State Assessment
+### D2: Products are org-level masters, branches have catalog assignments
+- Product/Brand/Category = org-level master data (already exists for Product/Category).
+- New `BranchProduct` table defines which products appear in each branch's catalog.
+- A product's `brand_id` is org-level; stock levels remain per-branch via existing `StockLevel`.
 
-### What already exists
-| Component | Status | Location |
-|-----------|--------|----------|
-| `Branch` Prisma model (id, org_id, name, code, type, status, is_primary, address Json) | ✅ | `schema.prisma:138-159` |
-| `StockLevel` model (branch_id + product/variant + qty_on_hand + reserved) | ✅ | `schema.prisma:430-450` |
-| `ProductService.listProducts()` supports `query.branchId` filter | ✅ | `products-service.ts:207-228` |
-| `ProductService.getProductUsage()` returns per-branch stock breakdown | ✅ | `products-service.ts:598-664` |
-| `deleteProduct()` checks reserved/on-hand stock per branch before deletion | ✅ | `products-service.ts:666-744` |
-| `deleteCategory()` blocks deletion if children or products exist | ✅ | `categories-service.ts:384-410` |
-| Error codes: PRODUCT_HAS_STOCK, PRODUCT_HAS_RESERVED_STOCK, CATEGORY_HAS_PRODUCTS, CANNOT_DELETE_PARENT_CATEGORY | ✅ | `errors.ts:43-46` |
-| Onboarding creates primary branch (`completeBranchSetup`) | ✅ | `service.ts:137-225` |
-| `InventoryPage` fetches status → passes `branch` + `branches` to workspace | ✅ | `InventoryPage.tsx:118-122` |
-| `InventoryWorkspacePage` receives `branches` array + `selectedBranch` state | ✅ | `InventoryWorkspacePage.tsx:49-61` |
-| `productApi.listProducts()` accepts `branchId` param | ✅ | `products-api.ts:218` |
-| `Product` interface includes `stock_levels: BranchStockItem[]` | ✅ | `products-api.ts:65` |
+### D3: Catalog import creates BranchProduct + optional StockLevel
+- Importing from Branch A → B: creates `BranchProduct` entries in B with `source_branch_id = A`.
+- Optional: copy stock levels from A to B (creates `StockLevel` entries in B).
+- Default: import with zero stock (must be explicitly opted in).
+- Brand/category associations come automatically (org-level shared).
 
-### What is missing
+### D4: Soft-delete pattern everywhere (consistent with Product/Category/Branch)
+- Brand: `is_deleted`, `deleted_at`, `deleted_by_user_id`, `deleted_reason`
+- BranchProduct: `is_excluded` (soft-remove from catalog without breaking provenance)
+- No hard deletes for Brands or BranchProduct entries.
 
-#### Backend
-- **No branch CRUD endpoints** — branch creation only happens via onboarding wizard
-- **No `BranchService`** — no list/create/update/delete methods for branches post-onboarding
-- **No `branches-routes.ts`** — routes file doesn't exist
-- **No branch schemas** — no Zod validation schemas for branch CRUD input
-- **Branch model lacks soft-delete** — no `is_deleted`, `deleted_at`, `deleted_by_user_id`, `deleted_reason` fields
-- **Branch model lacks `business_type`** — not needed per decision below
+### D5: Brand backfill from metadata
+- Existing products store brand as free-text in `metadata.brand`.
+- Migration extracts unique brand names → creates Brand records → sets `product.brand_id`.
+- Unmatched/empty: linked to auto-generated "Unorganized" brand (inactive, not user-facing).
 
-#### Frontend
-- **No branch selector dropdown** — `selectedBranch` state exists but is never wired to product/category queries
-- **`InventoryWorkspacePage` sidebar** shows hardcoded branch info ("Primary Store", "Terminal 01") instead of real data
-- **`ProductsPage`** does not accept `branchId` prop — calls `listProducts` without branch context (always shows aggregate)
-- **`CategoriesPage`** has no branch context but categories are org-level so this is fine (low priority)
-- **No `branches-api.ts`** — frontend API client for branch CRUD
-- **"Branch Settings" button** opens placeholder modal (`setActiveModal('Branch Settings')`) with no real CRUD UI
-- **Dashboard mock data** — `InventoryWorkspacePage` uses hardcoded arrays (dailyOrdersData, categoriesData, etc.) instead of real branch-scoped data
+## Data Structures
 
----
+### New: Brand
+```prisma
+model Brand {
+  id                 String    @id @default(cuid())
+  org_id             String
+  name               String
+  slug               String?
+  description        String?   @db.Text
+  logo_url           String?
+  website_url        String?
+  is_active          Boolean   @default(true)
+  is_deleted         Boolean   @default(false)
+  deleted_at         DateTime?
+  deleted_by_user_id String?
+  deleted_reason     String?   @db.Text
+  sort_order         Int       @default(0)
+  metadata           Json?
+  created_at         DateTime  @default(now())
+  updated_at         DateTime  @updated_at
 
-## Decisions
+  organization       Organization @relation(fields: [org_id], references: [id], onDelete: Cascade)
+  products           Product[]
 
-### D1: Shared catalog model (not branch-exclusive products)
-- **Decision**: Products and categories are organization-level. Stock is branch-scoped.
-- **Rationale**: This is the existing architecture. The `StockLevel` table already joins products to branches. No new tables or migrations needed for the core feature.
-- **Implication**: A product created in one branch is visible in all branches; only the stock quantity differs per branch.
+  @@unique([org_id, slug])
+  @@index([org_id, is_deleted])
+  @@index([org_id, is_active])
+  @@map("brands")
+}
+```
 
-### D2: Branch selector in workspace header
-- **Decision**: Add a branch dropdown in the top header bar (right side, near currency selector) and keep the sidebar showing the active branch.
-- **Rationale**: Standard UX pattern for multi-branch apps. The sidebar space is currently used for the hardcoded "Primary Store" card which should show dynamic data.
-- **Implication**: The sidebar card updates to reflect `selectedBranch.name`, `selectedBranch.code`, `selectedBranch.type`.
+### Modified: Product (add brand_id)
+- Add: `brand_id String?` → `brand Brand? @relation(fields: [brand_id], references: [id], onDelete: SetNull)`
+- Add: `branch_assignments BranchProduct[]` (reverse relation)
 
-### D3: Branch selection via query param
-- **Decision**: When a branch is selected, the URL updates with `?branch=BRANCH_ID`. The workspace reads this on mount and persists selection via session storage.
-- **Rationale**: Allows bookmarking/shareable URLs with a specific branch. Session storage remembers selection per browser tab session.
-- **Implication**: `ProductsPage` reads `branchId` from props (passed by workspace) and always includes it in `listProducts` calls.
+### Modified: ProductVariant (Phase 2 — add brand_id)
+- Add: `brand_id String?` → `brand Brand? @relation(...)` (variant-specific brand override)
 
-### D4: Soft-delete on Branch model
-- **Decision**: Add `is_deleted`, `deleted_at`, `deleted_by_user_id`, `deleted_reason` fields to the `Branch` Prisma model, consistent with Product and Category.
-- **Rationale**: All other inventory entities support soft-delete. Branches should too for audit trail and referential integrity (StockLevels reference branch_id).
-- **Implication**: Need a Prisma migration. Existing `service.ts` and other code must be updated to filter `is_deleted: false` where querying branches.
+### New: BranchProduct
+```prisma
+model BranchProduct {
+  id                    String     @id @default(cuid())
+  org_id                String
+  branch_id             String
+  product_id            String
+  source_branch_id      String?    // null = native to this branch; set = imported
+  added_by_user_id      String?
+  added_at              DateTime   @default(now())
+  notes                 String?    @db.Text
+  is_excluded           Boolean    @default(false)
 
-### D5: Branch CRUD scope
-- **Decision**: Full CRUD — list, create, read, update, soft-delete. Primary branch enforcement (can't delete the only/primary branch without reassigning).
-- **Rationale**: Users need to add/remove branches as their business grows.
-- **Implication**: When soft-deleting a branch with active stock, require explicit confirmation with reason (mirroring product deletion pattern).
+  organization          Organization @relation(fields: [org_id], references: [id], onDelete: Cascade)
+  branch                Branch          @relation(fields: [branch_id], references: [id], onDelete: Cascade)
+  product               Product         @relation(fields: [product_id], references: [id], onDelete: Cascade)
+  source_branch         Branch?         @relation("BranchProductSource", fields: [source_branch_id], references: [id])
+  user                  User?           @relation("BranchProductAddedBy", fields: [added_by_user_id], references: [id])
 
-### D6: Branch Settings as modal (not separate page)
-- **Decision**: Implement branch CRUD as a modal dialog triggered from the sidebar "Branch Settings" button, consistent with existing modal patterns in `InventoryWorkspacePage`.
-- **Rationale**: The existing code already uses `setActiveModal` for modals. A full page would be over-engineering for branch management.
-- **Implication**: Modal shows a form with branch fields (name, code, type, status, address). Delete action requires confirmation.
+  @@unique([org_id, branch_id, product_id])
+  @@index([branch_id])
+  @@index([product_id])
+  @@index([source_branch_id])
+  @@map("branch_products")
+}
+```
 
-### D7: Dashboard data
-- **Decision**: Replace hardcoded dashboard mock data in `InventoryWorkspacePage` with real branch-scoped API calls. This is a secondary concern — for MVP, keep dashboard static but ensure product/category views are branch-aware.
-- **Rationale**: Dashboard requires additional API endpoints (orders, customers, revenue) that don't exist yet. Out of scope for this plan.
-- **Implication**: Dashboard mock data stays as-is for now.
+### New: CatalogImport (audit log)
+```prisma
+model CatalogImport {
+  id                String    @id @default(cuid())
+  org_id            String
+  source_branch_id  String
+  target_branch_id  String
+  imported_by_user_id String?
+  product_count     Int
+  copy_stock        Boolean   @default(false)
+  notes             String?
+  created_at        DateTime  @default(now())
 
----
+  source_branch     Branch          @relation("ImportSource", fields: [source_branch_id], references: [id])
+  target_branch     Branch          @relation("ImportTarget", fields: [target_branch_id], references: [id])
+  user              User?           @relation(fields: [imported_by_user_id], references: [id])
 
-## Implementation Plan
+  @@index([org_id])
+  @@index([target_branch_id])
+  @@map("catalog_imports")
+}
+```
 
-### Phase 1: Backend — Branch CRUD API
+### Modified: Branch (add relations)
+- Add: `branch_products BranchProduct[]` (reverse)
+- Add: `import_audits_imported CatalogImport[]` (reverse — imports INTO this branch)
 
-#### Task 1.1: Add soft-delete fields to Branch model
-- **File**: `backend/prisma/schema.prisma:138-159`
-- Add: `is_deleted Boolean @default(false)`, `deleted_at DateTime?`, `deleted_by_user_id String?`, `deleted_reason String?`
-- Run: `npx prisma migrate dev --name add_branch_soft_delete` (after schema edit)
-- Update existing `service.ts` queries that select from `branch` to filter `is_deleted: false` where appropriate (line 176, 244, etc.)
+## Backend Implementation Plan
 
-#### Task 1.2: Create branch schemas (Zod)
-- **File**: `backend/src/modules/inventory/branches-schemas.ts` (new)
-- Schemas: `listBranchesQuerySchema`, `createBranchSchema`, `updateBranchSchema`, `deleteBranchQuerySchema`
-- Create input: name, code, type (enum: store/warehouse/studio/headquarters), status (enum: active/inactive), address (JSON)
-- Update input: all fields optional except requires at least one
-- Delete input: reason (required if branch has stock), confirmWithStock (boolean flag)
+### Phase 1 — Schema & Migrations
+- **P1.0** Update `schema.prisma`: Add Brand, BranchProduct, CatalogImport models; add `brand_id` to Product; add `branch_products` + `import_audits_imported` relations to Branch
+- **P1.1** Migration 1: `add_brand_and_catalog_models`
+- **P1.2** Migration 2: `backfill_brands_from_metadata` — extract `metadata.brand` → Brand records + `product.brand_id`
+- **P1.3** Add error codes to `errors.ts`: `BRAND_NOT_FOUND`, `BRAND_SLUG_DUPLICATE`, `BRAND_HAS_PRODUCTS`, `BRANCH_PRODUCT_NOT_FOUND`, `CATALOG_IMPORT_FAILED`
 
-#### Task 1.3: Create BranchService
-- **File**: `backend/src/modules/inventory/branches-service.ts` (new)
-- Methods:
-  - `listBranches(orgId, query?)` — returns all non-deleted branches for org with stock summary
-  - `getBranch(orgId, branchId)` — returns single branch with stock levels
-  - `createBranch(orgId, input)` — creates branch, validates org ownership, ensures org has at least one primary
-  - `updateBranch(orgId, branchId, input)` — updates branch; if setting is_primary, demotes others
-  - `deleteBranch(orgId, branchId, options)` — soft-delete; blocks if has active stock (mirror product deletion pattern); requires `confirmWithStock` + `reason` if stock exists
-  - `restoreBranch(orgId, branchId)` — reverses soft-delete
-  - `getBranchStock(orgId, branchId)` — returns stock levels for a branch with product details
-- All methods use `is_deleted: false` filter on branches
-- `createBranch` follows the same pattern as `completeBranchSetup` (service.ts:200-219)
-- `updateBranch` handles `is_primary` reassignment (demotes other primaries if needed)
+### Phase 2 — Brand CRUD
+- **P2.1** `backend/src/modules/inventory/brands-schemas.ts` — Zod: createBrandSchema, updateBrandSchema, listBrandsQuerySchema, deleteBrandQuerySchema
+- **P2.2** `backend/src/modules/inventory/brands-service.ts` — BrandService: listBrands, getBrand, createBrand, updateBrand, deleteBrand (soft), restoreBrand, listBrandProducts
+- **P2.3** `backend/src/modules/inventory/brands-routes.ts` — Fastify routes: GET/POST/GET-by-id/PATCH/DELETE/PATCH-restore
+- **P2.4** Register `brandRoutes` in `routes.ts` under `/brands` prefix
 
-#### Task 1.4: Create branch routes
-- **File**: `backend/src/modules/inventory/branches-routes.ts` (new)
-- Register under `/api/v1/inventory/branches` prefix
-- Routes:
-  - `GET /` — list branches (with optional `activeOnly` query param)
-  - `POST /` — create branch (owner/admin only)
-  - `GET /:id` — get single branch with stock levels
-  - `PATCH /:id` — update branch
-  - `PATCH /:id/restore` — restore soft-deleted branch
-  - `DELETE /:id` — soft-delete branch
-- Follow existing pattern from `products-routes.ts` and `categories-routes.ts` (use `@requireAuth`, `@sendData`, Zod validation, try-catch with AppError)
-- Add new error codes if needed: `BRANCH_NOT_FOUND`, `BRANCH_HAS_STOCK`, `IS_PRIMARY_BRANCH`, `BRANCH_NOT_ACTIVE`
+### Phase 3 — Catalog Service & Routes
+- **P3.1** `backend/src/modules/inventory/catalog-schemas.ts` — Zod: assignProductSchema, importCatalogSchema, listBranchProductsQuerySchema
+- **P3.2** `backend/src/modules/inventory/catalog-service.ts` — CatalogService:
+  - `listBranchProducts(orgId, branchId, query)` — join BranchProduct → Product with brand/category info
+  - `assignProductToBranch(orgId, branchId, productId, userId, notes)` — create BranchProduct
+  - `removeProductFromBranch(orgId, branchId, productId)` — set `is_excluded = true`
+  - `importCatalog(orgId, sourceBranchId, targetBranchId, productIds, options, userId)` — transaction creating BranchProduct[] + optional StockLevel[], CatalogImport record
+  - `getBranchCatalogSummary(orgId, branchId)` — counts, categories, brands
+- **P3.3** `backend/src/modules/inventory/catalog-routes.ts` — Routes:
+  - `GET /branches/:branchId/products` — list branch catalog
+  - `POST /branches/:branchId/products` — assign product to catalog
+  - `DELETE /branches/:branchId/products/:productId` — remove from catalog
+  - `POST /branches/:branchId/catalog/import` — import from source branch
+  - `GET /branches/:branchId/catalog/summary` — catalog overview
+  - `GET /catalog-imports` — import history for org
+- **P3.4** Register `catalogRoutes` in `routes.ts` under `/catalog` prefix
 
-#### Task 1.5: Register branch routes
-- **File**: `backend/src/modules/inventory/routes.ts`
-- Add: `app.register(branchRoutes, { prefix: '/branches' });` (line 14, after categories)
+### Phase 4 — ProductService Integration
+- **P4.1** Update `products-schemas.ts`: add `brandId` to create/update/list query schemas; add `includeExcluded` to list query
+- **P4.2** Update `products-service.ts`:
+  - `createProduct`: when `branchId` provided, create BranchProduct entry
+  - `updateProduct`: handle `brandId` field
+  - `listProducts`: when `branchId` provided, join through BranchProduct to filter catalog
+  - Include `brand` in product detail/list responses (join)
+- **P4.3** Add to existing image/upload integration (ProductService already handles ProductImage — ensure variant images respect brand context if applicable)
 
-### Phase 2: Backend — Update onboarding status to include full branch list
+## Frontend Implementation Plan
 
-#### Task 2.1: Enhance `getStatus` to exclude soft-deleted branches
-- **File**: `backend/src/modules/inventory/service.ts:1-66`
-- Current `getStatus` (line ~43) queries `branches: { where: { org_id: orgId } }` — add `is_deleted: false` filter
-- Ensure `branch` (active branch) also filters `is_deleted: false`
+### Phase 5 — Brand API & Pages
+- **P5.1** `frontend/src/features/inventory/brands-api.ts` — Brand interface, fetchBrands, createBrand, updateBrand, deleteBrand, restoreBrand
+- **P5.2** `frontend/src/features/inventory/components/BrandsPage.tsx` — table view (name, slug, logo, product count, status), archive/restore actions, "Add Brand" button
+- **P5.3** `frontend/src/features/inventory/components/BrandForm.tsx` — modal form: name*, slug (auto), logo (ImageUploader), description, website, metadata. Use CategoryImageBadge pattern for logo display.
+- **P5.4** Modify `ProductForm.tsx` — replace free-text `brand` metadata field with `<select>` from `brandsApi.fetchBrands()` + "Create new brand" quick link
+- **P5.5** Modify `InventoryWorkspacePage.tsx` — add "Brands" to navItems[]
+- **P5.6** Modify `api.ts` — re-export `brands-api`
 
-### Phase 3: Frontend — Branch API client
+### Phase 6 — Catalog Import UI
+- **F6.1** `frontend/src/features/inventory/catalog-api.ts` — BranchProduct interface, importCatalog, assignProductToBranch, removeProductFromBranch, getBranchCatalogSummary, getCatalogImports
+- **F6.2** `frontend/src/features/inventory/components/CatalogImportModal.tsx` — 4-step wizard:
+  1. Select source branch (dropdown, excluding current branch)
+  2. Select products (checkbox tree: category → brand → products; search, select all/invert)
+  3. Options (copy stock toggle, overwrite existing toggle, note textarea)
+  4. Preview + confirm (summary: product count, categories, brands, import mode)
+- **F6.3** `frontend/src/features/inventory/components/BranchCatalogModal.tsx` — manage branch catalog: Assigned Products tab (list with remove action), Import Catalog button
+- **F6.4** `frontend/src/features/inventory/components/CatalogImportHistory.tsx` — audit log table (source/target branch, product count, date, user, notes)
 
-#### Task 3.1: Create branches-api.ts
-- **File**: `frontend/src/features/inventory/branches-api.ts` (new)
-- Interface `Branch` (id, name, code, type, status, is_primary, phone, email, address, created_at, updated_at)
-- Interface `BranchStockLevel` (product details + stock on hand + reserved per branch)
-- `fetchBranches()` — GET `/inventory/branches`
-- `createBranch(payload)` — POST `/inventory/branches`
-- `updateBranch(id, payload)` — PATCH `/inventory/branches/:id`
-- `deleteBranch(id, options)` — DELETE `/inventory/branches/:id`
-- `restoreBranch(id)` — PATCH `/inventory/branches/:id/restore`
-- `getBranchStock(id)` — GET `/inventory/branches/:id/stock`
+### Phase 7 — Integration & Polish
+- **F7.1** Modify `ProductsPage.tsx` — add Brand column (badge with logo), import-source indicator, "Remove from Catalog" action in row menu
+- **F7.2** Modify `BranchManagementModal.tsx` — add "Import Catalog" + "Manage Catalog" buttons
+- **F7.3** Modify `api.ts` — re-export `catalog-api`
+- **F7.4** Update `InventoryWorkspacePage` dashboard to use real category/brand data (currently hardcoded mock arrays)
 
-#### Task 3.2: Re-export from api.ts
-- **File**: `frontend/src/features/inventory/api.ts:112`
-- Add: `export * from './branches-api';`
+## User Workflows
 
-### Phase 4: Frontend — Branch selector in workspace
+### Workflow A: Brand Creation
+```
+BrandsPage → "Add Brand" → BrandForm modal → name, slug, logo, description → Save
+→ POST /inventory/brands → Brand appears in list with product_count=0
+```
 
-#### Task 4.1: Add branch selector dropdown to header
-- **File**: `frontend/src/pages/app/InventoryWorkspacePage.tsx`
-- Replace the static branch display in sidebar (line 298-321) with dynamic `selectedBranch` data
-- Add branch selector dropdown in top header bar (next to currency selector)
-- Dropdown: lists all `branches`, shows branch type badge, marks primary branch
-- On select: `setSelectedBranch(branch)` + update URL query param `?branch=BRANCH_ID`
-- Persist selection to `sessionStorage` under key `orvio.selectedBranch.{orgId}`
+### Workflow B: Product with Brand
+```
+ProductsPage (branch view) → "New Product" → ProductForm
+→ Brand dropdown (fetched from GET /brands) + "Create new brand" link
+→ Save → Product.brand_id set → BranchProduct created for current branch
+```
 
-#### Task 4.2: Pass selectedBranch to ProductsPage
-- **File**: `frontend/src/pages/app/InventoryWorkspacePage.tsx:419-423`
-- Add `branchId={selectedBranch?.id}` prop to `ProductsPage`
-- Add `branchId={selectedBranch?.id}` prop to `CategoriesPage` (informational, since categories are org-level)
+### Workflow C: Per-Branch Catalog View
+```
+Select Branch B → URL ?branch=B → ProductsPage refetches with branchId=B
+→ Backend joins BranchProduct WHERE branch_id=B, is_excluded=false
+→ Only assigned products shown, each with brand badge + stock level
+```
 
-#### Task 4.3: Update ProductsPage to accept branchId
-- **File**: `frontend/src/features/inventory/components/ProductsPage.tsx:48-57`
-- Add `branchId?: string` to `ProductsPageProps`
-- Update `fetchProducts` (line 145) to include `branchId` in `listProducts` call
-- When `branchId` changes, refetch products
+### Workflow D: Catalog Import
+```
+Branch B catalog view → "Import Catalog" → CatalogImportModal
+Step 1: Select Branch A as source
+Step 2: Checkbox-select products (grouped by category → brand)
+Step 3: Toggle stock copy (default off), add note
+Step 4: Preview → Import
+→ POST /catalog/branches/B/catalog/import
+→ BranchProduct[] created (source_branch_id=A)
+→ StockLevel[] created (if copy_stock)
+→ CatalogImport record logged
+→ ProductsPage refreshes showing new catalog entries
+```
 
-#### Task 4.4: Implement Branch Settings modal
-- **File**: `frontend/src/pages/app/InventoryWorkspacePage.tsx`
-- Replace placeholder modal (`setActiveModal('Branch Settings')`) with real branch management form
-- Modal content: edit form with branch fields (name, code, type, status, address)
-- Include "Add Branch" button to create new branches
-- Include "Archive Branch" button with confirmation (requires reason if branch has stock)
-- Use `branchesApi` functions
+### Workflow E: Remove from Branch Catalog
+```
+Product row → ⋮ → "Remove from Catalog"
+→ Confirmation dialog → DELETE /catalog/branches/B/products/PRODUCT_ID
+→ Sets is_excluded=true (product stays in org, StockLevel preserved)
+```
 
-### Phase 5: Tests
+### Workflow F: Brand Backfill (migration)
+```
+1. Collect all metadata.brand values across orgs
+2. Create Brand records (slugified names, "Unorganized" fallback)
+3. Set product.brand_id to matching Brand
+4. Log migration stats
+```
 
-#### Task 5.1: Backend integration tests
-- **File**: `backend/tests/integration/inventory-branches.test.ts` (new)
-- Test: list branches returns only non-deleted branches for org
-- Test: create branch with valid input
-- Test: update branch is_primary demotes other primaries
-- Test: soft-delete branch with no stock succeeds
-- Test: delete branch with active stock requires confirmation
-- Test: delete branch with reserved stock is blocked
-- Test: restore soft-deleted branch
+## Edge Cases & Mitigations
 
-#### Task 5.2: Frontend unit tests
-- **File**: `frontend/src/features/inventory/branches-api.test.ts` (new)
-- Test: `fetchBranches` calls correct endpoint
-- Test: `createBranch` sends correct payload
-- Test: `deleteBranch` passes confirmWithStock + reason params
+| Scenario | Handling |
+|-----------|----------|
+| Product already in target catalog (import) | Skip with warning row; "overwrite" checkbox resets stock to source values |
+| Source branch has 0 catalog products | Show empty state in import step 2 |
+| Source branch has variants | Auto-include all variants of selected parent product |
+| Product archived (soft-deleted) | Excluded from import by default; toggle to include |
+| Import with stock copy + existing target stock | Overwrite toggle; default: sum or warn |
+| Brand with existing products → archive | Soft-delete only; products retain brand_id, brand displays as "(archived)" |
+| Slug conflict on brand creation | Append `-2`, `-3` etc. (same pattern as category slug) |
+| Deleting only branch with catalog | Blocked by existing CANNOT_DELETE_ONLY_BRANCH logic |
 
-### Phase 6: Documentation
-- Update `AGENTS.md` if branch commands affect local development workflow
+## Cache Invalidation
+- Brand CRUD → clear `brands_list:{orgId}`
+- BranchProduct changes → clear `branch_products:{orgId}:{branchId}` + `products_list:{orgId}`
+- Catalog import → clear source + target branch caches + products_list
 
----
+## Authorization Rules
+- owner, admin: brand CRUD, branch catalog management, catalog import
+- manager: manage branch catalogs, initiate imports
+- staff: read-only catalog + stock view
+
+## Reuse Opportunities
+- **ImageUploader** — brand logo upload (already built)
+- **CategoryImageBadge** — brand logo display badge pattern
+- **BranchManagementModal** — UI patterns for branch list/edit/archive
+- **AddBranchWizardModal** — multi-step modal pattern for CatalogImportModal
+- **Error code patterns** — mirror `BRANCH_HAS_STOCK` / `PRODUCT_HAS_STOCK` for `BRAND_HAS_PRODUCTS`
+- **Soft-delete pattern** — consistent across Product/Category/Branch → apply to Brand
+- **Cache pattern** — `inventoryCache` with `fetchOrCompute` + `clearPrefix`
+
+## Validation Plan
+1. `npx prisma validate` after schema changes
+2. Backend: `npm run test` — existing + new brand/catalog integration tests pass
+3. Frontend: `cd frontend && npm run test` — all pass
+4. E2E: Create brand → Create product with brand → Assign to Branch A → Import to Branch B → Verify BranchProduct + StockLevel + CatalogImport
+5. E2E: Brand backfill migration → Verify metadata.brand → Brand records → product.brand_id
+6. E2E: Remove product from catalog → Verify is_excluded=true, catalog list excludes it
 
 ## Files Created/Modified Checklist
 
-**New backend files:**
-- `backend/src/modules/inventory/branches-schemas.ts`
-- `backend/src/modules/inventory/branches-service.ts`
-- `backend/src/modules/inventory/branches-routes.ts`
-- `backend/tests/integration/inventory-branches.test.ts`
-- `prisma/migrations/<timestamp>_add_branch_soft_delete/`
+### New Backend Files
+| File | Purpose |
+|---|---|
+| `backend/src/modules/inventory/brands-schemas.ts` | Zod validation for brands |
+| `backend/src/modules/inventory/brands-service.ts` | BrandService class |
+| `backend/src/modules/inventory/brands-routes.ts` | Fastify brand routes |
+| `backend/src/modules/inventory/catalog-schemas.ts` | Zod validation for catalog operations |
+| `backend/src/modules/inventory/catalog-service.ts` | CatalogService class |
+| `backend/src/modules/inventory/catalog-routes.ts` | Fastify catalog import routes |
+| `backend/tests/integration/inventory-brands.test.ts` | Brand CRUD integration tests |
+| `backend/tests/integration/inventory-catalog.test.ts` | Catalog import integration tests |
+| `prisma/migrations/add_brand_and_catalog_models/` | Schema migration |
+| `prisma/migrations/backfill_brands_from_metadata/` | Data migration |
 
-**New frontend files:**
-- `frontend/src/features/inventory/branches-api.ts`
-- `frontend/src/features/inventory/branches-api.test.ts`
+### New Frontend Files
+| File | Purpose |
+|---|---|
+| `frontend/src/features/inventory/brands-api.ts` | Brand API client |
+| `frontend/src/features/inventory/catalog-api.ts` | Catalog API client |
+| `frontend/src/features/inventory/brands-api.test.ts` | Brand API unit tests |
+| `frontend/src/features/inventory/components/BrandsPage.tsx` | Brand list page |
+| `frontend/src/features/inventory/components/BrandForm.tsx` | Brand create/edit form |
+| `frontend/src/features/inventory/components/CatalogImportModal.tsx` | 4-step import wizard |
+| `frontend/src/features/inventory/components/BranchCatalogModal.tsx` | Branch catalog management |
+| `frontend/src/features/inventory/components/CatalogImportHistory.tsx` | Import audit log view |
 
-**Modified files:**
-- `backend/prisma/schema.prisma` — add soft-delete fields to Branch
-- `backend/src/modules/inventory/routes.ts` — register branch routes
-- `backend/src/modules/inventory/service.ts` — filter soft-deleted branches in getStatus
-- `backend/src/lib/errors.ts` — add BRANCH_NOT_FOUND, BRANCH_HAS_STOCK, etc.
-- `frontend/src/features/inventory/api.ts` — re-export branches-api
-- `frontend/src/pages/app/InventoryWorkspacePage.tsx` — branch selector, pass to children, real branch settings modal
-- `frontend/src/features/inventory/components/ProductsPage.tsx` — accept and use branchId
+### Modified Files
+| File | Change |
+|---|---|
+| `backend/prisma/schema.prisma` | Add Brand, BranchProduct, CatalogImport models; brand_id on Product; branch_products relation on Branch |
+| `backend/src/modules/inventory/routes.ts` | Register brandRoutes + catalogRoutes |
+| `backend/src/lib/errors.ts` | Add 5 new error codes |
+| `backend/src/modules/inventory/products-service.ts` | brand_id handling, BranchProduct join in listProducts, create BranchProduct on product creation |
+| `backend/src/modules/inventory/products-schemas.ts` | brandId in create/update schemas, includeExcluded in list query |
+| `frontend/src/features/inventory/api.ts` | Re-export brands-api + catalog-api |
+| `frontend/src/features/inventory/components/ProductForm.tsx` | Brand dropdown replacing free-text field |
+| `frontend/src/features/inventory/components/ProductsPage.tsx` | Brand column, import-source badge, remove-from-catalog action |
+| `frontend/src/pages/app/InventoryWorkspacePage.tsx` | Brands nav item, dashboard real data |
+| `frontend/src/features/inventory/components/BranchManagementModal.tsx` | Import Catalog + Manage Catalog buttons |
 
----
-
-## Risks & Mitigations
-
-| Risk | Mitigation |
-|------|-----------|
-| Existing code assumes Branch has no soft-delete | Audit all `branch.find*` calls and add `is_deleted: false` filter where needed |
-| Deleting primary branch breaks onboarding flow | Block deletion of primary branch if it's the only active branch; require reassigning primary first |
-| Branch with active stock cannot be deleted | Follow existing `PRODUCT_HAS_STOCK` pattern — require `confirmWithStock` flag + reason |
-| URL query param conflicts with other params | Use `branch` as query param name (no conflict with `?page`, `?search`, etc.) |
-| Dashboard still uses hardcoded data | Out of scope — dashboard data requires orders/customers APIs that don't exist |
-
-## Validation Plan
-1. Run `npx prisma validate` after schema change
-2. Run `npm run test` (backend) to verify existing tests pass + new branch tests pass
-3. Run `cd frontend && npm run test` to verify frontend tests pass
-4. Manual: Create a new branch via modal, verify it appears in selector, verify product list updates to show that branch's stock levels
-5. Manual: Soft-delete a branch with stock, verify confirmation is required
+## Out of Scope
+- Variant-level brand assignment (Phase 2 enhancement)
+- Branch-specific category trees (categories remain org-level, shared)
+- Real-time dashboard data replacement (dashboard mock data stays as-is for MVP)
+- Multi-brand products (a product maps to one brand; use metadata for secondary attributes)

@@ -27,11 +27,15 @@ import {
   Eye,
   ImageIcon,
   Store,
+  Award,
+  Download,
+  MinusCircle,
 } from 'lucide-react';
 import { Button } from '../../../components/ui/button';
 import { Input } from '../../../components/ui/input';
 import { Badge } from '../../../components/ui/badge';
 import { toast } from 'sonner';
+import { useUrlActionState } from '../../../hooks/useUrlActionState';
 import {
   productApi,
   type Product,
@@ -44,10 +48,15 @@ import {
   type CreateVariantPayload,
 } from '../products-api';
 import { categoryApi, type CategoryTreeNode } from '../categories-api';
+import { brandApi, type Brand } from '../brands-api';
+import { catalogApi } from '../catalog-api';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useBranchCatalog, useProducts, useCategories, useBrands, useBranchCatalogSummary } from '../hooks';
 import { ProductForm } from './ProductForm';
 import { ProductVariantForm } from './ProductVariantForm';
 import { ProductGallery } from './ProductGallery';
 import { VariantSwatchSelector } from './VariantSwatchSelector';
+import { CatalogImportModal } from './CatalogImportModal';
 import type { UploadedImage } from '../../../components/ui/ImageUploader';
 import { flattenCategoriesForSelection } from './CategoryForm';
 
@@ -57,6 +66,52 @@ function getVariantDisplayName(v: { name?: string; attributes?: Record<string, a
     return Object.entries(v.attributes).map(([k, val]) => `${k}: ${val}`).join(', ');
   }
   return v.sku || 'Variant';
+}
+
+interface ProductThumbnailProps {
+  name: string;
+  primaryThumbnailUrl?: string | null;
+  imageUrl?: string | null;
+  thumbnail200?: string | null;
+  thumbnail400?: string | null;
+  className?: string;
+  size?: number;
+}
+
+function ProductThumbnail({
+  name,
+  primaryThumbnailUrl,
+  imageUrl,
+  thumbnail200,
+  thumbnail400,
+  className = 'w-full h-full object-cover group-hover:scale-105 transition-transform',
+  size = 40,
+}: ProductThumbnailProps) {
+  const [hasError, setHasError] = React.useState(false);
+  const src = (primaryThumbnailUrl || imageUrl) ?? undefined;
+
+  if (!src || hasError) {
+    return <Package className="w-5 h-5 text-slate-500 group-hover:text-slate-400" />;
+  }
+
+  const srcSet =
+    thumbnail200 && thumbnail400
+      ? `${thumbnail200} 1x, ${thumbnail400} 2x`
+      : undefined;
+
+  return (
+    <img
+      src={src}
+      srcSet={srcSet}
+      alt={name}
+      width={size}
+      height={size}
+      decoding="async"
+      loading="lazy"
+      onError={() => setHasError(true)}
+      className={className}
+    />
+  );
 }
 
 interface ProductsPageProps {
@@ -70,6 +125,7 @@ interface ProductsPageProps {
   branchName?: string;
   initialCategoryId?: string;
   onClearInitialCategory?: () => void;
+  onCategoryChange?: (categoryId: string) => void;
 }
 
 export function ProductsPage({
@@ -78,32 +134,249 @@ export function ProductsPage({
   branchName,
   initialCategoryId,
   onClearInitialCategory,
+  onCategoryChange,
 }: ProductsPageProps) {
   const currency = organization?.currency || 'NGN';
-
-  // State
-  const [products, setProducts] = React.useState<ProductListItem[]>([]);
-  const [categories, setCategories] = React.useState<CategoryTreeNode[]>([]);
-  const [loading, setLoading] = React.useState(true);
-  const [error, setError] = React.useState<string | null>(null);
 
   // Filters & Pagination
   const [searchQuery, setSearchQuery] = React.useState('');
   const [selectedCategoryId, setSelectedCategoryId] = React.useState<string>(
     initialCategoryId || 'all'
   );
+  const [selectedBrandId, setSelectedBrandId] = React.useState<string>('all');
+  const [isCatalogImportOpen, setIsCatalogImportOpen] = React.useState(false);
+  const [catalogRemoveTarget, setCatalogRemoveTarget] = React.useState<ProductListItem | null>(null);
+  const [isRemovingFromCatalog, setIsRemovingFromCatalog] = React.useState(false);
 
   React.useEffect(() => {
     if (initialCategoryId) {
       setSelectedCategoryId(initialCategoryId);
       setCurrentPage(1);
+    } else {
+      setSelectedCategoryId('all');
     }
   }, [initialCategoryId]);
   const [statusFilter, setStatusFilter] = React.useState<'all' | 'active' | 'inactive' | 'archived'>('all');
   const [lowStockFilter, setLowStockFilter] = React.useState(false);
   const [currentPage, setCurrentPage] = React.useState(1);
-  const [totalPages, setTotalPages] = React.useState(1);
-  const [totalCount, setTotalCount] = React.useState(0);
+  const [variantSearchQueries, setVariantSearchQueries] = React.useState<Record<string, string>>({});
+
+  // Categories & Brands via React Query
+  const { data: categoriesData } = useCategories();
+  const { data: brandsData } = useBrands({ activeOnly: true });
+
+  const categories = categoriesData?.categories || [];
+  const brands = brandsData?.brands || [];
+
+  // Products & Branch Catalog via React Query
+  const {
+    data: productData,
+    isLoading: loading,
+    error: queryError,
+    refetch,
+  } = useBranchCatalog({
+    page: currentPage,
+    limit: 15,
+    search: searchQuery.trim() || undefined,
+    categoryId: selectedCategoryId !== 'all' ? selectedCategoryId : undefined,
+    brandId: selectedBrandId !== 'all' ? selectedBrandId : undefined,
+    status: statusFilter,
+    lowStock: lowStockFilter || undefined,
+    branchId: branchId || undefined,
+  });
+
+  const { data: branchSummary } = useBranchCatalogSummary(branchId, {
+    enabled: Boolean(branchId && branchId !== 'all'),
+  });
+
+  const products = productData?.products || [];
+  const totalPages = productData?.pagination?.totalPages || 1;
+  const totalCount = productData?.pagination?.total || 0;
+  const error = queryError ? (queryError as any)?.message || 'Failed to fetch products. Please try again.' : null;
+
+  const fetchProducts = React.useCallback(async () => {
+    await refetch();
+  }, [refetch]);
+
+  const queryClient = useQueryClient();
+
+  const removeBranchProductMutation = useMutation({
+    mutationFn: async ({ branchId, productId }: { branchId: string; productId: string }) => {
+      return await catalogApi.removeProduct(branchId, productId);
+    },
+    onMutate: async ({ productId }) => {
+      await queryClient.cancelQueries({ queryKey: ['inventory'] });
+      const previousData = queryClient.getQueriesData({ queryKey: ['inventory'] });
+
+      queryClient.setQueriesData({ queryKey: ['inventory'] }, (old: any) => {
+        if (!old?.products) return old;
+        return {
+          ...old,
+          products: old.products.filter((p: any) => p.id !== productId),
+          pagination: {
+            ...old.pagination,
+            total: Math.max(0, (old.pagination?.total || 1) - 1),
+          },
+        };
+      });
+
+      setCatalogRemoveTarget(null);
+      return { previousData };
+    },
+    onError: (err: any, _vars, context) => {
+      if (context?.previousData) {
+        context.previousData.forEach(([key, data]) => {
+          queryClient.setQueryData(key, data);
+        });
+      }
+      toast.error(err?.message || 'Failed to remove from catalog');
+    },
+    onSuccess: () => {
+      toast.success('Removed product from catalog');
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['inventory', 'catalog'] });
+      queryClient.invalidateQueries({ queryKey: ['inventory', 'products'] });
+    },
+  });
+
+  const archiveProductMutation = useMutation({
+    mutationFn: async ({
+      productId,
+      payload,
+    }: {
+      productId: string;
+      payload: { confirmWithStock?: boolean; reason?: string };
+    }) => {
+      return await productApi.deleteProduct(productId, payload);
+    },
+    onMutate: async ({ productId }) => {
+      await queryClient.cancelQueries({ queryKey: ['inventory'] });
+      const previousData = queryClient.getQueriesData({ queryKey: ['inventory'] });
+
+      queryClient.setQueriesData({ queryKey: ['inventory'] }, (old: any) => {
+        if (!old?.products) return old;
+        return {
+          ...old,
+          products: old.products.filter((p: any) => p.id !== productId),
+          pagination: {
+            ...old.pagination,
+            total: Math.max(0, (old.pagination?.total || 1) - 1),
+          },
+        };
+      });
+
+      setProductToDelete(null);
+      return { previousData };
+    },
+    onError: (err: any, _vars, context) => {
+      if (context?.previousData) {
+        context.previousData.forEach(([key, data]) => {
+          queryClient.setQueryData(key, data);
+        });
+      }
+      toast.error(err?.message || 'Failed to delete product');
+    },
+    onSuccess: () => {
+      toast.success('Product archived successfully');
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['inventory', 'catalog'] });
+      queryClient.invalidateQueries({ queryKey: ['inventory', 'products'] });
+    },
+  });
+
+  const restoreProductMutation = useMutation({
+    mutationFn: async (productId: string) => {
+      return await productApi.restoreProduct(productId);
+    },
+    onMutate: async (productId) => {
+      await queryClient.cancelQueries({ queryKey: ['inventory'] });
+      const previousData = queryClient.getQueriesData({ queryKey: ['inventory'] });
+
+      queryClient.setQueriesData({ queryKey: ['inventory'] }, (old: any) => {
+        if (!old?.products) return old;
+        return {
+          ...old,
+          products: old.products.filter((p: any) => p.id !== productId),
+          pagination: {
+            ...old.pagination,
+            total: Math.max(0, (old.pagination?.total || 1) - 1),
+          },
+        };
+      });
+
+      return { previousData };
+    },
+    onError: (err: any, _vars, context) => {
+      if (context?.previousData) {
+        context.previousData.forEach(([key, data]) => {
+          queryClient.setQueryData(key, data);
+        });
+      }
+      toast.error(err?.message || 'Failed to restore product');
+    },
+    onSuccess: () => {
+      toast.success('Product restored successfully');
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['inventory', 'catalog'] });
+      queryClient.invalidateQueries({ queryKey: ['inventory', 'products'] });
+    },
+  });
+
+  const updateProductMutation = useMutation({
+    mutationFn: async ({ productId, data }: { productId: string; data: UpdateProductPayload }) => {
+      return await productApi.updateProduct(productId, data);
+    },
+    onMutate: async ({ productId, data }) => {
+      await queryClient.cancelQueries({ queryKey: ['inventory'] });
+      const previousData = queryClient.getQueriesData({ queryKey: ['inventory'] });
+
+      queryClient.setQueriesData({ queryKey: ['inventory'] }, (old: any) => {
+        if (!old?.products) return old;
+        return {
+          ...old,
+          products: old.products.map((p: any) => {
+            if (p.id !== productId) return p;
+            return {
+              ...p,
+              name: data.name ?? p.name,
+              sku: data.sku ?? p.sku,
+              barcode: data.barcode !== undefined ? data.barcode : p.barcode,
+              selling_price: data.sellingPrice !== undefined ? data.sellingPrice : p.selling_price,
+              cost_price: data.costPrice !== undefined ? data.costPrice : p.cost_price,
+              is_active: data.isActive !== undefined ? data.isActive : p.is_active,
+              category_id: data.categoryId !== undefined ? data.categoryId : p.category_id,
+              brand_id: data.brandId !== undefined ? data.brandId : p.brand_id,
+            };
+          }),
+        };
+      });
+
+      return { previousData };
+    },
+    onError: (err: any, _vars, context) => {
+      if (context?.previousData) {
+        context.previousData.forEach(([key, data]) => {
+          queryClient.setQueryData(key, data);
+        });
+      }
+      toast.error(err?.message || 'Failed to update product');
+    },
+    onSuccess: () => {
+      toast.success('Product updated successfully');
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['inventory', 'catalog'] });
+      queryClient.invalidateQueries({ queryKey: ['inventory', 'products'] });
+    },
+  });
+
+  // Reset page when branch changes
+  React.useEffect(() => {
+    setCurrentPage(1);
+  }, [branchId]);
 
   // Expanded product IDs for variants
   const [expandedProductIds, setExpandedProductIds] = React.useState<Set<string>>(new Set());
@@ -111,6 +384,17 @@ export function ProductsPage({
     Record<string, ProductVariant[]>
   >({});
   const [loadingVariantsMap, setLoadingVariantsMap] = React.useState<Record<string, boolean>>({});
+
+  // URL Action State for deep-linking & session resumption
+  const {
+    activeAction,
+    activeEntityId: actionProductId,
+    openAction,
+    closeAction,
+  } = useUrlActionState<'create-product' | 'edit-product' | 'product-detail' | 'import-catalog'>({
+    actionParam: 'action',
+    entityIdParam: 'productId',
+  });
 
   // Product Drawer State
   const [isProductDrawerOpen, setIsProductDrawerOpen] = React.useState(false);
@@ -150,8 +434,64 @@ export function ProductsPage({
   const [isDetailModalOpen, setIsDetailModalOpen] = React.useState(false);
   const [loadingDetail, setLoadingDetail] = React.useState(false);
 
+  // Notify user when workflow session is restored from URL
+  const restoredToastRef = React.useRef(false);
+  React.useEffect(() => {
+    if (activeAction && !restoredToastRef.current) {
+      restoredToastRef.current = true;
+      toast.info('Session restored — resumed where you left off', {
+        description: `Active workflow: ${activeAction.replace('-', ' ')}`,
+      });
+    }
+  }, [activeAction]);
+
+  // Sync active action with modal/drawer open state
+  React.useEffect(() => {
+    if (activeAction === 'create-product') {
+      setEditingProduct(null);
+      setIsProductDrawerOpen(true);
+    } else if (activeAction === 'edit-product' && actionProductId) {
+      if (!editingProduct || editingProduct.id !== actionProductId) {
+        productApi
+          .getProductById(actionProductId)
+          .then((res) => {
+            setEditingProduct(res.product);
+            setIsProductDrawerOpen(true);
+          })
+          .catch(() => {
+            toast.error('Failed to load product to edit');
+          });
+      } else {
+        setIsProductDrawerOpen(true);
+      }
+    } else if (activeAction === 'product-detail' && actionProductId) {
+      if (!detailProduct || detailProduct.id !== actionProductId) {
+        setLoadingDetail(true);
+        setIsDetailModalOpen(true);
+        productApi
+          .getProductById(actionProductId)
+          .then((res) => {
+            setDetailProduct(res.product);
+            setDetailVariant(null);
+          })
+          .catch(() => {
+            toast.error('Failed to load product details');
+            setIsDetailModalOpen(false);
+          })
+          .finally(() => {
+            setLoadingDetail(false);
+          });
+      } else {
+        setIsDetailModalOpen(true);
+      }
+    } else if (activeAction === 'import-catalog') {
+      setIsCatalogImportOpen(true);
+    }
+  }, [activeAction, actionProductId]);
+
   const handleOpenProductDetail = async (item: ProductListItem) => {
     try {
+      openAction('product-detail', item.id);
       setLoadingDetail(true);
       setIsDetailModalOpen(true);
       const res = await productApi.getProductById(item.id);
@@ -160,62 +500,11 @@ export function ProductsPage({
     } catch (err: any) {
       toast.error('Failed to load product details');
       setIsDetailModalOpen(false);
+      closeAction();
     } finally {
       setLoadingDetail(false);
     }
   };
-
-  // Load Categories once
-  const fetchCategories = React.useCallback(async () => {
-    try {
-      const res = await categoryApi.getCategories();
-      setCategories(res.categories || []);
-    } catch (err: any) {
-      console.error('Failed to load categories for products page:', err);
-    }
-  }, []);
-
-  // Fetch Products
-  const fetchProducts = React.useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
-
-      const res = await productApi.listProducts({
-        page: currentPage,
-        limit: 15,
-        search: searchQuery.trim() || undefined,
-        categoryId: selectedCategoryId !== 'all' ? selectedCategoryId : undefined,
-        status: statusFilter,
-        lowStock: lowStockFilter || undefined,
-        branchId: branchId || undefined,
-      });
-
-      setProducts(res.products);
-      setTotalPages(res.pagination.totalPages);
-      setTotalCount(res.pagination.total);
-    } catch (err: any) {
-      const msg = err?.message || 'Failed to fetch products. Please try again.';
-      setError(msg);
-      toast.error(msg);
-    } finally {
-      setLoading(false);
-    }
-  }, [currentPage, searchQuery, selectedCategoryId, statusFilter, lowStockFilter, branchId]);
-
-  // Reset page when branch changes
-  React.useEffect(() => {
-    setCurrentPage(1);
-  }, [branchId]);
-
-  // Initial load
-  React.useEffect(() => {
-    fetchCategories();
-  }, [fetchCategories]);
-
-  React.useEffect(() => {
-    fetchProducts();
-  }, [fetchProducts]);
 
   // Fetch product usage when delete modal opens
   React.useEffect(() => {
@@ -300,7 +589,10 @@ export function ProductsPage({
   ) => {
     let productId = editingProduct?.id;
     if (editingProduct) {
-      await productApi.updateProduct(editingProduct.id, data as UpdateProductPayload);
+      await updateProductMutation.mutateAsync({
+        productId: editingProduct.id,
+        data: data as UpdateProductPayload,
+      });
       if (reorderedImages && reorderedImages.length > 0) {
         const reorderPayload = reorderedImages
           .filter((img) => Boolean(img.id))
@@ -313,7 +605,6 @@ export function ProductsPage({
           await productApi.reorderProductImages(editingProduct.id, reorderPayload).catch(() => {});
         }
       }
-      toast.success('Product updated successfully');
     } else {
       const createPayload: CreateProductPayload = {
         ...(data as CreateProductPayload),
@@ -337,22 +628,22 @@ export function ProductsPage({
   // Open edit drawer
   const handleEditProduct = async (item: ProductListItem) => {
     try {
+      openAction('edit-product', item.id);
       const res = await productApi.getProductById(item.id);
       setEditingProduct(res.product);
       setIsProductDrawerOpen(true);
     } catch (err: any) {
       toast.error('Failed to load product details');
+      closeAction();
     }
   };
 
   // Restore product handler
   const handleRestoreProduct = async (product: ProductListItem) => {
     try {
-      await productApi.restoreProduct(product.id);
-      toast.success(`Product "${product.name}" restored successfully`);
-      await fetchProducts();
-    } catch (err: any) {
-      toast.error(err?.message || 'Failed to restore product');
+      await restoreProductMutation.mutateAsync(product.id);
+    } catch {
+      // toast handled in mutation
     }
   };
 
@@ -435,15 +726,15 @@ export function ProductsPage({
     if (!productToDelete) return;
     try {
       setIsDeletingProduct(true);
-      await productApi.deleteProduct(productToDelete.id, {
-        confirmWithStock: confirmWithStockChecked,
-        reason: deleteReason.trim() || undefined,
+      await archiveProductMutation.mutateAsync({
+        productId: productToDelete.id,
+        payload: {
+          confirmWithStock: confirmWithStockChecked,
+          reason: deleteReason.trim() || undefined,
+        },
       });
-      toast.success(`Product "${productToDelete.name}" archived successfully`);
-      setProductToDelete(null);
-      await fetchProducts();
-    } catch (err: any) {
-      toast.error(err?.message || 'Failed to delete product');
+    } catch {
+      // toast handled in mutation
     } finally {
       setIsDeletingProduct(false);
     }
@@ -563,6 +854,20 @@ export function ProductsPage({
           </div>
 
           <div className="flex items-center gap-3">
+            {branchId && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  openAction('import-catalog');
+                  setIsCatalogImportOpen(true);
+                }}
+                className="border-[#fbb945]/40 bg-[#fbb945]/10 text-[#fbb945] hover:bg-[#fbb945]/20 text-xs h-9 px-3 flex items-center gap-1.5 cursor-pointer"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Import Catalog</span>
+              </Button>
+            )}
             <Button
               variant="outline"
               size="sm"
@@ -575,6 +880,7 @@ export function ProductsPage({
             </Button>
             <Button
               onClick={() => {
+                openAction('create-product');
                 setEditingProduct(null);
                 setIsProductDrawerOpen(true);
               }}
@@ -587,15 +893,29 @@ export function ProductsPage({
         </div>
 
         {/* Quick Stats Grid */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4 pt-3 border-t border-[#2d3139]/60">
+        <div className={`grid gap-3 mt-4 pt-3 border-t border-[#2d3139]/60 ${
+          branchId ? 'grid-cols-2 sm:grid-cols-3 md:grid-cols-5' : 'grid-cols-2 sm:grid-cols-4'
+        }`}>
           <div className="bg-[#141519] border border-[#2d3139] rounded-lg p-2.5">
             <div className="text-[11px] text-slate-400 font-medium">Total Products</div>
-            <div className="text-lg font-bold text-white mt-0.5">{totalCount}</div>
+            <div className="text-lg font-bold text-white mt-0.5">
+              {branchSummary?.totalAssignedProducts ?? totalCount}
+            </div>
           </div>
           <div className="bg-[#141519] border border-[#2d3139] rounded-lg p-2.5">
             <div className="text-[11px] text-slate-400 font-medium">Active Items</div>
-            <div className="text-lg font-bold text-emerald-400 mt-0.5">{activeCount}</div>
+            <div className="text-lg font-bold text-emerald-400 mt-0.5">
+              {branchSummary?.activeAssignedProducts ?? activeCount}
+            </div>
           </div>
+          {branchId && (
+            <div className="bg-[#141519] border border-[#2d3139] rounded-lg p-2.5">
+              <div className="text-[11px] text-slate-400 font-medium">Imported Items</div>
+              <div className="text-lg font-bold text-[#fbb945] mt-0.5">
+                {branchSummary?.importedProductsCount ?? 0}
+              </div>
+            </div>
+          )}
           <div
             onClick={() => setLowStockFilter(!lowStockFilter)}
             className={`border rounded-lg p-2.5 cursor-pointer transition-colors ${
@@ -640,8 +960,10 @@ export function ProductsPage({
             <select
               value={selectedCategoryId}
               onChange={(e) => {
-                setSelectedCategoryId(e.target.value);
+                const val = e.target.value;
+                setSelectedCategoryId(val);
                 setCurrentPage(1);
+                onCategoryChange?.(val);
               }}
               className="w-full bg-[#121316] border border-[#2d3139] rounded-md px-3 py-2 text-xs text-white focus:outline-none focus:border-[#985184] h-9 transition-colors"
             >
@@ -649,6 +971,25 @@ export function ProductsPage({
               {categoryOptions.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Brand Filter */}
+          <div className="w-full md:w-44 shrink-0">
+            <select
+              value={selectedBrandId}
+              onChange={(e) => {
+                setSelectedBrandId(e.target.value);
+                setCurrentPage(1);
+              }}
+              className="w-full bg-[#121316] border border-[#2d3139] rounded-md px-3 py-2 text-xs text-white focus:outline-none focus:border-[#985184] h-9 transition-colors"
+            >
+              <option value="all">All Brands</option>
+              {brands.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.name}
                 </option>
               ))}
             </select>
@@ -706,6 +1047,7 @@ export function ProductsPage({
               onClick={() => {
                 setSelectedCategoryId('all');
                 onClearInitialCategory?.();
+                onCategoryChange?.('all');
                 setCurrentPage(1);
               }}
               className="inline-flex items-center gap-1 text-[11px] text-slate-300 hover:text-white cursor-pointer px-2 py-1 rounded-sm hover:bg-white/10 transition-colors"
@@ -752,6 +1094,7 @@ export function ProductsPage({
             </p>
             <Button
               onClick={() => {
+                openAction('create-product');
                 setEditingProduct(null);
                 setIsProductDrawerOpen(true);
               }}
@@ -770,6 +1113,7 @@ export function ProductsPage({
                     <th className="py-3 px-4 w-10"></th>
                     <th className="py-3 px-4">Product</th>
                     <th className="py-3 px-4">SKU / Barcode</th>
+                    <th className="py-3 px-4">Brand</th>
                     <th className="py-3 px-4">Category</th>
                     <th className="py-3 px-4 text-right">Cost Price</th>
                     <th className="py-3 px-4 text-right">Selling Price</th>
@@ -849,16 +1193,13 @@ export function ProductsPage({
                                 className="w-10 h-10 rounded-lg bg-[#141519] border border-[#2d3139] overflow-hidden shrink-0 flex items-center justify-center relative group hover:border-[#985184] transition-colors cursor-pointer"
                                 title="View gallery & details"
                               >
-                                {item.primary_image_url || item.image_url ? (
-                                  <img
-                                    src={(item.primary_image_url || item.image_url) ?? undefined}
-                                    alt={item.name}
-                                    className="w-full h-full object-cover group-hover:scale-105 transition-transform"
-                                    loading="lazy"
-                                  />
-                                ) : (
-                                  <Package className="w-5 h-5 text-slate-500 group-hover:text-slate-400" />
-                                )}
+                                <ProductThumbnail
+                                  name={item.name}
+                                  primaryThumbnailUrl={item.primary_thumbnail_url}
+                                  imageUrl={item.primary_image_url || item.image_url}
+                                  thumbnail200={item.thumbnail_200}
+                                  thumbnail400={item.thumbnail_400}
+                                />
                               </button>
                               <div>
                                 <div className="font-semibold text-white flex items-center gap-2">
@@ -884,9 +1225,16 @@ export function ProductsPage({
                                     {item.description}
                                   </p>
                                 )}
-                                <span className="text-[10px] text-slate-500">
-                                  Unit: {item.unit_of_measure}
-                                </span>
+                                <div className="flex items-center gap-2 mt-0.5">
+                                  <span className="text-[10px] text-slate-500">
+                                    Unit: {item.unit_of_measure}
+                                  </span>
+                                  {item.source_branch_name && (
+                                    <span className="inline-flex items-center gap-1 text-[9px] text-[#fbb945] font-mono bg-[#fbb945]/10 border border-[#fbb945]/20 px-1.5 py-0.2 rounded-sm">
+                                      Imported: {item.source_branch_name}
+                                    </span>
+                                  )}
+                                </div>
                               </div>
                             </div>
                           </td>
@@ -913,6 +1261,26 @@ export function ProductsPage({
                                 <Barcode className="w-3 h-3 text-slate-500 shrink-0" />
                                 <span>{item.barcode}</span>
                               </div>
+                            )}
+                          </td>
+
+                          {/* Brand */}
+                          <td className="py-3 px-4">
+                            {item.brand_name ? (
+                              <div className="flex items-center gap-1.5">
+                                {item.brand_logo && (
+                                  <img
+                                    src={item.brand_logo}
+                                    alt={item.brand_name}
+                                    className="w-4 h-4 rounded-full object-cover shrink-0"
+                                  />
+                                )}
+                                <span className="text-slate-200 text-xs font-medium truncate max-w-[120px]">
+                                  {item.brand_name}
+                                </span>
+                              </div>
+                            ) : (
+                              <span className="text-slate-500 italic text-[11px]">—</span>
                             )}
                           </td>
 
@@ -1031,6 +1399,16 @@ export function ProductsPage({
                                   >
                                     <Trash2 className="w-3.5 h-3.5" />
                                   </button>
+                                  {branchId && (
+                                    <button
+                                      type="button"
+                                      onClick={() => setCatalogRemoveTarget(item)}
+                                      className="p-1.5 text-slate-400 hover:text-amber-400 hover:bg-amber-500/10 rounded transition-colors"
+                                      title={`Remove from ${branchName || 'branch'} catalog`}
+                                    >
+                                      <MinusCircle className="w-3.5 h-3.5" />
+                                    </button>
+                                  )}
                                 </>
                               )}
                             </div>
@@ -1038,171 +1416,216 @@ export function ProductsPage({
                         </tr>
 
                         {/* Collapsible Variants Sub-Row */}
-                        {isExpanded && item.has_variants && (
-                          <tr className="bg-[#15161b] border-t border-b border-[#2d3139]">
-                            <td colSpan={9} className="py-3 px-8">
-                              <div className="bg-[#121316] border border-[#2d3139] rounded-lg p-3 space-y-2">
-                                <div className="flex items-center justify-between">
-                                  <div className="flex items-center gap-2">
-                                    <Layers className="w-4 h-4 text-[#fbb945]" />
-                                    <span className="text-xs font-semibold text-slate-200">
-                                      Variants for {item.name}
-                                    </span>
-                                  </div>
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={() => handleOpenAddVariant(item)}
-                                    className="h-7 text-xs border-[#2d3139] text-[#fbb945] hover:bg-[#252830]"
-                                  >
-                                    <Plus className="w-3 h-3 mr-1" /> Add Variant
-                                  </Button>
-                                </div>
+                        {isExpanded && item.has_variants && (() => {
+                          const variantQuery = (variantSearchQueries[item.id] || '').toLowerCase().trim();
+                          const filteredVariants = variantQuery
+                            ? variants.filter((v) =>
+                                getVariantDisplayName(v).toLowerCase().includes(variantQuery) ||
+                                v.sku.toLowerCase().includes(variantQuery)
+                              )
+                            : variants;
 
-                                {isLoadingVariants ? (
-                                  <div className="py-4 flex items-center justify-center text-slate-400 text-xs gap-2">
-                                    <Loader2 className="w-3.5 h-3.5 animate-spin text-[#985184]" />
-                                    Loading variants...
+                          return (
+                            <tr className="bg-[#15161b] border-t border-b border-[#2d3139]">
+                              <td colSpan={10} className="py-3 px-8">
+                                <div className="bg-[#121316] border border-[#2d3139] rounded-lg p-3 space-y-2">
+                                  <div className="flex items-center justify-between gap-3">
+                                    <div className="flex items-center gap-2">
+                                      <Layers className="w-4 h-4 text-[#fbb945]" />
+                                      <span className="text-xs font-semibold text-slate-200">
+                                        Variants for {item.name}
+                                      </span>
+                                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[#202229] border border-[#2d3139] text-slate-400 font-mono">
+                                        {variants.length}
+                                      </span>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      {variants.length > 8 && (
+                                        <div className="relative">
+                                          <Search className="w-3 h-3 absolute left-2 top-1/2 -translate-y-1/2 text-slate-500" />
+                                          <input
+                                            type="text"
+                                            value={variantSearchQueries[item.id] || ''}
+                                            onChange={(e) =>
+                                              setVariantSearchQueries((prev) => ({
+                                                ...prev,
+                                                [item.id]: e.target.value,
+                                              }))
+                                            }
+                                            placeholder="Filter variants..."
+                                            className="h-7 w-36 text-xs pl-6 pr-2 bg-[#1b1d24] border border-[#2d3139] rounded text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-[#fbb945]/60"
+                                          />
+                                        </div>
+                                      )}
+                                      <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => handleOpenAddVariant(item)}
+                                        className="h-7 text-xs border-[#2d3139] text-[#fbb945] hover:bg-[#252830]"
+                                      >
+                                        <Plus className="w-3 h-3 mr-1" /> Add Variant
+                                      </Button>
+                                    </div>
                                   </div>
-                                ) : variants.length === 0 ? (
-                                  <div className="py-4 text-center text-slate-400 text-xs">
-                                    No variants created yet. Click "Add Variant" to create options (size, color, etc.).
-                                  </div>
-                                ) : (
-                                  <table className="w-full text-left border-collapse text-xs">
-                                    <thead>
-                                      <tr className="border-b border-[#2d3139] text-slate-500 text-[10px] uppercase font-semibold">
-                                        <th className="py-2 px-3">Variant Name</th>
-                                        <th className="py-2 px-3">SKU</th>
-                                        <th className="py-2 px-3">Attributes</th>
-                                        <th className="py-2 px-3 text-right">Cost Price</th>
-                                        <th className="py-2 px-3 text-right">Selling Price</th>
-                                        <th className="py-2 px-3 text-center">Status</th>
-                                        <th className="py-2 px-3 text-right">Actions</th>
-                                      </tr>
-                                    </thead>
-                                    <tbody className="divide-y divide-[#2d3139]/40">
-                                      {variants.map((v) => (
-                                        <tr key={v.id} className="hover:bg-[#1a1b22]">
-                                          <td className="py-2 px-3 font-medium text-slate-200">
-                                            <div className="flex items-center gap-2">
-                                              <div className="w-6 h-6 rounded bg-[#202229] border border-[#2d3139] overflow-hidden shrink-0 flex items-center justify-center">
-                                                {v.images && v.images.length > 0 && (v.images[0].thumbnail_200 || v.images[0].url) ? (
-                                                  <img
-                                                    src={v.images[0].thumbnail_200 || v.images[0].url}
-                                                    alt={getVariantDisplayName(v)}
-                                                    className="w-full h-full object-cover"
-                                                  />
-                                                ) : item.primary_image_url || item.image_url ? (
-                                                  <img
-                                                    src={(item.primary_image_url || item.image_url) ?? undefined}
-                                                    alt={getVariantDisplayName(v)}
-                                                    className="w-full h-full object-cover opacity-60"
-                                                    title="Inherited product photo"
-                                                  />
-                                                ) : (
-                                                  <Layers className="w-3.5 h-3.5 text-slate-500" />
-                                                )}
-                                              </div>
-                                              <span>{getVariantDisplayName(v)}</span>
-                                            </div>
-                                          </td>
-                                          <td className="py-2 px-3 font-mono text-slate-300">
-                                            {v.sku}
-                                          </td>
-                                          <td className="py-2 px-3">
-                                            <div className="flex flex-wrap gap-1">
-                                              {v.attributes &&
-                                                Object.entries(v.attributes).map(
-                                                  ([k, val]) => (
-                                                    <span
-                                                      key={k}
-                                                      className="px-1.5 py-0.5 rounded bg-[#202229] border border-[#2d3139] text-[10px] text-slate-300"
-                                                    >
-                                                      {k}: {String(val)}
+
+                                  {isLoadingVariants ? (
+                                    <div className="py-4 flex items-center justify-center text-slate-400 text-xs gap-2">
+                                      <Loader2 className="w-3.5 h-3.5 animate-spin text-[#985184]" />
+                                      Loading variants...
+                                    </div>
+                                  ) : variants.length === 0 ? (
+                                    <div className="py-4 text-center text-slate-400 text-xs">
+                                      No variants created yet. Click "Add Variant" to create options (size, color, etc.).
+                                    </div>
+                                  ) : filteredVariants.length === 0 ? (
+                                    <div className="py-4 text-center text-slate-400 text-xs">
+                                      No variants matching "{variantSearchQueries[item.id]}".
+                                    </div>
+                                  ) : (
+                                    <div className="max-h-[420px] overflow-y-auto rounded border border-[#2d3139]/60">
+                                      <table className="w-full text-left border-collapse text-xs">
+                                        <thead className="sticky top-0 bg-[#15161b] z-10 shadow-sm">
+                                          <tr className="border-b border-[#2d3139] text-slate-500 text-[10px] uppercase font-semibold">
+                                            <th className="py-2 px-3">Variant Name</th>
+                                            <th className="py-2 px-3">SKU</th>
+                                            <th className="py-2 px-3">Attributes</th>
+                                            <th className="py-2 px-3 text-right">Cost Price</th>
+                                            <th className="py-2 px-3 text-right">Selling Price</th>
+                                            <th className="py-2 px-3 text-center">Status</th>
+                                            <th className="py-2 px-3 text-right">Actions</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-[#2d3139]/40">
+                                          {filteredVariants.map((v) => (
+                                            <tr
+                                              key={v.id}
+                                              className="hover:bg-[#1a1b22]"
+                                              style={{
+                                                contentVisibility: 'auto',
+                                                containIntrinsicSize: '0 44px',
+                                              }}
+                                            >
+                                              <td className="py-2 px-3 font-medium text-slate-200">
+                                                <div className="flex items-center gap-2">
+                                                  <div className="w-6 h-6 rounded bg-[#202229] border border-[#2d3139] overflow-hidden shrink-0 flex items-center justify-center">
+                                                    {v.images && v.images.length > 0 && (v.images[0].thumbnail_200 || v.images[0].url) ? (
+                                                      <img
+                                                        src={v.images[0].thumbnail_200 || v.images[0].url}
+                                                        alt={getVariantDisplayName(v)}
+                                                        className="w-full h-full object-cover"
+                                                      />
+                                                    ) : item.primary_image_url || item.image_url ? (
+                                                      <img
+                                                        src={(item.primary_image_url || item.image_url) ?? undefined}
+                                                        alt={getVariantDisplayName(v)}
+                                                        className="w-full h-full object-cover opacity-60"
+                                                        title="Inherited product photo"
+                                                      />
+                                                    ) : (
+                                                      <Layers className="w-3.5 h-3.5 text-slate-500" />
+                                                    )}
+                                                  </div>
+                                                  <span>{getVariantDisplayName(v)}</span>
+                                                </div>
+                                              </td>
+                                              <td className="py-2 px-3 font-mono text-slate-300">
+                                                {v.sku}
+                                              </td>
+                                              <td className="py-2 px-3">
+                                                <div className="flex flex-wrap gap-1">
+                                                  {v.attributes &&
+                                                    Object.entries(v.attributes).map(
+                                                      ([k, val]) => (
+                                                        <span
+                                                          key={k}
+                                                          className="px-1.5 py-0.5 rounded bg-[#202229] border border-[#2d3139] text-[10px] text-slate-300"
+                                                        >
+                                                          {k}: {String(val)}
+                                                        </span>
+                                                      )
+                                                    )}
+                                                </div>
+                                              </td>
+                                              <td className="py-2 px-3 text-right text-slate-400">
+                                                {v.cost_price !== null && v.cost_price !== undefined
+                                                  ? `${currency} ${Number(v.cost_price).toLocaleString()}`
+                                                  : `${currency} ${Number(item.cost_price).toLocaleString()} (inherited)`}
+                                              </td>
+                                              <td className="py-2 px-3 text-right font-semibold text-slate-200">
+                                                <div className="flex flex-col items-end">
+                                                  <div className="flex items-center gap-1.5 font-semibold text-slate-200">
+                                                    <span>
+                                                      {v.selling_price !== null && v.selling_price !== undefined
+                                                        ? `${currency} ${Number(v.selling_price).toLocaleString()}`
+                                                        : `${currency} ${Number(item.selling_price).toLocaleString()} (inherited)`}
                                                     </span>
-                                                  )
-                                                )}
-                                            </div>
-                                          </td>
-                                          <td className="py-2 px-3 text-right text-slate-400">
-                                            {v.cost_price !== null && v.cost_price !== undefined
-                                              ? `${currency} ${Number(v.cost_price).toLocaleString()}`
-                                              : `${currency} ${Number(item.cost_price).toLocaleString()} (inherited)`}
-                                          </td>
-                                          <td className="py-2 px-3 text-right font-semibold text-slate-200">
-                                            <div className="flex flex-col items-end">
-                                              <div className="flex items-center gap-1.5 font-semibold text-slate-200">
-                                                <span>
-                                                  {v.selling_price !== null && v.selling_price !== undefined
-                                                    ? `${currency} ${Number(v.selling_price).toLocaleString()}`
-                                                    : `${currency} ${Number(item.selling_price).toLocaleString()} (inherited)`}
-                                                </span>
-                                                {v.compare_at_price && Number(v.compare_at_price) > Number(v.selling_price) && (
-                                                  <span className="text-[9px] font-medium px-1 py-0.2 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30">
-                                                    -{Math.round(((Number(v.compare_at_price) - Number(v.selling_price)) / Number(v.compare_at_price)) * 100)}%
+                                                    {v.compare_at_price && Number(v.compare_at_price) > Number(v.selling_price) && (
+                                                      <span className="text-[9px] font-medium px-1 py-0.2 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                                                        -{Math.round(((Number(v.compare_at_price) - Number(v.selling_price)) / Number(v.compare_at_price)) * 100)}%
+                                                      </span>
+                                                    )}
+                                                  </div>
+                                                  {v.compare_at_price && Number(v.compare_at_price) > Number(v.selling_price) && (
+                                                    <span className="text-[10px] text-slate-500 line-through">
+                                                      {currency} {Number(v.compare_at_price).toLocaleString()}
+                                                    </span>
+                                                  )}
+                                                </div>
+                                              </td>
+                                              <td className="py-2 px-3 text-center">
+                                                {v.is_active ? (
+                                                  <span className="text-[10px] text-emerald-400">
+                                                    Active
+                                                  </span>
+                                                ) : (
+                                                  <span className="text-[10px] text-slate-500">
+                                                    Inactive
                                                   </span>
                                                 )}
-                                              </div>
-                                              {v.compare_at_price && Number(v.compare_at_price) > Number(v.selling_price) && (
-                                                <span className="text-[10px] text-slate-500 line-through">
-                                                  {currency} {Number(v.compare_at_price).toLocaleString()}
-                                                </span>
-                                              )}
-                                            </div>
-                                          </td>
-                                          <td className="py-2 px-3 text-center">
-                                            {v.is_active ? (
-                                              <span className="text-[10px] text-emerald-400">
-                                                Active
-                                              </span>
-                                            ) : (
-                                              <span className="text-[10px] text-slate-500">
-                                                Inactive
-                                              </span>
-                                            )}
-                                          </td>
-                                          <td className="py-2 px-3 text-right">
-                                            <div className="flex items-center justify-end gap-1">
-                                              <button
-                                                type="button"
-                                                onClick={() => handleViewVariantPriceHistory(item, v)}
-                                                className="p-1 text-slate-400 hover:text-[#fbb945] hover:bg-[#252830] rounded transition-colors"
-                                                title="View variant price revision history"
-                                              >
-                                                <History className="w-3.5 h-3.5" />
-                                              </button>
-                                              <button
-                                                type="button"
-                                                onClick={() => handleOpenEditVariant(item, v)}
-                                                className="p-1 text-slate-400 hover:text-white hover:bg-[#252830] rounded transition-colors"
-                                                title="Edit variant"
-                                              >
-                                                <Edit2 className="w-3.5 h-3.5" />
-                                              </button>
-                                              <button
-                                                type="button"
-                                                onClick={() => {
-                                                  setVariantToDelete({ product: item, variant: v });
-                                                  setVariantDeleteReason('');
-                                                  setConfirmVariantWithStockChecked(false);
-                                                }}
-                                                className="p-1 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 rounded transition-colors"
-                                                title="Archive variant"
-                                              >
-                                                <Trash2 className="w-3.5 h-3.5" />
-                                              </button>
-                                            </div>
-                                          </td>
-                                        </tr>
-                                      ))}
-                                    </tbody>
-                                  </table>
-                                )}
-                              </div>
-                            </td>
-                          </tr>
-                        )}
+                                              </td>
+                                              <td className="py-2 px-3 text-right">
+                                                <div className="flex items-center justify-end gap-1">
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => handleViewVariantPriceHistory(item, v)}
+                                                    className="p-1 text-slate-400 hover:text-[#fbb945] hover:bg-[#252830] rounded transition-colors"
+                                                    title="View variant price revision history"
+                                                  >
+                                                    <History className="w-3.5 h-3.5" />
+                                                  </button>
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => handleOpenEditVariant(item, v)}
+                                                    className="p-1 text-slate-400 hover:text-white hover:bg-[#252830] rounded transition-colors"
+                                                    title="Edit variant"
+                                                  >
+                                                    <Edit2 className="w-3.5 h-3.5" />
+                                                  </button>
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                      setVariantToDelete({ product: item, variant: v });
+                                                      setVariantDeleteReason('');
+                                                      setConfirmVariantWithStockChecked(false);
+                                                    }}
+                                                    className="p-1 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 rounded transition-colors"
+                                                    title="Archive variant"
+                                                  >
+                                                    <Trash2 className="w-3.5 h-3.5" />
+                                                  </button>
+                                                </div>
+                                              </td>
+                                            </tr>
+                                          ))}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })()}
                       </React.Fragment>
                     );
                   })}
@@ -1246,8 +1669,15 @@ export function ProductsPage({
       {/* Slide-over Product Form Drawer */}
       <ProductForm
         isOpen={isProductDrawerOpen}
-        onClose={() => setIsProductDrawerOpen(false)}
-        onSubmit={handleProductSubmit}
+        onClose={() => {
+          setIsProductDrawerOpen(false);
+          setEditingProduct(null);
+          closeAction();
+        }}
+        onSubmit={async (data, newFiles, reorderedImages) => {
+          await handleProductSubmit(data, newFiles, reorderedImages);
+          closeAction();
+        }}
         editingProduct={editingProduct}
         categories={categories}
         currency={currency}
@@ -1707,7 +2137,11 @@ export function ProductsPage({
 
                   <button
                     type="button"
-                    onClick={() => setIsDetailModalOpen(false)}
+                    onClick={() => {
+                      setIsDetailModalOpen(false);
+                      setDetailProduct(null);
+                      closeAction();
+                    }}
                     className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-[#252830] transition-colors"
                   >
                     <X className="w-5 h-5" />
@@ -1809,7 +2243,11 @@ export function ProductsPage({
                       </Button>
                       <Button
                         type="button"
-                        onClick={() => setIsDetailModalOpen(false)}
+                        onClick={() => {
+                          setIsDetailModalOpen(false);
+                          setDetailProduct(null);
+                          closeAction();
+                        }}
                         className="bg-[#985184] hover:bg-[#985184]/90 text-white text-xs h-9 px-4 font-medium"
                       >
                         Close
@@ -1819,6 +2257,77 @@ export function ProductsPage({
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ================= CATALOG IMPORT MODAL ================= */}
+      {branchId && (
+        <CatalogImportModal
+          isOpen={isCatalogImportOpen}
+          onClose={() => {
+            setIsCatalogImportOpen(false);
+            closeAction();
+          }}
+          targetBranchId={branchId}
+          targetBranchName={branchName || 'Current Branch'}
+          onSuccess={() => {
+            queryClient.invalidateQueries({ queryKey: ['inventory', 'catalog'] });
+            queryClient.invalidateQueries({ queryKey: ['inventory', 'products'] });
+            fetchProducts();
+            closeAction();
+          }}
+        />
+      )}
+
+      {/* ================= REMOVE FROM BRANCH CATALOG CONFIRMATION ================= */}
+      {catalogRemoveTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs">
+          <div className="bg-[#181a20] border border-[#2d3139] rounded-xl max-w-md w-full p-6 space-y-4 shadow-2xl animate-in fade-in duration-150">
+            <div className="flex items-center gap-3 text-amber-400">
+              <AlertTriangle className="w-6 h-6 shrink-0" />
+              <h3 className="text-base font-bold text-white">Remove from Branch Catalog</h3>
+            </div>
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Are you sure you want to remove <strong className="text-white">"{catalogRemoveTarget.name}"</strong> from{' '}
+              <strong className="text-white">{branchName || 'this branch'}</strong>'s active catalog?
+            </p>
+            <div className="bg-[#141519] border border-amber-500/20 rounded-lg p-3 text-xs text-slate-400 space-y-1">
+              <p className="text-amber-300/90 font-medium">Important Note:</p>
+              <p>The product will no longer appear in this branch's inventory catalog or POS registers. Existing physical stock records in the database remain intact.</p>
+            </div>
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={isRemovingFromCatalog}
+                onClick={() => setCatalogRemoveTarget(null)}
+                className="border-[#2d3139] text-slate-300"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                disabled={removeBranchProductMutation.isPending}
+                onClick={async () => {
+                  if (!branchId || !catalogRemoveTarget) return;
+                  try {
+                    await removeBranchProductMutation.mutateAsync({
+                      branchId,
+                      productId: catalogRemoveTarget.id,
+                    });
+                  } catch {
+                    // toast handled in mutation
+                  }
+                }}
+                className="bg-amber-600 hover:bg-amber-700 text-white font-semibold text-xs"
+              >
+                {removeBranchProductMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : null}
+                Remove from Branch
+              </Button>
+            </div>
           </div>
         </div>
       )}

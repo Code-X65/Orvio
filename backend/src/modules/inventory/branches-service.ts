@@ -2,12 +2,14 @@ import type { PrismaClient } from '@prisma/client';
 import { prisma as defaultPrisma } from '../../infrastructure/database/client.js';
 import { AppError } from '../../lib/errors.js';
 import { inventoryCache } from '../../infrastructure/cache/in-memory-cache.js';
+import { eventBus, type RealtimeEventType } from '../../infrastructure/websocket/event-bus.js';
 import type {
   CreateBranchInput,
   UpdateBranchInput,
   ListBranchesQueryInput,
   DeleteBranchQueryInput,
 } from './branches-schemas.js';
+import { CatalogService } from './catalog-service.js';
 
 export interface BranchListItem {
   id: string;
@@ -32,11 +34,14 @@ export interface BranchListItem {
 export class BranchService {
   constructor(private db: PrismaClient = defaultPrisma) {}
 
-  private invalidateCache(orgId: string): void {
+  private invalidateCache(orgId: string, event?: { type: RealtimeEventType; payload: Record<string, unknown> }): void {
     inventoryCache.clearPrefix(`inv_onb_status:${orgId}`);
     inventoryCache.clearPrefix(`branches_list:${orgId}`);
     inventoryCache.clearPrefix(`products_list:${orgId}`);
     inventoryCache.clearPrefix(`products_detail:${orgId}`);
+    if (event) {
+      eventBus.broadcastToOrg(orgId, event);
+    }
   }
 
   async listBranches(orgId: string, query?: ListBranchesQueryInput): Promise<BranchListItem[]> {
@@ -281,8 +286,182 @@ export class BranchService {
       });
     });
 
-    this.invalidateCache(orgId);
+    if (input.catalogSetup && input.catalogSetup.mode !== 'empty' && input.catalogSetup.sourceBranchId) {
+      await this.applyCatalogSetup(orgId, result.id, input.catalogSetup, _userId);
+    }
+
+    this.invalidateCache(orgId, { type: 'branch:created', payload: { id: result.id } });
     return result;
+  }
+
+  private async applyCatalogSetup(
+    orgId: string,
+    targetBranchId: string,
+    setup: NonNullable<CreateBranchInput['catalogSetup']>,
+    userId?: string
+  ): Promise<void> {
+    const sourceBranchId = setup.sourceBranchId;
+    if (!sourceBranchId) return;
+
+    const sourceBranch = await this.db.branch.findFirst({
+      where: { id: sourceBranchId, org_id: orgId, is_deleted: false },
+    });
+    if (!sourceBranch) {
+      throw new AppError('BRANCH_NOT_FOUND', 'Source branch not found', 404);
+    }
+
+    const shouldImportTaxonomy = setup.importTaxonomy !== false;
+
+    // 1. Categories
+    if (shouldImportTaxonomy || (setup.mode === 'selective' && setup.categoryIds && setup.categoryIds.length > 0)) {
+      const categoryWhere: any = {
+        org_id: orgId,
+        branch_id: sourceBranchId,
+        is_deleted: false,
+      };
+      if (setup.mode === 'selective') {
+        if (setup.categoryIds && setup.categoryIds.length > 0) {
+          categoryWhere.id = { in: setup.categoryIds };
+        } else {
+          categoryWhere.id = { in: [] };
+        }
+      }
+
+      const sourceCategories = setup.mode === 'selective' && (!setup.categoryIds || setup.categoryIds.length === 0)
+        ? []
+        : await this.db.category.findMany({
+            where: categoryWhere,
+            orderBy: { sort_order: 'asc' },
+          });
+
+      const categoryIdMap = new Map<string, string>();
+      let remainingCategories = [...sourceCategories];
+      let maxIterations = 10;
+      while (remainingCategories.length > 0 && maxIterations > 0) {
+        maxIterations--;
+        const ready = remainingCategories.filter(
+          (c) => !c.parent_id || categoryIdMap.has(c.parent_id) || !sourceCategories.some((sc) => sc.id === c.parent_id)
+        );
+        if (ready.length === 0) break;
+
+        for (const cat of ready) {
+          const newParentId = cat.parent_id && categoryIdMap.has(cat.parent_id) ? categoryIdMap.get(cat.parent_id) : null;
+          
+          // Check if target branch already has a category with this slug
+          const existingTargetCat = await this.db.category.findFirst({
+            where: { org_id: orgId, branch_id: targetBranchId, slug: cat.slug, is_deleted: false },
+          });
+
+          if (existingTargetCat) {
+            categoryIdMap.set(cat.id, existingTargetCat.id);
+          } else {
+            const newCat = await this.db.category.create({
+              data: {
+                org_id: orgId,
+                branch_id: targetBranchId,
+                name: cat.name,
+                slug: cat.slug,
+                description: cat.description,
+                image_url: cat.image_url,
+                parent_id: newParentId,
+                sort_order: cat.sort_order,
+                is_active: cat.is_active,
+              },
+            });
+            categoryIdMap.set(cat.id, newCat.id);
+          }
+        }
+        remainingCategories = remainingCategories.filter((c) => !categoryIdMap.has(c.id));
+      }
+    }
+
+    // 2. Brands
+    if (shouldImportTaxonomy || (setup.mode === 'selective' && setup.brandIds && setup.brandIds.length > 0)) {
+      const brandWhere: any = {
+        org_id: orgId,
+        branch_id: sourceBranchId,
+        is_deleted: false,
+      };
+      if (setup.mode === 'selective') {
+        if (setup.brandIds && setup.brandIds.length > 0) {
+          brandWhere.id = { in: setup.brandIds };
+        } else {
+          brandWhere.id = { in: [] };
+        }
+      }
+
+      const sourceBrands = setup.mode === 'selective' && (!setup.brandIds || setup.brandIds.length === 0)
+        ? []
+        : await this.db.brand.findMany({
+            where: brandWhere,
+            orderBy: { sort_order: 'asc' },
+          });
+
+      for (const b of sourceBrands) {
+        const existingTargetBrand = await this.db.brand.findFirst({
+          where: { org_id: orgId, branch_id: targetBranchId, slug: b.slug, is_deleted: false },
+        });
+
+        if (!existingTargetBrand) {
+          await this.db.brand.create({
+            data: {
+              org_id: orgId,
+              branch_id: targetBranchId,
+              name: b.name,
+              slug: b.slug,
+              description: b.description,
+              logo_url: b.logo_url,
+              website_url: b.website_url,
+              is_active: b.is_active,
+              sort_order: b.sort_order,
+              metadata: (b.metadata as any) ?? undefined,
+            },
+          });
+        }
+      }
+    }
+
+    // 3. Products
+    const catalogService = new CatalogService(this.db);
+    if (setup.mode === 'clone_all') {
+      try {
+        await catalogService.importCatalog(
+          orgId,
+          sourceBranchId,
+          targetBranchId,
+          {
+            sourceBranchId,
+            importAll: true,
+            productIds: [],
+            copyStock: Boolean(setup.copyStock),
+            overwriteExisting: true,
+            importTaxonomy: shouldImportTaxonomy,
+          },
+          userId
+        );
+      } catch (err) {
+        // If no products in source, continue
+      }
+    } else if (setup.mode === 'selective' && setup.productIds && setup.productIds.length > 0) {
+      try {
+        await catalogService.importCatalog(
+          orgId,
+          sourceBranchId,
+          targetBranchId,
+          {
+            sourceBranchId,
+            importAll: false,
+            productIds: setup.productIds,
+            copyStock: Boolean(setup.copyStock),
+            overwriteExisting: true,
+            importTaxonomy: shouldImportTaxonomy,
+          },
+          userId
+        );
+      } catch (err) {
+        // continue
+      }
+    }
   }
 
   async updateBranch(orgId: string, branchId: string, input: UpdateBranchInput, _userId?: string) {
@@ -363,7 +542,7 @@ export class BranchService {
       });
     });
 
-    this.invalidateCache(orgId);
+    this.invalidateCache(orgId, { type: 'branch:updated', payload: { id: result.id } });
     return result;
   }
 
@@ -450,7 +629,7 @@ export class BranchService {
       },
     });
 
-    this.invalidateCache(orgId);
+    this.invalidateCache(orgId, { type: 'branch:deleted', payload: { id: branchId } });
     return { success: true };
   }
 
@@ -490,7 +669,7 @@ export class BranchService {
       },
     });
 
-    this.invalidateCache(orgId);
+    this.invalidateCache(orgId, { type: 'branch:updated', payload: { id: branchId, restored: true } });
     return { success: true };
   }
 }

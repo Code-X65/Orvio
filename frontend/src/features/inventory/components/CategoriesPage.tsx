@@ -16,11 +16,13 @@ import { Button } from '../../../components/ui/button';
 import { Input } from '../../../components/ui/input';
 import { Badge } from '../../../components/ui/badge';
 import { toast } from 'sonner';
+import { useUrlActionState } from '../../../hooks/useUrlActionState';
 import {
   categoryApi,
   type Category,
   type CategoryTreeNode,
 } from '../categories-api';
+import { useCategories } from '../hooks/useCategories';
 import { CategoryTree } from './CategoryTree';
 import {
   CategoryForm,
@@ -34,6 +36,7 @@ interface CategoriesPageProps {
     business_type?: string;
   };
   onNavigateToProducts?: (categoryId: string) => void;
+  branchId?: string;
 }
 
 // Recursively filter tree nodes based on search query
@@ -79,10 +82,34 @@ function countTotalCategories(nodes: CategoryTreeNode[]): number {
   }, 0);
 }
 
-export function CategoriesPage({ organization, onNavigateToProducts }: CategoriesPageProps) {
+// Helper to find category recursively in tree
+function findCategoryInTree(nodes: CategoryTreeNode[], id: string): CategoryTreeNode | null {
+  for (const node of nodes) {
+    if (node.id === id) return node;
+    if (node.children) {
+      const found = findCategoryInTree(node.children, id);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+export function CategoriesPage({ organization, onNavigateToProducts, branchId }: CategoriesPageProps) {
+  const { data: categoriesData, isLoading, error: queryError, refetch } = useCategories({ branchId });
   const [categories, setCategories] = React.useState<CategoryTreeNode[]>([]);
-  const [loading, setLoading] = React.useState(true);
-  const [error, setError] = React.useState<string | null>(null);
+  const loading = isLoading;
+  const error = queryError ? queryError.message : null;
+
+  // URL Action State for deep-linking & session resumption
+  const {
+    activeAction,
+    activeEntityId: actionCategoryId,
+    openAction,
+    closeAction,
+  } = useUrlActionState<'create-category' | 'edit-category'>({
+    actionParam: 'action',
+    entityIdParam: 'categoryId',
+  });
 
   // Filters & State
   const [searchQuery, setSearchQuery] = React.useState('');
@@ -94,6 +121,48 @@ export function CategoriesPage({ organization, onNavigateToProducts }: Categorie
   const [editingCategory, setEditingCategory] = React.useState<Category | null>(null);
   const [defaultParentId, setDefaultParentId] = React.useState<string | null>(null);
 
+  // Notify user when workflow session is restored from URL
+  const restoredToastRef = React.useRef(false);
+  React.useEffect(() => {
+    if (activeAction && !restoredToastRef.current) {
+      restoredToastRef.current = true;
+      toast.info('Session restored — resumed where you left off', {
+        description: `Active workflow: ${activeAction.replace('-', ' ')}`,
+      });
+    }
+  }, [activeAction]);
+
+  // Sync active action with modal open state
+  React.useEffect(() => {
+    if (activeAction === 'create-category') {
+      setEditingCategory(null);
+      setIsFormOpen(true);
+    } else if (activeAction === 'edit-category' && actionCategoryId && categories.length > 0) {
+      const found = findCategoryInTree(categories, actionCategoryId);
+      if (found) {
+        setEditingCategory(found);
+        setDefaultParentId(found.parent_id);
+        setIsFormOpen(true);
+      }
+    }
+  }, [activeAction, actionCategoryId, categories]);
+
+  // Sync React Query data into local tree state
+  React.useEffect(() => {
+    if (categoriesData) {
+      const tree = (categoriesData as any)?.data?.categories ?? categoriesData?.categories ?? [];
+      setCategories(tree);
+
+      const initialExpanded = new Set<string>();
+      for (const node of tree) {
+        if (node.children && node.children.length > 0) {
+          initialExpanded.add(node.id);
+        }
+      }
+      setExpandedIds(initialExpanded);
+    }
+  }, [categoriesData]);
+
   // Delete Confirm Modal State
   const [categoryToDelete, setCategoryToDelete] = React.useState<Category | null>(null);
   const [isDeleting, setIsDeleting] = React.useState(false);
@@ -104,35 +173,10 @@ export function CategoriesPage({ organization, onNavigateToProducts }: Categorie
   // Seeding State
   const [isSeeding, setIsSeeding] = React.useState(false);
 
-  // Fetch categories
+  // Fetch categories wrapper
   const fetchCategories = React.useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const res = await categoryApi.getCategories({ activeOnly });
-      const tree = (res as any)?.data?.categories ?? res?.categories ?? [];
-      setCategories(tree);
-
-      // Default expand top-level nodes with children
-      const initialExpanded = new Set<string>();
-      for (const node of tree) {
-        if (node.children && node.children.length > 0) {
-          initialExpanded.add(node.id);
-        }
-      }
-      setExpandedIds(initialExpanded);
-    } catch (err: any) {
-      const msg = err?.message || 'Failed to load category tree.';
-      setError(msg);
-      toast.error(msg);
-    } finally {
-      setLoading(false);
-    }
-  }, [activeOnly]);
-
-  React.useEffect(() => {
-    fetchCategories();
-  }, [fetchCategories]);
+    await refetch();
+  }, [refetch]);
 
   // Expand / Collapse Handlers
   const toggleNodeExpand = (id: string) => {
@@ -155,12 +199,14 @@ export function CategoriesPage({ organization, onNavigateToProducts }: Categorie
 
   // Create / Edit Handlers
   const handleOpenCreate = (parentId?: string | null) => {
+    openAction('create-category');
     setEditingCategory(null);
     setDefaultParentId(parentId ?? null);
     setIsFormOpen(true);
   };
 
   const handleOpenEdit = (cat: Category) => {
+    openAction('edit-category', cat.id);
     setEditingCategory(cat);
     setDefaultParentId(cat.parent_id);
     setIsFormOpen(true);
@@ -187,6 +233,7 @@ export function CategoriesPage({ organization, onNavigateToProducts }: Categorie
         description: data.description || null,
         parentId: data.parentId,
         isActive: data.isActive,
+        branchId,
       });
       catId = res.category.id;
       toast.success(`Category "${data.name}" created successfully.`);
@@ -207,6 +254,7 @@ export function CategoriesPage({ organization, onNavigateToProducts }: Categorie
     }
 
     await fetchCategories();
+    closeAction();
   };
 
   // Helper to recursively update category node active status
@@ -368,7 +416,7 @@ export function CategoriesPage({ organization, onNavigateToProducts }: Categorie
   const handleSeedDefaults = async () => {
     try {
       setIsSeeding(true);
-      const res = await categoryApi.seedDefaultCategories(organization?.business_type);
+      const res = await categoryApi.seedDefaultCategories(organization?.business_type, branchId);
       const count = (res as any)?.data?.count ?? res?.count ?? 0;
       toast.success(`Generated ${count} starter categories!`);
       await fetchCategories();
@@ -576,7 +624,11 @@ export function CategoriesPage({ organization, onNavigateToProducts }: Categorie
       {/* Create / Edit Modal */}
       <CategoryForm
         isOpen={isFormOpen}
-        onClose={() => setIsFormOpen(false)}
+        onClose={() => {
+          setIsFormOpen(false);
+          setEditingCategory(null);
+          closeAction();
+        }}
         onSubmit={handleFormSubmit}
         editingCategory={editingCategory}
         categories={categories}

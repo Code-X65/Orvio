@@ -21,6 +21,7 @@ import { authRoutes } from './modules/auth/auth.routes.js';
 import { orgRoutes } from './modules/organizations/org.routes.js';
 import { onboardingRoutes } from './modules/onboarding/onboarding.routes.js';
 import { inventoryRoutes } from './modules/inventory/routes.js';
+import { websocketPlugin } from './infrastructure/websocket/websocket-plugin.js';
 
 export interface AppDeps {
   prisma?: PrismaClient;
@@ -109,6 +110,13 @@ export function buildApp(deps?: AppDeps): FastifyInstance {
       'Accept',
       'Origin',
       'X-Requested-With',
+      'Upgrade',
+      'upgrade',
+      'Connection',
+      'connection',
+      'Sec-WebSocket-Key',
+      'Sec-WebSocket-Version',
+      'Sec-WebSocket-Protocol',
     ],
     exposedHeaders: [
       'x-request-id',
@@ -209,6 +217,9 @@ export function buildApp(deps?: AppDeps): FastifyInstance {
   app.register(orgRoutes, { prefix: '/api/v1/organizations' });
   app.register(onboardingRoutes, { prefix: '/api/v1/onboarding' });
   app.register(inventoryRoutes, { prefix: '/api/v1/inventory' });
+
+  // Real-Time WebSocket Events
+  app.register(websocketPlugin, { prefix: '/api/v1' });
 
   return app;
 }

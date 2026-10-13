@@ -61,6 +61,11 @@ export function getBaseUrl(): string {
   return DEFAULT_BASE_URL;
 }
 
+export function getWsBaseUrl(): string {
+  const httpUrl = getBaseUrl();
+  return httpUrl.replace(/^http(s?):\/\//i, 'ws$1://');
+}
+
 function isJwtValid(token: string): boolean {
   try {
     const parts = token.split('.');

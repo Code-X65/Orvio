@@ -2,6 +2,7 @@ import type { PrismaClient, Category } from '@prisma/client';
 import { prisma as defaultPrisma } from '../../infrastructure/database/client.js';
 import { AppError } from '../../lib/errors.js';
 import { inventoryCache } from '../../infrastructure/cache/in-memory-cache.js';
+import { eventBus, type RealtimeEventType } from '../../infrastructure/websocket/event-bus.js';
 import { imageUploadService } from './image-upload-service.js';
 import {
   DEFAULT_CATEGORIES_BY_BUSINESS_TYPE,
@@ -39,17 +40,44 @@ export function slugify(text: string): string {
 export class CategoryService {
   constructor(private db: PrismaClient = defaultPrisma) {}
 
-  private invalidateCache(orgId: string): void {
+  private invalidateCache(orgId: string, event?: { type: RealtimeEventType; payload: Record<string, unknown> }): void {
     inventoryCache.clearPrefix(`categories_tree:${orgId}`);
     inventoryCache.clearPrefix(`category:${orgId}`);
     // Invalidate product caches so cached products reflect updated/deleted category names
     inventoryCache.clearPrefix(`products_list:${orgId}`);
     inventoryCache.clearPrefix(`products_detail:${orgId}`);
     inventoryCache.clearPrefix(`products_search:${orgId}`);
+    if (event) {
+      eventBus.broadcastToOrg(orgId, event);
+    }
+  }
+
+  async resolveBranchId(orgId: string, branchId?: string): Promise<string> {
+    if (branchId) {
+      const branch = await this.db.branch.findFirst({
+        where: { id: branchId, org_id: orgId, is_deleted: false },
+        select: { id: true },
+      });
+      if (!branch) {
+        throw new AppError('BRANCH_NOT_FOUND', 'Branch not found in this organization', 404);
+      }
+      return branch.id;
+    }
+
+    const primary = await this.db.branch.findFirst({
+      where: { org_id: orgId, is_deleted: false },
+      orderBy: [{ is_primary: 'desc' }, { created_at: 'asc' }],
+      select: { id: true },
+    });
+    if (!primary) {
+      throw new AppError('BRANCH_NOT_FOUND', 'No active branch found in this organization', 404);
+    }
+    return primary.id;
   }
 
   async resolveUniqueSlug(
     orgId: string,
+    branchId: string,
     baseSlug: string,
     prismaClient: PrismaClient | Parameters<Parameters<PrismaClient['$transaction']>[0]>[0] = this.db,
     excludeId?: string
@@ -61,6 +89,7 @@ export class CategoryService {
       const existing = await (prismaClient as PrismaClient).category.findFirst({
         where: {
           org_id: orgId,
+          branch_id: branchId,
           slug: candidate,
           is_deleted: false,
           ...(excludeId ? { id: { not: excludeId } } : {}),
@@ -122,17 +151,18 @@ export class CategoryService {
 
   async getCategoryTree(
     orgId: string,
-    options?: { activeOnly?: boolean; parentId?: string; includeInactive?: boolean }
+    options?: { activeOnly?: boolean; parentId?: string; includeInactive?: boolean; branchId?: string }
   ): Promise<CategoryTreeNode[]> {
+    const targetBranchId = await this.resolveBranchId(orgId, options?.branchId);
     const activeOnly = options?.includeInactive ? false : (options?.activeOnly ?? true);
     const parentFilter = options?.parentId ?? 'root';
-    const cacheKey = `categories_tree:${orgId}:${activeOnly}:${parentFilter}`;
+    const cacheKey = `categories_tree:${orgId}:${targetBranchId}:${activeOnly}:${parentFilter}`;
 
     return await inventoryCache.fetchOrCompute(
       cacheKey,
       async () => {
         const allCategories = await this.db.category.findMany({
-          where: { org_id: orgId, is_deleted: false },
+          where: { org_id: orgId, branch_id: targetBranchId, is_deleted: false },
           orderBy: [{ sort_order: 'asc' }, { created_at: 'asc' }],
         });
 
@@ -273,24 +303,25 @@ export class CategoryService {
   }
 
   async createCategory(orgId: string, input: CreateCategoryInput): Promise<Category> {
+    const targetBranchId = await this.resolveBranchId(orgId, input.branchId);
     const parentId = input.parentId ?? null;
 
     if (parentId) {
       const parent = await this.db.category.findFirst({
-        where: { id: parentId, org_id: orgId, is_deleted: false },
+        where: { id: parentId, org_id: orgId, branch_id: targetBranchId, is_deleted: false },
       });
       if (!parent) {
-        throw new AppError('CATEGORY_NOT_FOUND', 'Parent category not found in this organization', 404);
+        throw new AppError('CATEGORY_NOT_FOUND', 'Parent category not found in this branch', 404);
       }
       await this.calculateNodeDepth(orgId, parentId);
     }
 
     const baseSlug = slugify(input.name);
-    const slug = await this.resolveUniqueSlug(orgId, baseSlug);
+    const slug = await this.resolveUniqueSlug(orgId, targetBranchId, baseSlug);
 
     // Compute next sort order for this parent
     const lastSibling = await this.db.category.findFirst({
-      where: { org_id: orgId, parent_id: parentId, is_deleted: false },
+      where: { org_id: orgId, branch_id: targetBranchId, parent_id: parentId, is_deleted: false },
       orderBy: { sort_order: 'desc' },
       select: { sort_order: true },
     });
@@ -299,6 +330,7 @@ export class CategoryService {
     const created = await this.db.category.create({
       data: {
         org_id: orgId,
+        branch_id: targetBranchId,
         name: input.name,
         slug,
         description: input.description ?? null,
@@ -308,7 +340,7 @@ export class CategoryService {
       },
     });
 
-    this.invalidateCache(orgId);
+    this.invalidateCache(orgId, { type: 'category:created', payload: { id: created.id, branchId: targetBranchId } });
     return created;
   }
 
@@ -340,13 +372,13 @@ export class CategoryService {
             );
           }
 
-          const ancestor: { parent_id: string | null; org_id: string; is_deleted: boolean } | null = await this.db.category.findUnique({
+          const ancestor: { parent_id: string | null; org_id: string; branch_id: string; is_deleted: boolean } | null = await this.db.category.findUnique({
             where: { id: checkId },
-            select: { parent_id: true, org_id: true, is_deleted: true },
+            select: { parent_id: true, org_id: true, branch_id: true, is_deleted: true },
           });
 
-          if (!ancestor || ancestor.org_id !== orgId || ancestor.is_deleted) {
-            throw new AppError('CATEGORY_NOT_FOUND', 'Parent category not found in this organization', 404);
+          if (!ancestor || ancestor.org_id !== orgId || ancestor.branch_id !== existing.branch_id || ancestor.is_deleted) {
+            throw new AppError('CATEGORY_NOT_FOUND', 'Parent category not found in this branch', 404);
           }
 
           checkId = ancestor.parent_id;
@@ -378,7 +410,7 @@ export class CategoryService {
       },
     });
 
-    this.invalidateCache(orgId);
+    this.invalidateCache(orgId, { type: 'category:updated', payload: { id: categoryId, branchId: existing.branch_id } });
     return updated;
   }
 
@@ -457,7 +489,7 @@ export class CategoryService {
         }),
       ]);
 
-      this.invalidateCache(orgId);
+      this.invalidateCache(orgId, { type: 'category:deleted', payload: { id: categoryId, reassignToCategoryId } });
       return { success: true, reassignedProductCount: productCount };
     }
 
@@ -471,7 +503,7 @@ export class CategoryService {
       },
     });
 
-    this.invalidateCache(orgId);
+    this.invalidateCache(orgId, { type: 'category:deleted', payload: { id: categoryId } });
     return { success: true, reassignedProductCount: 0 };
   }
 
@@ -508,7 +540,7 @@ export class CategoryService {
       )
     );
 
-    this.invalidateCache(orgId);
+    this.invalidateCache(orgId, { type: 'category:updated', payload: { reordered: true } });
 
     return await this.db.category.findMany({
       where: {
@@ -533,30 +565,38 @@ export class CategoryService {
       data: { is_active: !category.is_active },
     });
 
-    this.invalidateCache(orgId);
+    this.invalidateCache(orgId, { type: 'category:updated', payload: { id: categoryId } });
     return updated;
   }
 
-  async seedDefaultCategories(orgId: string, businessType?: string | null): Promise<{ count: number }> {
+  async seedDefaultCategories(orgId: string, businessType?: string | null, branchId?: string): Promise<{ count: number }> {
+    const targetBranchId = await this.resolveBranchId(orgId, branchId);
     const specs = (businessType && DEFAULT_CATEGORIES_BY_BUSINESS_TYPE[businessType])
       ? DEFAULT_CATEGORIES_BY_BUSINESS_TYPE[businessType]
       : GENERIC_DEFAULT_CATEGORIES;
 
-    const result = await this.db.category.createMany({
-      data: specs.map((spec, index) => ({
-        org_id: orgId,
-        name: spec.name,
-        slug: slugify(spec.name),
-        description: spec.description ?? null,
-        parent_id: null,
-        sort_order: index,
-        is_active: true,
-      })),
-      skipDuplicates: true,
-    });
+    const createdList: Category[] = [];
+    for (let index = 0; index < specs.length; index++) {
+      const spec = specs[index];
+      const baseSlug = slugify(spec.name);
+      const slug = await this.resolveUniqueSlug(orgId, targetBranchId, baseSlug);
+      const cat = await this.db.category.create({
+        data: {
+          org_id: orgId,
+          branch_id: targetBranchId,
+          name: spec.name,
+          slug,
+          description: spec.description ?? null,
+          parent_id: null,
+          sort_order: index,
+          is_active: true,
+        },
+      });
+      createdList.push(cat);
+    }
 
-    this.invalidateCache(orgId);
-    return { count: result.count };
+    this.invalidateCache(orgId, { type: 'category:created', payload: { seeded: true, count: createdList.length, branchId: targetBranchId } });
+    return { count: createdList.length };
   }
 
   async uploadCategoryImage(
@@ -583,7 +623,7 @@ export class CategoryService {
       data: { image_url: url },
     });
 
-    this.invalidateCache(orgId);
+    this.invalidateCache(orgId, { type: 'category_image:updated', payload: { id: categoryId } });
     return updated;
   }
 
@@ -602,7 +642,7 @@ export class CategoryService {
       data: { image_url: null },
     });
 
-    this.invalidateCache(orgId);
+    this.invalidateCache(orgId, { type: 'category_image:updated', payload: { id: categoryId } });
     return updated;
   }
 }

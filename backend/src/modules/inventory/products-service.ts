@@ -1,8 +1,11 @@
-import type { PrismaClient, Product, ProductVariant, ProductImage, measurement_unit } from '@prisma/client';
+import crypto from 'node:crypto';
+import type { PrismaClient, Product, ProductVariant, ProductImage, Brand, measurement_unit } from '@prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
 import { prisma as defaultPrisma } from '../../infrastructure/database/client.js';
+import { env } from '../../config/env.js';
 import { AppError } from '../../lib/errors.js';
 import { inventoryCache } from '../../infrastructure/cache/in-memory-cache.js';
+import { eventBus, type RealtimeEventType } from '../../infrastructure/websocket/event-bus.js';
 import { imageUploadService } from './image-upload-service.js';
 import type {
   CreateProductInput,
@@ -50,6 +53,11 @@ export interface ProductListItem {
   barcode: string | null;
   category_id: string | null;
   category_name: string | null;
+  brand_id?: string | null;
+  brand_name?: string | null;
+  brand_logo?: string | null;
+  source_branch_id?: string | null;
+  source_branch_name?: string | null;
   description: string | null;
   cost_price: number;
   selling_price: number;
@@ -83,6 +91,7 @@ export interface BranchStockItem {
 export interface ProductDetailResponse {
   product: Product & {
     category_name: string | null;
+    brand: Brand | null;
     variants: ProductVariant[];
     images: ProductImage[];
     stock_levels: BranchStockItem[];
@@ -95,12 +104,19 @@ export interface ProductDetailResponse {
 export class ProductService {
   constructor(private db: PrismaClient = defaultPrisma) {}
 
-  private invalidateCache(orgId: string): void {
+  private invalidateCache(orgId: string, event?: { type: RealtimeEventType; payload: Record<string, unknown> }): void {
     inventoryCache.clearPrefix(`products_list:${orgId}`);
     inventoryCache.clearPrefix(`products_detail:${orgId}`);
     inventoryCache.clearPrefix(`products_search:${orgId}`);
     // Invalidate category cache so category tree and product counts remain consistent
     inventoryCache.clearPrefix(`categories_tree:${orgId}`);
+    // Invalidate branch products and count caches
+    inventoryCache.clearPrefix(`branch_products:${orgId}`);
+    inventoryCache.clearPrefix(`branch_products_count:${orgId}`);
+    inventoryCache.clearPrefix(`branch_products_page1:${orgId}`);
+    if (event) {
+      eventBus.broadcastToOrg(orgId, event);
+    }
   }
 
   async generateUniqueSku(orgId: string, name: string): Promise<string> {
@@ -196,10 +212,21 @@ export class ProductService {
       select: { business_type: true },
     });
 
+    if (input.brandId) {
+      const brand = await this.db.brand.findFirst({
+        where: { id: input.brandId, org_id: orgId, is_deleted: false },
+        select: { id: true },
+      });
+      if (!brand) {
+        throw new AppError('BRAND_NOT_FOUND', 'Selected brand not found in this organization', 404);
+      }
+    }
+
     const product = await this.db.product.create({
       data: {
         org_id: orgId,
         category_id: input.categoryId || null,
+        brand_id: input.brandId || null,
         name: input.name.trim(),
         description: input.description?.trim() || null,
         sku,
@@ -221,30 +248,49 @@ export class ProductService {
       },
     });
 
-    // 5. Initial stock seeding (if track_quantity and initialStock > 0)
-    if (input.trackQuantity && input.initialStock && input.initialStock > 0) {
-      let branchId = input.branchId;
-      if (!branchId) {
-        const primaryBranch = await this.db.branch.findFirst({
-          where: { org_id: orgId, is_primary: true, is_deleted: false },
-          select: { id: true },
-        });
-        branchId = primaryBranch?.id;
-      }
+    // 5. Branch catalog assignment & Initial stock seeding
+    let targetBranchId = input.branchId;
+    if (!targetBranchId) {
+      const primaryBranch = await this.db.branch.findFirst({
+        where: { org_id: orgId, is_primary: true, is_deleted: false },
+        select: { id: true },
+      });
+      targetBranchId = primaryBranch?.id;
+    }
 
-      if (branchId) {
+    if (targetBranchId) {
+      await this.db.branchProduct.upsert({
+        where: {
+          org_id_branch_id_product_id: {
+            org_id: orgId,
+            branch_id: targetBranchId,
+            product_id: product.id,
+          },
+        },
+        create: {
+          org_id: orgId,
+          branch_id: targetBranchId,
+          product_id: product.id,
+          is_excluded: false,
+        },
+        update: {
+          is_excluded: false,
+        },
+      });
+
+      if (input.trackQuantity && input.initialStock && input.initialStock > 0) {
         await this.db.stockLevel.upsert({
           where: {
             org_id_product_id_branch_id: {
               org_id: orgId,
               product_id: product.id,
-              branch_id: branchId,
+              branch_id: targetBranchId,
             },
           },
           create: {
             org_id: orgId,
             product_id: product.id,
-            branch_id: branchId,
+            branch_id: targetBranchId,
             quantity_on_hand: new Decimal(input.initialStock),
             reserved: new Decimal(0),
           },
@@ -255,7 +301,7 @@ export class ProductService {
       }
     }
 
-    this.invalidateCache(orgId);
+    this.invalidateCache(orgId, { type: 'product:created', payload: { id: product.id } });
     return product;
   }
 
@@ -294,13 +340,14 @@ export class ProductService {
           }
         }
 
+        let catIds: Set<string> | null = null;
         if (query.categoryId) {
           // Resolve target category + all its recursive child category IDs
           const allCategories = await this.db.category.findMany({
             where: { org_id: orgId, is_deleted: false },
             select: { id: true, parent_id: true },
           });
-          const catIds = new Set<string>([query.categoryId]);
+          catIds = new Set<string>([query.categoryId]);
           let added = true;
           while (added) {
             added = false;
@@ -311,7 +358,6 @@ export class ProductService {
               }
             }
           }
-          whereClause.category_id = { in: Array.from(catIds) };
         }
 
         if (query.trackQuantity !== undefined) {
@@ -328,13 +374,46 @@ export class ProductService {
           ];
         }
 
+        if (query.branchId) {
+          whereClause.branch_assignments = {
+            some: {
+              branch_id: query.branchId,
+              ...(query.includeExcluded ? {} : { is_excluded: false }),
+              ...(catIds
+                ? {
+                    OR: [
+                      { category_id: { in: Array.from(catIds) } },
+                      { category_id: null, product: { category_id: { in: Array.from(catIds) } } },
+                    ],
+                  }
+                : {}),
+              ...(query.brandId
+                ? {
+                    OR: [
+                      { brand_id: query.brandId },
+                      { brand_id: null, product: { brand_id: query.brandId } },
+                    ],
+                  }
+                : {}),
+            },
+          };
+        } else {
+          if (catIds) {
+            whereClause.category_id = { in: Array.from(catIds) };
+          }
+          if (query.brandId) {
+            whereClause.brand_id = query.brandId;
+          }
+        }
+
         // Fetch products with counts and stock
         const [totalCount, rawProducts] = await Promise.all([
           this.db.product.count({ where: whereClause }),
           this.db.product.findMany({
             where: whereClause,
             include: {
-              category: { select: { id: true, name: true } },
+              category: { select: { id: true, name: true, branch_id: true } },
+              brand: { select: { id: true, name: true, logo_url: true, branch_id: true } },
               variants: { select: { id: true } },
               images: {
                 where: { variant_id: null },
@@ -349,6 +428,17 @@ export class ProductService {
                 },
                 ...(query.branchId ? { where: { branch_id: query.branchId } } : {}),
               },
+              branch_assignments: query.branchId
+                ? {
+                    where: { branch_id: query.branchId },
+                    include: {
+                      source_branch: { select: { id: true, name: true } },
+                      category: { select: { id: true, name: true } },
+                      brand: { select: { id: true, name: true, logo_url: true } },
+                    },
+                    take: 1,
+                  }
+                : false,
             },
             orderBy: {
               [query.sortBy]: query.sortOrder,
@@ -369,14 +459,39 @@ export class ProductService {
 
           const availableStock = totalStock - reservedStock;
           const primaryImage = p.images?.[0]?.thumbnail_200 || p.images?.[0]?.url || p.image_url;
+          const branchAssignment = (p as any).branch_assignments?.[0];
+
+          const sameBranchCategory = !query.branchId || (p.category as any)?.branch_id === query.branchId;
+          const sameBranchBrand = !query.branchId || (p.brand as any)?.branch_id === query.branchId;
+
+          const categoryId = branchAssignment
+            ? (branchAssignment.category_id ?? (sameBranchCategory ? p.category_id : null))
+            : (sameBranchCategory ? p.category_id : null);
+          const categoryName = branchAssignment
+            ? (branchAssignment.category?.name ?? (sameBranchCategory ? p.category?.name ?? null : null))
+            : (sameBranchCategory ? p.category?.name ?? null : null);
+          const brandId = branchAssignment
+            ? (branchAssignment.brand_id ?? (sameBranchBrand ? p.brand_id ?? null : null))
+            : (sameBranchBrand ? p.brand_id ?? null : null);
+          const brandName = branchAssignment
+            ? (branchAssignment.brand?.name ?? (sameBranchBrand ? p.brand?.name ?? null : null))
+            : (sameBranchBrand ? p.brand?.name ?? null : null);
+          const brandLogo = branchAssignment
+            ? (branchAssignment.brand?.logo_url ?? (sameBranchBrand ? p.brand?.logo_url ?? null : null))
+            : (sameBranchBrand ? p.brand?.logo_url ?? null : null);
 
           return {
             id: p.id,
             name: p.name,
             sku: p.sku,
             barcode: p.barcode,
-            category_id: p.category_id,
-            category_name: p.category?.name ?? null,
+            category_id: categoryId,
+            category_name: categoryName,
+            brand_id: brandId,
+            brand_name: brandName,
+            brand_logo: brandLogo,
+            source_branch_id: branchAssignment?.source_branch_id ?? null,
+            source_branch_name: branchAssignment?.source_branch?.name ?? null,
             description: p.description,
             cost_price: Number(p.cost_price),
             selling_price: Number(p.selling_price),
@@ -430,6 +545,7 @@ export class ProductService {
           where: { id: productId, org_id: orgId, is_deleted: false },
           include: {
             category: { select: { name: true } },
+            brand: true,
             variants: {
               where: { is_deleted: false },
               orderBy: { created_at: 'asc' },
@@ -440,6 +556,12 @@ export class ProductService {
             stock_levels: {
               include: {
                 branch: { select: { id: true, name: true } },
+              },
+            },
+            branch_assignments: {
+              include: {
+                branch: { select: { id: true, name: true } },
+                source_branch: { select: { id: true, name: true } },
               },
             },
           },
@@ -471,6 +593,7 @@ export class ProductService {
           product: {
             ...product,
             category_name: product.category?.name ?? null,
+            brand: product.brand,
             variants: product.variants,
             images: product.images,
             stock_levels: branchStocks as any,
@@ -548,6 +671,17 @@ export class ProductService {
       }
     }
 
+    // Brand validation if changed
+    if (input.brandId !== undefined && input.brandId !== null) {
+      const brand = await this.db.brand.findFirst({
+        where: { id: input.brandId, org_id: orgId },
+        select: { id: true },
+      });
+      if (!brand) {
+        throw new AppError('BRAND_NOT_FOUND', 'Brand not found in this organization', 404);
+      }
+    }
+
     // Price validation: Selling price must not be less than cost price
     const newCost = input.costPrice !== undefined ? input.costPrice : Number(existing.cost_price);
     const newSelling = input.sellingPrice !== undefined ? input.sellingPrice : Number(existing.selling_price);
@@ -586,6 +720,7 @@ export class ProductService {
     if (input.name !== undefined) updateData.name = input.name.trim();
     if (input.description !== undefined) updateData.description = input.description?.trim() || null;
     if (input.categoryId !== undefined) updateData.category_id = input.categoryId || null;
+    if (input.brandId !== undefined) updateData.brand_id = input.brandId || null;
     if (input.costPrice !== undefined) updateData.cost_price = new Decimal(input.costPrice);
     if (input.sellingPrice !== undefined) updateData.selling_price = new Decimal(input.sellingPrice);
     if (input.compareAtPrice !== undefined) {
@@ -604,7 +739,7 @@ export class ProductService {
       data: updateData,
     });
 
-    this.invalidateCache(orgId);
+    this.invalidateCache(orgId, { type: 'product:updated', payload: { id: productId } });
     return updated;
   }
 
@@ -769,7 +904,7 @@ export class ProductService {
       });
     });
 
-    this.invalidateCache(orgId);
+    this.invalidateCache(orgId, { type: 'product:deleted', payload: { id: productId } });
     return { success: true };
   }
 
@@ -789,7 +924,7 @@ export class ProductService {
       },
     });
 
-    this.invalidateCache(orgId);
+    this.invalidateCache(orgId, { type: 'product:updated', payload: { id: productId } });
     return updated;
   }
 
@@ -830,7 +965,7 @@ export class ProductService {
       return p;
     });
 
-    this.invalidateCache(orgId);
+    this.invalidateCache(orgId, { type: 'product:updated', payload: { id: productId, restored: true } });
     return restored;
   }
 
@@ -935,7 +1070,7 @@ export class ProductService {
       }
     }
 
-    this.invalidateCache(orgId);
+    this.invalidateCache(orgId, { type: 'product:updated', payload: { id: productId, variantId: variant.id } });
     return variant;
   }
 
@@ -1034,7 +1169,7 @@ export class ProductService {
       });
     });
 
-    this.invalidateCache(orgId);
+    this.invalidateCache(orgId, { type: 'product:updated', payload: { id: productId, variantId } });
     return updated;
   }
 
@@ -1115,7 +1250,7 @@ export class ProductService {
       });
     });
 
-    this.invalidateCache(orgId);
+    this.invalidateCache(orgId, { type: 'product:updated', payload: { id: productId, variantId } });
     return { success: true };
   }
 
@@ -1241,51 +1376,104 @@ export class ProductService {
     }
 
     const hasPrimary = existingImages.some((img) => img.is_primary);
-    let nextSortOrder =
+    const startSortOrder =
       existingImages.length > 0 ? Math.max(...existingImages.map((img) => img.sort_order)) + 1 : 0;
 
-    const createdImages: ProductImage[] = [];
+    const concurrency = env.IMAGE_PROCESSING_CONCURRENCY || 4;
+    const uploadBatchStart = Date.now();
 
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      const isPrimary = !hasPrimary && i === 0;
+    // Map files into indexed work items with deterministic order and primary flags
+    const tasks = files.map((file, idx) => ({
+      file,
+      index: idx,
+      isPrimary: !hasPrimary && idx === 0,
+      sortOrder: startSortOrder + idx,
+      imageId: crypto.randomUUID(),
+    }));
 
-      const processed = await imageUploadService.processAndSaveProductImage({
-        orgId,
-        productId,
-        fileBuffer: file.buffer,
-        originalFilename: file.filename,
-        mimeType: file.mimeType,
+    type ProcessedTaskResult = {
+      task: (typeof tasks)[0];
+      processed: Awaited<ReturnType<typeof imageUploadService.processAndSaveProductImage>>;
+    };
+
+    const processedResults: ProcessedTaskResult[] = new Array(tasks.length);
+    let taskCursor = 0;
+
+    try {
+      const workers = Array.from({ length: Math.min(concurrency, tasks.length) }, async () => {
+        while (taskCursor < tasks.length) {
+          const currentIdx = taskCursor++;
+          const currentTask = tasks[currentIdx];
+          const processed = await imageUploadService.processAndSaveProductImage({
+            orgId,
+            productId,
+            fileBuffer: currentTask.file.buffer,
+            originalFilename: currentTask.file.filename,
+            mimeType: currentTask.file.mimeType,
+            imageId: currentTask.imageId,
+          });
+          processedResults[currentIdx] = { task: currentTask, processed };
+        }
       });
 
-      const imageRecord = await this.db.productImage.create({
-        data: {
-          org_id: orgId,
-          product_id: productId,
-          variant_id: variantId || null,
-          url: processed.url,
-          thumbnail_200: processed.thumbnail_200,
-          thumbnail_400: processed.thumbnail_400,
-          thumbnail_800: processed.thumbnail_800,
-          thumbnail_1200: processed.thumbnail_1200,
-          sort_order: nextSortOrder++,
-          is_primary: isPrimary,
-          file_size: processed.file_size,
-          mime_type: processed.mime_type,
-        },
-      });
-
-      if (isPrimary && !variantId) {
-        await this.db.product.update({
-          where: { id: productId },
-          data: { image_url: processed.url },
-        });
+      await Promise.all(workers);
+    } catch (err: any) {
+      // Clean up any successfully processed images from this batch to avoid orphans
+      for (const res of processedResults) {
+        if (res?.task.imageId) {
+          await imageUploadService.deleteProductImageFiles({
+            orgId,
+            productId,
+            imageId: res.task.imageId,
+          }).catch(() => {});
+        }
       }
-
-      createdImages.push(imageRecord);
+      throw err;
     }
 
-    this.invalidateCache(orgId);
+    // Persist all image records in a single database transaction
+    const createdImages = await this.db.$transaction(async (tx) => {
+      const records: ProductImage[] = [];
+      for (const res of processedResults) {
+        const imageRecord = await tx.productImage.create({
+          data: {
+            org_id: orgId,
+            product_id: productId,
+            variant_id: variantId || null,
+            url: res.processed.url,
+            thumbnail_200: res.processed.thumbnail_200,
+            thumbnail_400: res.processed.thumbnail_400,
+            thumbnail_800: res.processed.thumbnail_800,
+            thumbnail_1200: res.processed.thumbnail_1200,
+            sort_order: res.task.sortOrder,
+            is_primary: res.task.isPrimary,
+            file_size: res.processed.file_size,
+            mime_type: res.processed.mime_type,
+          },
+        });
+
+        if (res.task.isPrimary && !variantId) {
+          await tx.product.update({
+            where: { id: productId },
+            data: { image_url: res.processed.url },
+          });
+        }
+
+        records.push(imageRecord);
+      }
+      return records;
+    });
+
+    const totalDurationMs = Date.now() - uploadBatchStart;
+    const totalSharpMs = processedResults.reduce((sum, r) => sum + (r?.processed.sharpDurationMs || 0), 0);
+    const totalStorageMs = processedResults.reduce((sum, r) => sum + (r?.processed.storageDurationMs || 0), 0);
+
+    console.info(
+      `[ImageUpload] Processed ${files.length} images for product ${productId} in ${totalDurationMs}ms ` +
+      `(Sharp: ${totalSharpMs}ms, Storage: ${totalStorageMs}ms, Concurrency: ${concurrency})`
+    );
+
+    this.invalidateCache(orgId, { type: 'product_images:updated', payload: { id: productId } });
     return createdImages;
   }
 
@@ -1385,7 +1573,7 @@ export class ProductService {
       }
     });
 
-    this.invalidateCache(orgId);
+    this.invalidateCache(orgId, { type: 'product_images:updated', payload: { id: productId } });
 
     return await this.db.productImage.findMany({
       where: { org_id: orgId, product_id: productId },
@@ -1432,7 +1620,7 @@ export class ProductService {
         },
       });
 
-      this.invalidateCache(orgId);
+      this.invalidateCache(orgId, { type: 'product_images:updated', payload: { id: image.product_id } });
       return updated;
     });
   }
@@ -1489,7 +1677,7 @@ export class ProductService {
       }
     });
 
-    this.invalidateCache(orgId);
+    this.invalidateCache(orgId, { type: 'product_images:updated', payload: { id: image.product_id } });
     return { success: true };
   }
 }

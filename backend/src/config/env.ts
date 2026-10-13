@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import os from 'node:os';
 import { z } from 'zod';
 
 /** Parses boolean env vars correctly ("false"/"0"/"no"/"off" => false). */
@@ -59,7 +60,28 @@ const envSchema = z
     // HaveIBeenPwned k-anonymity check; disabled by default under NODE_ENV=test
     PASSWORD_BREACH_CHECK_ENABLED: envBoolean(process.env.NODE_ENV !== 'test'),
     PASSWORD_BREACH_CHECK_TIMEOUT_MS: z.coerce.number().min(100).max(10000).default(1500),
+    STORAGE_PROVIDER: z.enum(['local', 'supabase']).default('local'),
+    SUPABASE_URL: z.string().url().optional(),
+    SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),
+    SUPABASE_STORAGE_BUCKET: z.string().default('orvio-media'),
+    IMAGE_PROCESSING_CONCURRENCY: z.coerce
+      .number()
+      .min(1)
+      .max(16)
+      .default(Math.max(2, Math.min(4, os.cpus()?.length || 4))),
   })
+  .refine(
+    (data) => {
+      if (data.STORAGE_PROVIDER === 'supabase') {
+        return Boolean(data.SUPABASE_URL && data.SUPABASE_SERVICE_ROLE_KEY);
+      }
+      return true;
+    },
+    {
+      message: 'SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required when STORAGE_PROVIDER is set to supabase',
+      path: ['STORAGE_PROVIDER'],
+    }
+  )
   .refine(
     (data) => {
       if (data.NODE_ENV === 'production') {

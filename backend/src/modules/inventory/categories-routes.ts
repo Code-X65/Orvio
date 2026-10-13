@@ -6,16 +6,13 @@ import {
   reorderCategoriesSchema,
   listCategoriesQuerySchema,
   deleteCategoryQuerySchema,
+  seedCategoriesSchema,
 } from './categories-schemas.js';
 import { prisma as defaultPrisma } from '../../infrastructure/database/client.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { sendData } from '../../lib/envelope.js';
 import { AppError } from '../../lib/errors.js';
 import { z } from 'zod';
-
-const seedSchema = z.object({
-  businessType: z.string().optional(),
-});
 
 function getOrgId(request: FastifyRequest): string {
   const orgId = request.auth?.organization?.id ?? request.auth?.claims?.org_id;
@@ -47,6 +44,7 @@ export async function categoryRoutes(app: FastifyInstance) {
         activeOnly: query.activeOnly,
         parentId: query.parentId,
         includeInactive: query.includeInactive,
+        branchId: query.branchId,
       });
 
       return sendData(reply, { categories: tree }, 200);
@@ -66,7 +64,7 @@ export async function categoryRoutes(app: FastifyInstance) {
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const orgId = getOrgId(request);
-      const body = seedSchema.parse(request.body ?? {});
+      const body = seedCategoriesSchema.parse(request.body ?? {});
       const db = (request.server as { prisma?: typeof defaultPrisma }).prisma ?? defaultPrisma;
       const service = new CategoryService(db);
 
@@ -81,7 +79,7 @@ export async function categoryRoutes(app: FastifyInstance) {
         businessType = onboardingStepData?.businessType || org?.business_type || undefined;
       }
 
-      const result = await service.seedDefaultCategories(orgId, businessType);
+      const result = await service.seedDefaultCategories(orgId, businessType, body.branchId);
       return sendData(reply, result, 201);
     }
   );

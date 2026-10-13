@@ -112,3 +112,5 @@ export async function submitInventoryBranchSetup(
 export * from './categories-api';
 export * from './products-api';
 export * from './branches-api';
+export * from './brands-api';
+export * from './catalog-api';

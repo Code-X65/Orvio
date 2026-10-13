@@ -47,6 +47,16 @@ export interface BranchInventoryStockItem {
   updated_at: string;
 }
 
+export interface CatalogSetupPayload {
+  mode: 'empty' | 'clone_all' | 'selective';
+  sourceBranchId?: string;
+  categoryIds?: string[];
+  brandIds?: string[];
+  productIds?: string[];
+  copyStock?: boolean;
+  importTaxonomy?: boolean;
+}
+
 export interface CreateBranchPayload {
   name: string;
   code?: string | null;
@@ -56,6 +66,7 @@ export interface CreateBranchPayload {
   phone?: string | null;
   email?: string | null;
   address?: BranchAddress | null;
+  catalogSetup?: CatalogSetupPayload;
 }
 
 export interface UpdateBranchPayload {

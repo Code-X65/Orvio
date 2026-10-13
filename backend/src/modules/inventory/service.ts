@@ -302,6 +302,7 @@ export class InventoryOnboardingService {
         await tx.category.createMany({
           data: defaultCategories.map((cat, index) => ({
             org_id: orgId,
+            branch_id: branch.id,
             name: cat.name,
             slug: slugify(cat.name),
             description: cat.description ?? null,

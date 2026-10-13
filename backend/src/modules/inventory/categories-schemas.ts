@@ -77,6 +77,7 @@ export const createCategorySchema = z.object({
   name: z.string().trim().min(1, 'Category name is required').max(100, 'Cannot exceed 100 characters'),
   description: z.string().max(500, 'Description cannot exceed 500 characters').nullable().optional().or(z.literal('')),
   parentId: z.string().trim().min(1).nullable().optional(),
+  branchId: z.string().trim().min(1).optional(),
   isActive: z.boolean().optional().default(true),
 });
 
@@ -99,6 +100,7 @@ export const listCategoriesQuerySchema = z.object({
     .optional()
     .transform((val) => val === undefined || val === 'true'),
   parentId: z.string().optional(),
+  branchId: z.string().trim().optional(),
   includeInactive: z
     .string()
     .optional()
@@ -109,8 +111,14 @@ export const deleteCategoryQuerySchema = z.object({
   reassignToCategoryId: z.string().trim().min(1).optional(),
 });
 
+export const seedCategoriesSchema = z.object({
+  businessType: z.string().optional(),
+  branchId: z.string().trim().optional(),
+});
+
 export type CreateCategoryInput = z.infer<typeof createCategorySchema>;
 export type UpdateCategoryInput = z.infer<typeof updateCategorySchema>;
 export type ReorderCategoriesInput = z.infer<typeof reorderCategoriesSchema>;
 export type ListCategoriesQueryInput = z.infer<typeof listCategoriesQuerySchema>;
 export type DeleteCategoryQueryInput = z.infer<typeof deleteCategoryQuerySchema>;
+export type SeedCategoriesInput = z.infer<typeof seedCategoriesSchema>;

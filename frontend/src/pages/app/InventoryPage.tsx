@@ -3,16 +3,21 @@ import { useAuthStore } from '../../stores/auth-store';
 import { getInventoryOnboardingStatus, type InventoryOnboardingStatusResponse } from '../../features/inventory/api';
 import { InventorySetupWizard } from '../../features/inventory/components/InventorySetupWizard';
 import { InventoryWorkspacePage } from './InventoryWorkspacePage';
+import { BranchGatewayScreen } from '../../features/inventory/components/BranchGatewayScreen';
+import { AddBranchWizardModal } from '../../features/inventory/components/AddBranchWizardModal';
 import { Loader2, AlertCircle, RefreshCw, ArrowLeft } from 'lucide-react';
 import { Button } from '../../components/ui/button';
-import { Link } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { SeoHead } from '../../components/seo/SeoHead';
 
 export function InventoryPage() {
   const { user } = useAuthStore();
+  const location = useLocation();
+  const navigate = useNavigate();
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
   const [statusData, setStatusData] = React.useState<InventoryOnboardingStatusResponse | null>(null);
+  const [isAddBranchWizardOpen, setIsAddBranchWizardOpen] = React.useState(false);
 
   const fetchStatus = React.useCallback(async () => {
     setLoading(true);
@@ -112,8 +117,54 @@ export function InventoryPage() {
     );
   }
 
-  // If already completed, show the full workspace dashboard
+  // If already completed, show either Gateway screen or Workspace
   if (statusData.completed) {
+    const searchParams = new URLSearchParams(location.search);
+    const branchParam = searchParams.get('branch');
+    const branches = statusData.branches || [];
+
+    // If org has 2 or more branches and no branch query parameter was provided:
+    if (branches.length >= 2 && !branchParam) {
+      return (
+        <>
+          <BranchGatewayScreen
+            organization={statusData.organization}
+            branches={branches}
+            onSelectBranch={(branchId) => {
+              const params = new URLSearchParams(location.search);
+              params.set('branch', branchId);
+              navigate({
+                pathname: location.pathname,
+                search: `?${params.toString()}`,
+              });
+            }}
+            onOpenAddBranch={() => setIsAddBranchWizardOpen(true)}
+          />
+          <AddBranchWizardModal
+            isOpen={isAddBranchWizardOpen}
+            onClose={() => setIsAddBranchWizardOpen(false)}
+            organization={{
+              id: statusData.organization.id,
+              name: statusData.organization.name,
+              subdomain: statusData.organization.subdomain,
+              businessEmail: (statusData.organization as any).business_email || user?.email,
+              phone: (statusData.organization as any).phone || user?.phone,
+            }}
+            branches={branches}
+            onBranchCreated={(newBranch) => {
+              fetchStatus();
+              const params = new URLSearchParams(location.search);
+              params.set('branch', newBranch.id);
+              navigate({
+                pathname: location.pathname,
+                search: `?${params.toString()}`,
+              });
+            }}
+          />
+        </>
+      );
+    }
+
     return (
       <InventoryWorkspacePage
         organization={statusData.organization}

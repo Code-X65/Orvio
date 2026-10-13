@@ -85,6 +85,14 @@ export const marketingRouter = createBrowserRouter([
     ),
   },
   {
+    path: '/inventory/*',
+    element: (
+      <AuthGuard>
+        <InventoryPage />
+      </AuthGuard>
+    ),
+  },
+  {
     path: '/trial',
     element: <TrialPage />,
   },
@@ -158,6 +166,14 @@ export const tenantRouter = createBrowserRouter([
   },
   {
     path: '/inventory',
+    element: (
+      <AuthGuard>
+        <InventoryPage />
+      </AuthGuard>
+    ),
+  },
+  {
+    path: '/inventory/*',
     element: (
       <AuthGuard>
         <InventoryPage />

@@ -80,6 +80,12 @@ export interface Product {
   org_id: string;
   category_id: string | null;
   category_name?: string | null;
+  brand_id?: string | null;
+  brand_name?: string | null;
+  brand_logo?: string | null;
+  source_branch_id?: string | null;
+  source_branch_name?: string | null;
+  brand?: { id: string; name: string; slug: string; logo_url: string | null } | null;
   name: string;
   description: string | null;
   sku: string;
@@ -94,6 +100,9 @@ export interface Product {
   variants_count?: number;
   image_url: string | null;
   primary_image_url?: string | null;
+  primary_thumbnail_url?: string | null;
+  thumbnail_200?: string | null;
+  thumbnail_400?: string | null;
   images?: ProductImage[];
   is_active: boolean;
   is_deleted: boolean;
@@ -114,6 +123,7 @@ export interface CreateProductPayload {
   sku?: string;
   barcode?: string | null;
   categoryId?: string | null;
+  brandId?: string | null;
   costPrice: number;
   sellingPrice: number;
   compareAtPrice?: number | null;
@@ -134,6 +144,7 @@ export interface UpdateProductPayload {
   sku?: string;
   barcode?: string | null;
   categoryId?: string | null;
+  brandId?: string | null;
   costPrice?: number;
   sellingPrice?: number;
   compareAtPrice?: number | null;
@@ -257,6 +268,7 @@ export const productApi = {
     sortBy?: string;
     sortOrder?: 'asc' | 'desc';
     branchId?: string;
+    brandId?: string;
   }) => {
     return await api.get<ProductListResponse>('/inventory/products', { params });
   },
@@ -264,6 +276,7 @@ export const productApi = {
     page?: number;
     limit?: number;
     categoryId?: string;
+    brandId?: string;
     status?: 'all' | 'active' | 'inactive' | 'archived';
     activeOnly?: boolean;
     search?: string;
