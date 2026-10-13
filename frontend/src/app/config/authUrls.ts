@@ -4,6 +4,8 @@
  * In production: points to https://accounts.orvio.com or configured VITE_ACCOUNTS_URL.
  */
 
+import { sanitizeQueryParams } from '../../lib/api/url-params';
+
 export const ALLOWED_WORKSPACE_ROUTES = ['/', '/inventory', '/dashboard', '/orvio'];
 
 /**
@@ -34,10 +36,9 @@ export function buildSafeWorkspaceUrl(
   }
 
   if (extraParams) {
-    Object.entries(extraParams).forEach(([key, val]) => {
-      if (val !== undefined && val !== null && val !== '') {
-        url.searchParams.set(key, val);
-      }
+    const sanitized = sanitizeQueryParams(extraParams);
+    Object.entries(sanitized).forEach(([key, val]) => {
+      url.searchParams.set(key, val);
     });
   }
 

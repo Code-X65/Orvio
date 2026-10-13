@@ -167,3 +167,16 @@ export async function getCurrentUser(token?: string): Promise<CurrentUserRespons
   });
 }
 
+export interface HandoffTicketResponse {
+  ticket: string;
+  expiresIn: number;
+}
+
+export async function createHandoffTicket(): Promise<HandoffTicketResponse> {
+  return api.post<HandoffTicketResponse>('/auth/handoff-ticket');
+}
+
+export async function exchangeHandoffTicket(ticket: string): Promise<RefreshSessionResponse> {
+  return api.post<RefreshSessionResponse>('/auth/exchange-ticket', { ticket });
+}
+

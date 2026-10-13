@@ -161,7 +161,42 @@ export function errorHandler(
     );
   }
 
-  // 4. Rate limit (Fastify 429)
+  // 4. Prisma Database Infrastructure / Connection Failures
+  const dbConnectionCodes = new Set(['P1000', 'P1001', 'P1002', 'P1008', 'P1011', 'P1017', 'P2024']);
+  const isDbConnectionError =
+    (prismaCode && dbConnectionCodes.has(prismaCode)) ||
+    error instanceof Prisma.PrismaClientInitializationError ||
+    error instanceof Prisma.PrismaClientRustPanicError ||
+    (error as Error).name === 'PrismaClientInitializationError' ||
+    (error as Error).name === 'PrismaClientRustPanicError' ||
+    ((error as Error).message && (
+      (error as Error).message.includes('Timed out fetching a new connection from the connection pool') ||
+      (error as Error).message.includes("Can't reach database server")
+    ));
+
+  if (isDbConnectionError) {
+    const isDev = process.env.NODE_ENV !== 'production';
+    return reply.status(503).send(
+      toErrorResponse(
+        {
+          code: 'DATABASE_UNAVAILABLE',
+          message: 'Database service is temporarily unavailable. Please try again shortly.',
+          details: isDev
+            ? {
+                debug: {
+                  code: prismaCode,
+                  name: (error as Error).name,
+                  originalMessage: (error as Error).message,
+                },
+              }
+            : undefined,
+        },
+        requestId
+      )
+    );
+  }
+
+  // 5. Rate limit (Fastify 429)
   if ('statusCode' in error && error.statusCode === 429) {
     return reply.status(429).send(
       toErrorResponse(
@@ -174,7 +209,7 @@ export function errorHandler(
     );
   }
 
-  // 5. Fastify 4xx client error
+  // 6. Fastify 4xx client error
   if ('statusCode' in error && typeof error.statusCode === 'number' && error.statusCode >= 400 && error.statusCode < 500) {
     return reply.status(error.statusCode).send(
       toErrorResponse(
@@ -187,18 +222,39 @@ export function errorHandler(
     );
   }
 
-  // 6. Unhandled 500 Internal Server Error (hide internal trace in production/dev)
+  // 7. Unhandled 500 Internal Server Error (sanitize internal traces)
   const statusCode = ('statusCode' in error && typeof error.statusCode === 'number')
     ? error.statusCode
     : 500;
+
+  const isDev = process.env.NODE_ENV !== 'production';
+  const rawMsg = (error as Error).message || '';
+  const containsSensitiveTrace =
+    rawMsg.includes('\n') ||
+    rawMsg.includes('/home/') ||
+    rawMsg.includes('/src/') ||
+    rawMsg.includes('invocation in') ||
+    rawMsg.includes('Prisma') ||
+    rawMsg.includes('connection pool');
+
+  const safeMessage = containsSensitiveTrace || !rawMsg
+    ? 'An unexpected server error occurred. Please try again later.'
+    : (isDev ? rawMsg : 'An internal server error occurred');
 
   return reply.status(statusCode).send(
     toErrorResponse(
       {
         code: 'INTERNAL_SERVER_ERROR',
-        message: process.env.NODE_ENV === 'production'
-          ? 'An internal server error occurred'
-          : error.message || 'An unexpected error occurred',
+        message: safeMessage,
+        details: isDev
+          ? {
+              debug: {
+                name: (error as Error).name || 'Error',
+                originalMessage: rawMsg,
+                stack: (error as Error).stack,
+              },
+            }
+          : undefined,
       },
       requestId
     )

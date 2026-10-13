@@ -8,7 +8,6 @@ import {
   resendVerificationSchema,
   loginSchema,
   magicLoginSchema,
-  refreshSchema,
   checkEmailSchema,
   forgotPasswordSchema,
   resetPasswordSchema,
@@ -22,6 +21,7 @@ import {
   verifyPhoneOtpSchema,
   deleteAccountSchema,
   auditLogQuerySchema,
+  handoffTicketExchangeSchema,
 } from './schemas.js';
 import { startTrialSchema, setupPasswordAndVerifySchema } from './trial.schema.js';
 import { AUTH_RATE_LIMITS } from './rate-limiter.js';
@@ -31,6 +31,11 @@ import { env } from '../../config/env.js';
 import { verifyAccessToken, getPublicJwks } from '../../lib/tokens.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { requireIdempotency } from '../../middleware/idempotency.js';
+import {
+  generateCsrfToken,
+  getCsrfCookieOptions,
+  verifyCsrfToken,
+} from '../../middleware/csrf.js';
 
 export async function authRoutes(app: FastifyInstance) {
   function getAuthCookieOptions(overrides: Record<string, any> = {}) {
@@ -81,6 +86,7 @@ export async function authRoutes(app: FastifyInstance) {
       reply.setCookie('refreshToken', result.refreshToken, getAuthCookieOptions({
         maxAge: env.REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60,
       }));
+      reply.setCookie('csrfToken', generateCsrfToken(), getCsrfCookieOptions());
 
       const { refreshToken: _refreshToken, ...response } = result;
       return sendData(reply, response, 201);
@@ -109,6 +115,7 @@ export async function authRoutes(app: FastifyInstance) {
       reply.setCookie('refreshToken', result.refreshToken, getAuthCookieOptions({
         maxAge: env.REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60,
       }));
+      reply.setCookie('csrfToken', generateCsrfToken(), getCsrfCookieOptions());
 
       const { refreshToken: _refreshToken, ...response } = result;
       return sendData(reply, response, 200);
@@ -184,6 +191,7 @@ export async function authRoutes(app: FastifyInstance) {
         reply.setCookie('refreshToken', result.refreshToken, getAuthCookieOptions({
           maxAge: env.REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60,
         }));
+        reply.setCookie('csrfToken', generateCsrfToken(), getCsrfCookieOptions());
       }
 
       const { refreshToken: _refreshToken, ...response } = result;
@@ -253,6 +261,7 @@ export async function authRoutes(app: FastifyInstance) {
       reply.setCookie('refreshToken', result.refreshToken, getAuthCookieOptions({
         maxAge: env.REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60,
       }));
+      reply.setCookie('csrfToken', generateCsrfToken(), getCsrfCookieOptions());
 
       return sendData(
         reply,
@@ -383,6 +392,7 @@ export async function authRoutes(app: FastifyInstance) {
       reply.setCookie('refreshToken', result.refreshToken, getAuthCookieOptions({
         maxAge: env.REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60,
       }));
+      reply.setCookie('csrfToken', generateCsrfToken(), getCsrfCookieOptions());
 
       return sendData(
         reply,
@@ -449,21 +459,109 @@ export async function authRoutes(app: FastifyInstance) {
       },
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
+      verifyCsrfToken(request);
       const authService = getAuthService(request);
-      const cookieToken = request.cookies?.refreshToken;
-      const body = refreshSchema.safeParse(request.body || {}).data;
-      const token = cookieToken || body?.refreshToken;
+      const token = request.cookies?.refreshToken;
 
       if (!token) {
-        throw new AppError('MISSING_REFRESH_TOKEN', 'No refresh token provided in session cookie or request body', 401);
+        throw new AppError('MISSING_REFRESH_TOKEN', 'Refresh token not found in session cookie', 401);
       }
 
       const result = await authService.refresh(token);
+
+      // Subdomain Tenant Isolation (Gap 3.4)
+      const requestedSubdomain = (request.headers['x-tenant-subdomain'] as string | undefined)?.trim();
+      if (
+        requestedSubdomain &&
+        result.organization?.subdomain &&
+        requestedSubdomain.toLowerCase() !== result.organization.subdomain.toLowerCase()
+      ) {
+        throw new AppError(
+          'CROSS_TENANT_SESSION_REJECTED',
+          'Refresh session belongs to a different organization workspace',
+          403
+        );
+      }
 
       if (result.refreshToken) {
         reply.setCookie('refreshToken', result.refreshToken, getAuthCookieOptions({
           maxAge: env.REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60,
         }));
+      }
+
+      // Rotate CSRF token on refresh
+      reply.setCookie('csrfToken', generateCsrfToken(), getCsrfCookieOptions());
+
+      return sendData(
+        reply,
+        {
+          accessToken: result.accessToken,
+          user: result.user,
+          organization: result.organization,
+        },
+        200
+      );
+    }
+  );
+
+  // 5b. Issue single-use handoff ticket for authenticated user (RFC 9700 compliant)
+  app.post(
+    '/handoff-ticket',
+    {
+      preHandler: [requireAuth],
+      schema: {
+        tags: ['Auth'],
+        summary: 'Generate single-use cross-subdomain handoff ticket',
+        description: 'Issues a 30-second single-use opaque ticket for cross-subdomain or cross-origin authentication handoff without exposing raw tokens in URLs.',
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const authService = getAuthService(request);
+      const userId = request.auth?.claims.sub;
+      if (!userId) {
+        throw new AppError('UNAUTHORIZED', 'User not authenticated', 401);
+      }
+      const orgId = request.auth?.claims.org_id;
+
+      const result = await authService.createHandoffTicket(userId, orgId);
+      return sendData(reply, result, 201);
+    }
+  );
+
+  // 5c. Exchange single-use handoff ticket for session credentials & HttpOnly cookie
+  app.post(
+    '/exchange-ticket',
+    {
+      schema: {
+        tags: ['Auth'],
+        summary: 'Exchange single-use handoff ticket for session credentials',
+        description: 'Atomically verifies and consumes a 30-second handoff ticket, issuing access token and HttpOnly refresh token cookie.',
+        body: {
+          type: 'object',
+          required: ['ticket'],
+          properties: {
+            ticket: { type: 'string', minLength: 16, maxLength: 128 },
+          },
+        },
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const authService = getAuthService(request);
+      const parsed = handoffTicketExchangeSchema.safeParse(request.body);
+      if (!parsed.success) {
+        throw new AppError('VALIDATION_ERROR', parsed.error.errors[0]?.message || 'Invalid ticket payload', 400);
+      }
+
+      const result = await authService.exchangeHandoffTicket(parsed.data.ticket, {
+        ip: request.ip,
+        userAgent: request.headers['user-agent'],
+      });
+
+      if (result.refreshToken) {
+        reply.setCookie('refreshToken', result.refreshToken, getAuthCookieOptions({
+          maxAge: env.REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60,
+        }));
+        reply.setCookie('csrfToken', generateCsrfToken(), getCsrfCookieOptions());
       }
 
       return sendData(
@@ -497,10 +595,10 @@ export async function authRoutes(app: FastifyInstance) {
       },
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
+      verifyCsrfToken(request);
       const authService = getAuthService(request);
-      const cookieToken = request.cookies?.refreshToken;
+      const token = request.cookies?.refreshToken;
       const body = logoutSchema.safeParse(request.body || {}).data;
-      const token = body?.refreshToken || cookieToken;
 
       let sessionId: string | undefined;
       let userId: string | undefined;
@@ -524,6 +622,7 @@ export async function authRoutes(app: FastifyInstance) {
       });
 
       reply.clearCookie('refreshToken', getAuthCookieOptions());
+      reply.clearCookie('csrfToken', getCsrfCookieOptions());
 
       return sendData(reply, result, 200);
     }
@@ -922,6 +1021,7 @@ export async function authRoutes(app: FastifyInstance) {
       const result = await authService.deleteAccount(userId, body, request.ip, userAgent);
 
       reply.clearCookie('refreshToken', getAuthCookieOptions());
+      reply.clearCookie('csrfToken', getCsrfCookieOptions());
 
       return sendData(reply, result, 200);
     }

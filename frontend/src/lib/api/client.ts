@@ -1,5 +1,6 @@
 import { useAuthStore } from '../../stores/auth-store';
 import { getSubdomainFromHostname } from '../../app/config/authUrls';
+import { AuthError } from './error-types';
 
 export interface ApiErrorOptions {
   code?: string;
@@ -28,6 +29,7 @@ export interface RequestOptions extends Omit<RequestInit, 'body'> {
   body?: unknown;
   params?: Record<string, string | number | boolean | undefined | null>;
   _retry?: boolean;
+  _retryCount?: number;
 }
 
 export interface ApiResponseEnvelope<T> {
@@ -66,28 +68,28 @@ export function getWsBaseUrl(): string {
   return httpUrl.replace(/^http(s?):\/\//i, 'ws$1://');
 }
 
-function isJwtValid(token: string): boolean {
-  try {
-    const parts = token.split('.');
-    if (parts.length !== 3) return false;
-    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-    const jsonPayload = decodeURIComponent(
-      atob(base64)
-        .split('')
-        .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
-        .join('')
-    );
-    const payload = JSON.parse(jsonPayload);
-    return typeof payload.exp === 'number' && payload.exp * 1000 > Date.now() + 10000;
-  } catch {
-    return false;
-  }
+import { isJwtValid } from './token-utils';
+export { isJwtValid };
+
+export function getCsrfTokenFromCookie(): string | null {
+  if (typeof document === 'undefined') return null;
+  const match = document.cookie.match(/(?:^|;\s*)csrfToken=([^;]*)/);
+  return match ? decodeURIComponent(match[1]) : null;
 }
 
-// Single-flight refresh mutex
+// Single-flight refresh mutex and cooldown
 let refreshPromise: Promise<string | null> | null = null;
+let lastRefreshAt = 0;
+const REFRESH_COOLDOWN_MS = 2000;
 
-async function executeTokenRefresh(): Promise<string | null> {
+export async function executeTokenRefresh(): Promise<string | null> {
+  const currentToken = useAuthStore.getState().accessToken;
+
+  // If token is already fresh and we refreshed very recently, reuse immediately
+  if (currentToken && isJwtValid(currentToken) && Date.now() - lastRefreshAt < REFRESH_COOLDOWN_MS) {
+    return currentToken;
+  }
+
   if (refreshPromise) {
     return refreshPromise;
   }
@@ -96,23 +98,42 @@ async function executeTokenRefresh(): Promise<string | null> {
     try {
       const baseUrl = getBaseUrl();
       const currentSub = getSubdomainFromHostname();
+      const csrfToken = getCsrfTokenFromCookie();
       const response = await fetch(`${baseUrl}/auth/refresh`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           ...(currentSub ? { 'x-tenant-subdomain': currentSub } : {}),
+          ...(csrfToken ? { 'x-csrf-token': csrfToken } : {}),
         },
         credentials: 'include',
       });
 
       if (!response.ok) {
-        useAuthStore.getState().clearSession();
+        if (response.status === 401) {
+          useAuthStore.getState().clearSession(false, true);
+          const currentPath =
+            typeof window !== 'undefined'
+              ? window.location.pathname + window.location.search
+              : '/';
+          if (typeof window !== 'undefined') {
+            sessionStorage.setItem('orvio_redirect_after_login', currentPath);
+            window.dispatchEvent(
+              new CustomEvent('orvio:auth:session-expired', {
+                detail: { redirectPath: currentPath },
+              })
+            );
+          }
+        }
+        // For non-401 errors (e.g. 500, 502, 503), do NOT destroy user session
         return null;
       }
 
       const json = await response.json();
       const payload = json?.data ?? json;
       const newAccessToken = payload?.accessToken;
+
+      lastRefreshAt = Date.now();
 
       if (newAccessToken && payload?.user && payload?.organization) {
         useAuthStore.getState().setSession(
@@ -127,10 +148,9 @@ async function executeTokenRefresh(): Promise<string | null> {
         return newAccessToken;
       }
 
-      useAuthStore.getState().clearSession();
       return null;
     } catch {
-      useAuthStore.getState().clearSession();
+      // Network drop / offline: do NOT clear session so user can reconnect seamlessly
       return null;
     }
   };
@@ -141,9 +161,9 @@ async function executeTokenRefresh(): Promise<string | null> {
       if (typeof navigator !== 'undefined' && 'locks' in navigator) {
         return await navigator.locks.request('orvio_auth_refresh_lock', async () => {
           // If another tab refreshed while we waited for the cross-tab lock, reuse that token
-          const currentToken = useAuthStore.getState().accessToken;
-          if (currentToken && isJwtValid(currentToken)) {
-            return currentToken;
+          const tokenAfterLock = useAuthStore.getState().accessToken;
+          if (tokenAfterLock && isJwtValid(tokenAfterLock)) {
+            return tokenAfterLock;
           }
           return await runNetworkRefresh();
         });
@@ -178,6 +198,20 @@ export async function apiClient<T = unknown>(
     });
   }
 
+  const isAuthEndpoint =
+    endpoint.includes('/auth/refresh') ||
+    endpoint.includes('/auth/login') ||
+    endpoint.includes('/auth/register');
+
+  // Request Queue Mutex: if a background token refresh is in flight, await it before firing outgoing requests
+  if (!isAuthEndpoint && refreshPromise) {
+    try {
+      await refreshPromise;
+    } catch {
+      // Allow request to proceed on refresh error to trigger standard error handling
+    }
+  }
+
   const token = useAuthStore.getState().accessToken;
   const currentSubdomain = getSubdomainFromHostname();
 
@@ -208,8 +242,16 @@ export async function apiClient<T = unknown>(
       headers.set('x-tenant-subdomain', currentSubdomain);
     }
 
+    const csrfToken = getCsrfTokenFromCookie();
+    if (csrfToken && !headers.has('x-csrf-token')) {
+      headers.set('x-csrf-token', csrfToken);
+    }
+
     const requestBody =
       body !== undefined && !(body instanceof FormData) ? JSON.stringify(body) : (body as BodyInit | null | undefined);
+
+    const retryCount = options._retryCount || 0;
+    const maxRetries = 2;
 
     let response: Response;
     try {
@@ -224,6 +266,15 @@ export async function apiClient<T = unknown>(
     } catch (err: unknown) {
       if (err instanceof Error && err.name === 'AbortError') {
         throw err;
+      }
+      // Smart retry on transient network drops for idempotent GET requests
+      if (method === 'GET' && retryCount < maxRetries) {
+        const delay = Math.pow(2, retryCount) * 600 + Math.random() * 200;
+        await new Promise((r) => setTimeout(r, delay));
+        return apiClient<T>(endpoint, {
+          ...options,
+          _retryCount: retryCount + 1,
+        });
       }
       const errorMsg = err instanceof Error ? err.message : 'Network request failed';
       throw new ApiError(errorMsg, {
@@ -246,6 +297,24 @@ export async function apiClient<T = unknown>(
           _retry: true,
         });
       }
+
+      // Explicit handling: Refresh failed - both tokens expired
+      const currentPath =
+        typeof window !== 'undefined' ? window.location.pathname + window.location.search : '/';
+      if (typeof window !== 'undefined') {
+        sessionStorage.setItem('orvio_redirect_after_login', currentPath);
+        window.dispatchEvent(
+          new CustomEvent('orvio:auth:session-expired', {
+            detail: { redirectPath: currentPath },
+          })
+        );
+      }
+
+      throw new AuthError(
+        'Your session has expired. Please sign in again.',
+        'REFRESH_EXPIRED',
+        401
+      );
     }
 
     // Parse JSON response
@@ -260,6 +329,20 @@ export async function apiClient<T = unknown>(
     }
 
     if (!response.ok) {
+      // Smart retry on 502/503/504 transient gateway/service drops for idempotent GET requests
+      if (
+        method === 'GET' &&
+        (response.status === 502 || response.status === 503 || response.status === 504) &&
+        retryCount < maxRetries
+      ) {
+        const delay = Math.pow(2, retryCount) * 800 + Math.random() * 200;
+        await new Promise((r) => setTimeout(r, delay));
+        return apiClient<T>(endpoint, {
+          ...options,
+          _retryCount: retryCount + 1,
+        });
+      }
+
       const errEnvelope = responseData as ApiErrorEnvelope | null;
       const errorMessage =
         errEnvelope?.error?.message ||

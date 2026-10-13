@@ -1924,6 +1924,128 @@ export class AuthService {
   async listAuditLogs(userId: string, options?: { page?: number; limit?: number }) {
     return listUserAuditLogs(this.db, userId, options);
   }
+
+  // Handoff Ticket: Ephemeral, single-use ticket for cross-subdomain/origin authentication (RFC 9700 compliant)
+  async createHandoffTicket(userId: string, orgId?: string): Promise<{ ticket: string; expiresIn: number }> {
+    const rawTicket = `ht_${crypto.randomUUID().replace(/-/g, '')}${crypto.randomBytes(16).toString('hex')}`;
+    const ttlMs = 30_000; // 30 seconds
+    const cacheKey = `handoff_ticket:${rawTicket}`;
+
+    defaultAppCache.set(
+      cacheKey,
+      {
+        userId,
+        orgId,
+        createdAt: Date.now(),
+      },
+      ttlMs
+    );
+
+    return {
+      ticket: rawTicket,
+      expiresIn: 30,
+    };
+  }
+
+  async exchangeHandoffTicket(
+    ticket: string,
+    meta: { ip?: string; userAgent?: string } = {}
+  ): Promise<{
+    accessToken: string;
+    refreshToken: string;
+    user: { id: string; email: string; fullName: string; emailVerifiedAt: string | null };
+    organization: { id: string; name: string; subdomain: string; status: string; planCode: string | null; url?: string } | null;
+  }> {
+    const cacheKey = `handoff_ticket:${ticket}`;
+    const data = defaultAppCache.get(cacheKey) as { userId: string; orgId?: string; createdAt: number } | null;
+
+    if (!data) {
+      throw new AppError('INVALID_HANDOFF_TICKET', 'Handoff ticket is invalid or has expired', 401);
+    }
+
+    // Single-use guarantee: atomic revocation / eviction immediately
+    defaultAppCache.delete(cacheKey);
+
+    const user = await this.db.user.findUnique({
+      where: { id: data.userId },
+      include: {
+        memberships: {
+          include: {
+            organization: true,
+          },
+        },
+      },
+    });
+
+    if (!user || user.status === 'suspended') {
+      throw new AppError('USER_NOT_FOUND', 'User account not found or suspended', 401);
+    }
+
+    // Resolve primary membership & organization
+    const activeMemberships = user.memberships.filter((m) => m.status === 'active');
+    const primaryMembership =
+      (data.orgId ? activeMemberships.find((m) => m.org_id === data.orgId) : null) ||
+      activeMemberships[0];
+
+    const org = primaryMembership?.organization ?? null;
+    const orgUrl = org ? getTenantUrl(org.subdomain) : undefined;
+
+    // Issue Session Tokens
+    const familyId = generateOpaqueToken().rawToken;
+    const accessToken = await signAccessToken({
+      sub: user.id,
+      email: user.email,
+      org_id: org?.id,
+      role: primaryMembership?.role,
+      membership_id: primaryMembership?.id,
+      session_id: familyId,
+    });
+
+    const refreshExpiry = new Date(Date.now() + env.REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
+    const { rawToken: rawRefreshToken, tokenHash: refreshHash, jti } = generateRefreshToken();
+
+    await this.pruneExcessSessions(user.id, 10);
+
+    if (org && primaryMembership) {
+      await this.db.refreshToken.create({
+        data: {
+          user_id: user.id,
+          org_id: org.id,
+          membership_id: primaryMembership.id,
+          family_id: familyId,
+          session_id: familyId,
+          absolute_expires_at: new Date(Date.now() + env.SESSION_ABSOLUTE_EXPIRY_DAYS * 24 * 60 * 60 * 1000),
+          last_used_at: new Date(),
+          created_ip: meta.ip,
+          user_agent: meta.userAgent?.slice(0, 512),
+          token_hash: refreshHash,
+          jti,
+          expires_at: refreshExpiry,
+        },
+      });
+    }
+
+    return {
+      accessToken,
+      refreshToken: rawRefreshToken,
+      user: {
+        id: user.id,
+        email: user.email,
+        fullName: user.full_name,
+        emailVerifiedAt: user.email_verified_at ? user.email_verified_at.toISOString() : null,
+      },
+      organization: org
+        ? {
+            id: org.id,
+            name: org.name,
+            subdomain: org.subdomain,
+            status: org.status,
+            planCode: org.plan_code,
+            url: orgUrl,
+          }
+        : null,
+    };
+  }
 }
 
 export const authService = new AuthService();

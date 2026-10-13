@@ -24,6 +24,7 @@ import type { Brand } from '../brands-api';
 import { brandApi } from '../brands-api';
 import { useBrands } from '../hooks/useBrands';
 import { BrandForm } from './BrandForm';
+import { Skeleton } from '../../../components/ui/skeleton';
 
 export interface BrandsPageProps {
   organization?: {
@@ -34,6 +35,70 @@ export interface BrandsPageProps {
   };
   onSelectBrandFilter?: (brandId: string) => void;
   branchId?: string;
+}
+
+function BrandMetricsSkeleton() {
+  return (
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+      {[1, 2, 3].map((i) => (
+        <div key={i} className="rounded-lg border border-[#2d3139] bg-[#141519] p-3">
+          <div className="flex items-center justify-between text-xs text-slate-400 font-medium">
+            <Skeleton className="h-3.5 w-24" />
+            <Skeleton className="h-4 w-4 rounded" />
+          </div>
+          <Skeleton className="mt-2 h-7 w-12" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function BrandTableSkeleton({ rows = 8 }: { rows?: number }) {
+  return (
+    <div className="overflow-hidden rounded-xl border border-[#2d3139] bg-[#141519]">
+      <table className="w-full text-left text-xs">
+        <thead className="border-b border-[#2d3139] bg-[#181a20]/60 text-slate-400">
+          <tr>
+            <th className="px-4 py-3 font-medium">Brand</th>
+            <th className="px-4 py-3 font-medium">Website</th>
+            <th className="px-4 py-3 font-medium text-center">Catalog Products</th>
+            <th className="px-4 py-3 font-medium">Status</th>
+            <th className="px-4 py-3 font-medium text-right">Actions</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-[#2d3139]/60">
+          {Array.from({ length: rows }).map((_, i) => (
+            <tr key={i} className="hover:bg-[#181a20]/50 transition-colors">
+              <td className="px-4 py-3.5">
+                <div className="flex items-center gap-3">
+                  <Skeleton className="h-8 w-8 rounded-lg shrink-0" />
+                  <div className="space-y-1.5">
+                    <Skeleton className="h-3.5 w-28" />
+                    <Skeleton className="h-2.5 w-20" />
+                  </div>
+                </div>
+              </td>
+              <td className="px-4 py-3.5">
+                <Skeleton className="h-3 w-32" />
+              </td>
+              <td className="px-4 py-3.5 text-center">
+                <Skeleton className="mx-auto h-4 w-12 rounded-full" />
+              </td>
+              <td className="px-4 py-3.5">
+                <Skeleton className="h-5 w-16 rounded-full" />
+              </td>
+              <td className="px-4 py-3.5 text-right">
+                <div className="flex items-center justify-end gap-1.5">
+                  <Skeleton className="h-7 w-7 rounded-md" />
+                  <Skeleton className="h-7 w-7 rounded-md" />
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 export function BrandsPage({ organization, onSelectBrandFilter, branchId }: BrandsPageProps) {
@@ -206,32 +271,34 @@ export function BrandsPage({ organization, onSelectBrandFilter, branchId }: Bran
             Add Brand
           </Button>
         </div>
-      </div>
-
-      {/* Quick Metrics */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <div className="rounded-lg border border-[#2d3139] bg-[#141519] p-3">
-          <div className="flex items-center justify-between text-xs text-slate-400 font-medium">
-            <span>Total Brands</span>
-            <Layers className="h-4 w-4 text-slate-500" />
+      </div>      {/* Quick Metrics */}
+      {loading && brands.length === 0 ? (
+        <BrandMetricsSkeleton />
+      ) : (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div className="rounded-lg border border-[#2d3139] bg-[#141519] p-3">
+            <div className="flex items-center justify-between text-xs text-slate-400 font-medium">
+              <span>Total Brands</span>
+              <Layers className="h-4 w-4 text-slate-500" />
+            </div>
+            <div className="mt-1 text-xl font-bold text-white">{totalCount}</div>
           </div>
-          <div className="mt-1 text-xl font-bold text-white">{totalCount}</div>
-        </div>
-        <div className="rounded-lg border border-[#2d3139] bg-[#141519] p-3">
-          <div className="flex items-center justify-between text-xs text-slate-400 font-medium">
-            <span>Active Brands</span>
-            <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+          <div className="rounded-lg border border-[#2d3139] bg-[#141519] p-3">
+            <div className="flex items-center justify-between text-xs text-slate-400 font-medium">
+              <span>Active Brands</span>
+              <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+            </div>
+            <div className="mt-1 text-xl font-bold text-emerald-400">{activeCount}</div>
           </div>
-          <div className="mt-1 text-xl font-bold text-emerald-400">{activeCount}</div>
-        </div>
-        <div className="rounded-lg border border-[#2d3139] bg-[#141519] p-3">
-          <div className="flex items-center justify-between text-xs text-slate-400 font-medium">
-            <span>Brands with Products</span>
-            <Package className="h-4 w-4 text-[#fbb945]" />
+          <div className="rounded-lg border border-[#2d3139] bg-[#141519] p-3">
+            <div className="flex items-center justify-between text-xs text-slate-400 font-medium">
+              <span>Brands with Products</span>
+              <Package className="h-4 w-4 text-[#fbb945]" />
+            </div>
+            <div className="mt-1 text-xl font-bold text-[#fbb945]">{withProductsCount}</div>
           </div>
-          <div className="mt-1 text-xl font-bold text-[#fbb945]">{withProductsCount}</div>
         </div>
-      </div>
+      )}
 
       {/* Filter and Search Bar */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -282,37 +349,35 @@ export function BrandsPage({ organization, onSelectBrandFilter, branchId }: Bran
       </div>
 
       {/* Brands Table */}
-      <div className="overflow-hidden rounded-xl border border-[#2d3139] bg-[#141519]">
-        {loading ? (
-          <div className="flex h-64 items-center justify-center">
-            <Loader2 className="h-6 w-6 animate-spin text-[#985184]" />
+      {loading && brands.length === 0 ? (
+        <BrandTableSkeleton rows={8} />
+      ) : error ? (
+        <div className="overflow-hidden rounded-xl border border-[#2d3139] bg-[#141519] p-8 text-center text-xs text-rose-400">{error}</div>
+      ) : brands.length === 0 ? (
+        <div className="overflow-hidden rounded-xl border border-[#2d3139] bg-[#141519] flex flex-col items-center justify-center p-12 text-center">
+          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-[#181a20] text-slate-500">
+            <Award className="h-6 w-6" />
           </div>
-        ) : error ? (
-          <div className="p-8 text-center text-xs text-rose-400">{error}</div>
-        ) : brands.length === 0 ? (
-          <div className="flex flex-col items-center justify-center p-12 text-center">
-            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-[#181a20] text-slate-500">
-              <Award className="h-6 w-6" />
-            </div>
-            <h3 className="mt-3 text-sm font-semibold text-white">No brands found</h3>
-            <p className="mt-1 max-w-sm text-xs text-slate-400">
-              {searchQuery
-                ? 'No brands matched your search criteria.'
-                : activeTab === 'archived'
-                ? 'There are no archived brands.'
-                : 'Get started by creating your first brand to organize products across all branch catalogs.'}
-            </p>
-            {!searchQuery && activeTab !== 'archived' && (
-              <Button
-                onClick={handleOpenAdd}
-                className="mt-4 bg-[#985184] text-xs font-medium text-white hover:bg-[#985184]/90"
-              >
-                <Plus className="mr-1.5 h-3.5 w-3.5" />
-                Add Brand
-              </Button>
-            )}
-          </div>
-        ) : (
+          <h3 className="mt-3 text-sm font-semibold text-white">No brands found</h3>
+          <p className="mt-1 max-w-sm text-xs text-slate-400">
+            {searchQuery
+              ? 'No brands matched your search criteria.'
+              : activeTab === 'archived'
+              ? 'There are no archived brands.'
+              : 'Get started by creating your first brand to organize products across all branch catalogs.'}
+          </p>
+          {!searchQuery && activeTab !== 'archived' && (
+            <Button
+              onClick={handleOpenAdd}
+              className="mt-4 bg-[#985184] text-xs font-medium text-white hover:bg-[#985184]/90"
+            >
+              <Plus className="mr-1.5 h-3.5 w-3.5" />
+              Add Brand
+            </Button>
+          )}
+        </div>
+      ) : (
+        <div className={`overflow-hidden rounded-xl border border-[#2d3139] bg-[#141519] transition-opacity ${loading ? 'opacity-65 pointer-events-none' : ''}`}>
           <table className="w-full text-left text-xs">
             <thead className="border-b border-[#2d3139] bg-[#181a20]/60 text-slate-400">
               <tr>
@@ -444,8 +509,8 @@ export function BrandsPage({ organization, onSelectBrandFilter, branchId }: Bran
               ))}
             </tbody>
           </table>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Brand Form Modal */}
       <BrandForm

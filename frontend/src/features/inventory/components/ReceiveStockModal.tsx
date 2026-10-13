@@ -5,6 +5,7 @@ import { Input } from '../../../components/ui/input';
 import { Badge } from '../../../components/ui/badge';
 import { useFormDraft } from '../../../hooks/useFormDraft';
 import { useStockMutations } from '../hooks/useStock';
+import { productApi } from '../products-api';
 import type { StockItem } from '../stock-api';
 
 export interface ReceiveStockModalProps {
@@ -16,6 +17,7 @@ export interface ReceiveStockModalProps {
   branches: Array<{ id: string; name: string }>;
   onSuccess?: () => void;
   initialProductId?: string;
+  initialVariantId?: string;
 }
 
 export function ReceiveStockModal({
@@ -27,6 +29,7 @@ export function ReceiveStockModal({
   branches,
   onSuccess,
   initialProductId,
+  initialVariantId,
 }: ReceiveStockModalProps) {
   const effectiveProductId = selectedItem?.productId || initialProductId || stockItems[0]?.productId || '';
 
@@ -52,6 +55,15 @@ export function ReceiveStockModal({
     return selectedItem?.productId || initialProductId || stockItems[0]?.productId || '';
   });
 
+  const [variantId, setVariantId] = React.useState<string>(() => {
+    return selectedItem?.variantId || initialVariantId || '';
+  });
+
+  const [productVariants, setProductVariants] = React.useState<
+    Array<{ id: string; name?: string; sku: string; attributes?: Record<string, string> }>
+  >([]);
+  const [hasVariants, setHasVariants] = React.useState(false);
+
   const [quantity, setQuantity] = React.useState<number>(() => draft?.quantity ?? 1);
   const [reference, setReference] = React.useState(() => draft?.reference ?? '');
   const [notes, setNotes] = React.useState(() => draft?.notes ?? '');
@@ -63,14 +75,64 @@ export function ReceiveStockModal({
     if (selectedItem) {
       setProductId(selectedItem.productId);
       setTargetBranchId(selectedItem.branchId);
+      if (selectedItem.variantId) {
+        setVariantId(selectedItem.variantId);
+      }
     } else if (initialProductId) {
       setProductId(initialProductId);
+      if (initialVariantId) {
+        setVariantId(initialVariantId);
+      }
     }
-  }, [selectedItem, initialProductId]);
+  }, [selectedItem, initialProductId, initialVariantId]);
+
+  React.useEffect(() => {
+    if (!productId) {
+      setProductVariants([]);
+      setHasVariants(false);
+      return;
+    }
+
+    // Check if stockItems already has variants for this product
+    const matchingVariantItems = stockItems.filter((i) => i.productId === productId && i.variantId);
+    if (matchingVariantItems.length > 0) {
+      setHasVariants(true);
+      setProductVariants(
+        matchingVariantItems.map((i) => ({
+          id: i.variantId!,
+          sku: i.sku,
+          attributes: i.variantAttributes || undefined,
+          name: i.variantName || undefined,
+        }))
+      );
+      if (!variantId && matchingVariantItems[0]) {
+        setVariantId(matchingVariantItems[0].variantId!);
+      }
+    } else {
+      productApi
+        .getProduct(productId)
+        .then((res) => {
+          if (res?.product?.has_variants && res.product.variants && res.product.variants.length > 0) {
+            setHasVariants(true);
+            setProductVariants(res.product.variants as any);
+            if (!variantId && res.product.variants[0]) {
+              setVariantId(res.product.variants[0].id);
+            }
+          } else {
+            setHasVariants(false);
+            setProductVariants([]);
+            setVariantId('');
+          }
+        })
+        .catch(() => {
+          setHasVariants(false);
+        });
+    }
+  }, [productId]);
 
   if (!isOpen) return null;
 
-  const currentItem = selectedItem || stockItems.find((i) => i.productId === productId);
+  const currentItem = selectedItem || stockItems.find((i) => i.productId === productId && (variantId ? i.variantId === variantId : true));
   const currentOnHand = currentItem ? currentItem.quantityOnHand : 0;
   const resultingOnHand = currentOnHand + (Number(quantity) || 0);
 
@@ -86,6 +148,10 @@ export function ReceiveStockModal({
       setErrorMsg('Please select a product.');
       return;
     }
+    if (hasVariants && !variantId) {
+      setErrorMsg('Please select a specific product variant to receive.');
+      return;
+    }
     if (quantity <= 0) {
       setErrorMsg('Received quantity must be greater than zero.');
       return;
@@ -95,6 +161,7 @@ export function ReceiveStockModal({
       await receiveStock.mutateAsync({
         branchId: targetBranchId,
         productId,
+        variantId: variantId || undefined,
         quantity: Number(quantity),
         reference: reference.trim() || undefined,
         notes: notes.trim() || undefined,
@@ -172,23 +239,55 @@ export function ReceiveStockModal({
             <div className="p-3 rounded-lg bg-[#181920] border border-[#2d3139] space-y-1">
               <div className="text-[11px] text-slate-400 font-medium">Selected Product</div>
               <div className="text-xs font-semibold text-slate-200">{selectedItem.productName}</div>
-              <div className="text-[10px] text-slate-400 font-mono">SKU: {selectedItem.sku}</div>
+              <div className="text-[10px] text-slate-400 font-mono">
+                SKU: {selectedItem.sku}
+                {selectedItem.variantName && ` • Option: ${selectedItem.variantName}`}
+              </div>
             </div>
           ) : (
-            <div>
-              <label className="block text-xs font-medium text-slate-300 mb-1.5">Product *</label>
-              <select
-                value={productId}
-                onChange={(e) => setProductId(e.target.value)}
-                className="w-full h-9 bg-[#1a1b20] border border-[#2d3139] rounded-md px-3 text-xs text-slate-200 focus:outline-hidden focus:border-[#985184]"
-                required
-              >
-                {stockItems.map((item) => (
-                  <option key={item.productId} value={item.productId}>
-                    {item.productName} ({item.sku})
-                  </option>
-                ))}
-              </select>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1.5">Product *</label>
+                <select
+                  value={productId}
+                  onChange={(e) => setProductId(e.target.value)}
+                  className="w-full h-9 bg-[#1a1b20] border border-[#2d3139] rounded-md px-3 text-xs text-slate-200 focus:outline-hidden focus:border-[#985184]"
+                  required
+                >
+                  {stockItems.map((item) => (
+                    <option key={item.productId} value={item.productId}>
+                      {item.productName} ({item.sku})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {hasVariants && (
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                    Product Variant *
+                  </label>
+                  <select
+                    value={variantId}
+                    onChange={(e) => setVariantId(e.target.value)}
+                    className="w-full h-9 bg-[#1a1b20] border border-[#2d3139] rounded-md px-3 text-xs text-slate-200 focus:outline-hidden focus:border-[#985184]"
+                    required
+                  >
+                    <option value="">Select a variant...</option>
+                    {productVariants.map((v) => {
+                      const label =
+                        v.name ||
+                        (v.attributes ? Object.values(v.attributes).join(' / ') : '') ||
+                        v.sku;
+                      return (
+                        <option key={v.id} value={v.id}>
+                          {label} (SKU: {v.sku})
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+              )}
             </div>
           )}
 

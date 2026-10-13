@@ -71,6 +71,9 @@ export interface ProductListItem {
   is_deleted?: boolean;
   image_url: string | null;
   primary_image_url?: string | null;
+  primary_thumbnail_url?: string | null;
+  thumbnail_200?: string | null;
+  thumbnail_400?: string | null;
   metadata: unknown;
   business_type: string | null;
   total_stock: number;
@@ -158,11 +161,17 @@ export class ProductService {
     if (!sku) {
       sku = await this.generateUniqueSku(orgId, input.name);
     } else {
-      const existing = await this.db.product.findFirst({
-        where: { org_id: orgId, sku: { equals: sku, mode: 'insensitive' } },
-        select: { id: true },
-      });
-      if (existing) {
+      const [existingProduct, existingVariant] = await Promise.all([
+        this.db.product.findFirst({
+          where: { org_id: orgId, sku: { equals: sku, mode: 'insensitive' } },
+          select: { id: true },
+        }),
+        this.db.productVariant.findFirst({
+          where: { org_id: orgId, sku: { equals: sku, mode: 'insensitive' }, is_deleted: false },
+          select: { id: true },
+        }),
+      ]);
+      if (existingProduct || existingVariant) {
         throw new AppError('PRODUCT_SKU_DUPLICATE', `SKU "${sku}" already exists in this organization`, 409, {
           field: 'sku',
         });
@@ -172,11 +181,17 @@ export class ProductService {
     // 2. Validate Barcode if provided
     const barcode = input.barcode?.trim() || null;
     if (barcode) {
-      const existingBarcode = await this.db.product.findFirst({
-        where: { org_id: orgId, barcode },
-        select: { id: true },
-      });
-      if (existingBarcode) {
+      const [existingBarcode, existingVariantBarcode] = await Promise.all([
+        this.db.product.findFirst({
+          where: { org_id: orgId, barcode },
+          select: { id: true },
+        }),
+        this.db.productVariant.findFirst({
+          where: { org_id: orgId, barcode, is_deleted: false },
+          select: { id: true },
+        }),
+      ]);
+      if (existingBarcode || existingVariantBarcode) {
         throw new AppError(
           'PRODUCT_BARCODE_DUPLICATE',
           `Barcode "${barcode}" already exists in this organization`,
@@ -279,25 +294,32 @@ export class ProductService {
       });
 
       if (input.trackQuantity && input.initialStock && input.initialStock > 0) {
-        await this.db.stockLevel.upsert({
+        const existingStockLevel = await this.db.stockLevel.findFirst({
           where: {
-            org_id_product_id_branch_id: {
-              org_id: orgId,
-              product_id: product.id,
-              branch_id: targetBranchId,
-            },
-          },
-          create: {
             org_id: orgId,
             product_id: product.id,
             branch_id: targetBranchId,
-            quantity_on_hand: new Decimal(input.initialStock),
-            reserved: new Decimal(0),
-          },
-          update: {
-            quantity_on_hand: new Decimal(input.initialStock),
+            variant_id: null,
           },
         });
+        if (existingStockLevel) {
+          await this.db.stockLevel.update({
+            where: { id: existingStockLevel.id },
+            data: {
+              quantity_on_hand: new Decimal(input.initialStock),
+            },
+          });
+        } else {
+          await this.db.stockLevel.create({
+            data: {
+              org_id: orgId,
+              product_id: product.id,
+              branch_id: targetBranchId,
+              quantity_on_hand: new Decimal(input.initialStock),
+              reserved: new Decimal(0),
+            },
+          });
+        }
       }
     }
 
@@ -371,6 +393,17 @@ export class ProductService {
             { sku: { contains: s, mode: 'insensitive' } },
             { barcode: { contains: s, mode: 'insensitive' } },
             { description: { contains: s, mode: 'insensitive' } },
+            {
+              variants: {
+                some: {
+                  is_deleted: false,
+                  OR: [
+                    { sku: { contains: s, mode: 'insensitive' } },
+                    { barcode: { contains: s, mode: 'insensitive' } },
+                  ],
+                },
+              },
+            },
           ];
         }
 
@@ -425,6 +458,7 @@ export class ProductService {
                   quantity_on_hand: true,
                   reserved: true,
                   branch_id: true,
+                  variant_id: true,
                 },
                 ...(query.branchId ? { where: { branch_id: query.branchId } } : {}),
               },
@@ -451,8 +485,13 @@ export class ProductService {
         let items: ProductListItem[] = rawProducts.map((p) => {
           let totalStock = 0;
           let reservedStock = 0;
+          const hasActiveVariants = p.has_variants && p.variants.length > 0;
 
           for (const sl of p.stock_levels) {
+            // When product has variants, roll up stock strictly from variant stock levels
+            if (hasActiveVariants && sl.variant_id === null) {
+              continue;
+            }
             totalStock += Number(sl.quantity_on_hand);
             reservedStock += Number(sl.reserved);
           }
@@ -480,6 +519,9 @@ export class ProductService {
             ? (branchAssignment.brand?.logo_url ?? (sameBranchBrand ? p.brand?.logo_url ?? null : null))
             : (sameBranchBrand ? p.brand?.logo_url ?? null : null);
 
+          const primaryThumb200 = p.images?.[0]?.thumbnail_200 || p.images?.[0]?.url || p.image_url;
+          const primaryThumb400 = p.images?.[0]?.thumbnail_400 || null;
+
           return {
             id: p.id,
             name: p.name,
@@ -505,6 +547,9 @@ export class ProductService {
             is_deleted: p.is_deleted,
             image_url: primaryImage,
             primary_image_url: primaryImage,
+            primary_thumbnail_url: primaryThumb200,
+            thumbnail_200: primaryThumb200,
+            thumbnail_400: primaryThumb400,
             metadata: p.metadata,
             business_type: p.business_type,
             total_stock: totalStock,
@@ -548,6 +593,16 @@ export class ProductService {
             brand: true,
             variants: {
               where: { is_deleted: false },
+              include: {
+                stock_levels: {
+                  include: {
+                    branch: { select: { id: true, name: true } },
+                  },
+                },
+                images: {
+                  orderBy: [{ sort_order: 'asc' }, { created_at: 'asc' }],
+                },
+              },
               orderBy: { created_at: 'asc' },
             },
             images: {
@@ -571,22 +626,68 @@ export class ProductService {
           throw new AppError('PRODUCT_NOT_FOUND', 'Product not found', 404);
         }
 
+        const mappedVariants = product.variants.map((v) => {
+          let vTotal = 0;
+          let vReserved = 0;
+          const vBranchStocks: BranchStockItem[] = [];
+          for (const sl of v.stock_levels || []) {
+            const qty = Number(sl.quantity_on_hand);
+            const res = Number(sl.reserved);
+            vTotal += qty;
+            vReserved += res;
+            vBranchStocks.push({
+              branch_id: sl.branch_id,
+              branch_name: sl.branch.name,
+              quantity_on_hand: qty,
+              reserved: res,
+              available: qty - res,
+            });
+          }
+          return {
+            ...v,
+            stock_levels: vBranchStocks,
+            total_stock: vTotal,
+            reserved_stock: vReserved,
+            available_stock: vTotal - vReserved,
+          };
+        });
+
         let totalStock = 0;
         let reservedStock = 0;
         const branchStocks: BranchStockItem[] = [];
 
-        for (const sl of product.stock_levels) {
-          const qty = Number(sl.quantity_on_hand);
-          const res = Number(sl.reserved);
-          totalStock += qty;
-          reservedStock += res;
-          branchStocks.push({
-            branch_id: sl.branch_id,
-            branch_name: sl.branch.name,
-            quantity_on_hand: qty,
-            reserved: res,
-            available: qty - res,
-          });
+        if (product.has_variants && mappedVariants.length > 0) {
+          totalStock = mappedVariants.reduce((sum, v) => sum + v.total_stock, 0);
+          reservedStock = mappedVariants.reduce((sum, v) => sum + v.reserved_stock, 0);
+          // Aggregate per-branch stocks across all variants
+          const branchMap = new Map<string, BranchStockItem>();
+          for (const v of mappedVariants) {
+            for (const bs of v.stock_levels) {
+              const existing = branchMap.get(bs.branch_id);
+              if (existing) {
+                existing.quantity_on_hand += bs.quantity_on_hand;
+                existing.reserved += bs.reserved;
+                existing.available += bs.available;
+              } else {
+                branchMap.set(bs.branch_id, { ...bs });
+              }
+            }
+          }
+          branchStocks.push(...Array.from(branchMap.values()));
+        } else {
+          for (const sl of product.stock_levels) {
+            const qty = Number(sl.quantity_on_hand);
+            const res = Number(sl.reserved);
+            totalStock += qty;
+            reservedStock += res;
+            branchStocks.push({
+              branch_id: sl.branch_id,
+              branch_name: sl.branch.name,
+              quantity_on_hand: qty,
+              reserved: res,
+              available: qty - res,
+            });
+          }
         }
 
         return {
@@ -594,7 +695,7 @@ export class ProductService {
             ...product,
             category_name: product.category?.name ?? null,
             brand: product.brand,
-            variants: product.variants,
+            variants: mappedVariants as any,
             images: product.images,
             stock_levels: branchStocks as any,
             total_stock: totalStock,
@@ -621,15 +722,25 @@ export class ProductService {
     if (input.sku !== undefined && input.sku.trim()) {
       const newSku = input.sku.trim().toUpperCase();
       if (newSku !== existing.sku) {
-        const duplicate = await this.db.product.findFirst({
-          where: {
-            org_id: orgId,
-            sku: { equals: newSku, mode: 'insensitive' },
-            id: { not: productId },
-          },
-          select: { id: true },
-        });
-        if (duplicate) {
+        const [duplicateProduct, duplicateVariant] = await Promise.all([
+          this.db.product.findFirst({
+            where: {
+              org_id: orgId,
+              sku: { equals: newSku, mode: 'insensitive' },
+              id: { not: productId },
+            },
+            select: { id: true },
+          }),
+          this.db.productVariant.findFirst({
+            where: {
+              org_id: orgId,
+              sku: { equals: newSku, mode: 'insensitive' },
+              is_deleted: false,
+            },
+            select: { id: true },
+          }),
+        ]);
+        if (duplicateProduct || duplicateVariant) {
           throw new AppError('PRODUCT_SKU_DUPLICATE', `SKU "${newSku}" already exists in this organization`, 409, {
             field: 'sku',
           });
@@ -643,15 +754,25 @@ export class ProductService {
     if (input.barcode !== undefined) {
       const newBarcode = input.barcode?.trim() || null;
       if (newBarcode && newBarcode !== existing.barcode) {
-        const duplicateBarcode = await this.db.product.findFirst({
-          where: {
-            org_id: orgId,
-            barcode: newBarcode,
-            id: { not: productId },
-          },
-          select: { id: true },
-        });
-        if (duplicateBarcode) {
+        const [duplicateBarcode, duplicateVariantBarcode] = await Promise.all([
+          this.db.product.findFirst({
+            where: {
+              org_id: orgId,
+              barcode: newBarcode,
+              id: { not: productId },
+            },
+            select: { id: true },
+          }),
+          this.db.productVariant.findFirst({
+            where: {
+              org_id: orgId,
+              barcode: newBarcode,
+              is_deleted: false,
+            },
+            select: { id: true },
+          }),
+        ]);
+        if (duplicateBarcode || duplicateVariantBarcode) {
           throw new AppError('PRODUCT_BARCODE_DUPLICATE', `Barcode "${newBarcode}" already exists`, 409, {
             field: 'barcode',
           });
@@ -883,7 +1004,11 @@ export class ProductService {
 
       await tx.productVariant.updateMany({
         where: { product_id: productId },
-        data: { is_active: false },
+        data: {
+          is_deleted: true,
+          is_active: false,
+          deleted_at: new Date(),
+        },
       });
 
       await tx.auditLog.create({
@@ -988,11 +1113,17 @@ export class ProductService {
       sku = `${product.sku}-${attrPart}`;
     }
 
-    const existingSku = await this.db.productVariant.findFirst({
-      where: { org_id: orgId, sku: { equals: sku, mode: 'insensitive' } },
-      select: { id: true },
-    });
-    if (existingSku) {
+    const [existingSkuInVariants, existingSkuInProducts] = await Promise.all([
+      this.db.productVariant.findFirst({
+        where: { org_id: orgId, sku: { equals: sku, mode: 'insensitive' } },
+        select: { id: true },
+      }),
+      this.db.product.findFirst({
+        where: { org_id: orgId, sku: { equals: sku, mode: 'insensitive' }, is_deleted: false },
+        select: { id: true },
+      }),
+    ]);
+    if (existingSkuInVariants || existingSkuInProducts) {
       throw new AppError('PRODUCT_SKU_DUPLICATE', `Variant SKU "${sku}" already exists in this organization`, 409, {
         field: 'sku',
       });
@@ -1000,15 +1131,54 @@ export class ProductService {
 
     const barcode = input.barcode?.trim() || null;
     if (barcode) {
-      const existingBarcode = await this.db.productVariant.findFirst({
-        where: { org_id: orgId, barcode },
-        select: { id: true },
-      });
-      if (existingBarcode) {
+      const [existingBarcodeInVariants, existingBarcodeInProducts] = await Promise.all([
+        this.db.productVariant.findFirst({
+          where: { org_id: orgId, barcode },
+          select: { id: true },
+        }),
+        this.db.product.findFirst({
+          where: { org_id: orgId, barcode, is_deleted: false },
+          select: { id: true },
+        }),
+      ]);
+      if (existingBarcodeInVariants || existingBarcodeInProducts) {
         throw new AppError('PRODUCT_BARCODE_DUPLICATE', `Barcode "${barcode}" already exists`, 409, {
           field: 'barcode',
         });
       }
+    }
+
+    // Normalize attribute keys and check for duplicate variant on this product
+    const normalizedAttributes: Record<string, string> = {};
+    for (const [k, v] of Object.entries(input.attributes)) {
+      const normKey = k.trim();
+      if (normKey) {
+        normalizedAttributes[normKey] = String(v).trim();
+      }
+    }
+
+    const existingVariants = await this.db.productVariant.findMany({
+      where: { product_id: productId, org_id: orgId, is_deleted: false },
+      select: { id: true, attributes: true },
+    });
+
+    const isDuplicateAttr = existingVariants.some((v) => {
+      const existingAttrs = (v.attributes || {}) as Record<string, string>;
+      const existingKeys = Object.keys(existingAttrs);
+      const newKeys = Object.keys(normalizedAttributes);
+      if (existingKeys.length !== newKeys.length) return false;
+      return newKeys.every(
+        (key) => existingAttrs[key]?.toLowerCase() === normalizedAttributes[key]?.toLowerCase()
+      );
+    });
+
+    if (isDuplicateAttr) {
+      throw new AppError(
+        'VARIANT_ATTRIBUTES_DUPLICATE',
+        'A variant with identical attributes already exists for this product',
+        409,
+        { field: 'attributes' }
+      );
     }
 
     if (input.sellingPrice < input.costPrice) {
@@ -1031,7 +1201,8 @@ export class ProductService {
           input.compareAtPrice !== undefined && input.compareAtPrice !== null
             ? new Decimal(input.compareAtPrice)
             : null,
-        attributes: input.attributes,
+        attributes: normalizedAttributes,
+        low_stock_threshold: input.lowStockThreshold !== undefined ? input.lowStockThreshold : null,
         is_active: input.isActive ?? true,
       },
     });
@@ -1058,13 +1229,17 @@ export class ProductService {
           },
           create: {
             org_id: orgId,
+            product_id: productId,
             variant_id: variant.id,
             branch_id: branchId,
             quantity_on_hand: new Decimal(input.initialStock),
             reserved: new Decimal(0),
+            low_stock_threshold: input.lowStockThreshold !== undefined ? input.lowStockThreshold : null,
           },
           update: {
+            product_id: productId,
             quantity_on_hand: new Decimal(input.initialStock),
+            low_stock_threshold: input.lowStockThreshold !== undefined ? input.lowStockThreshold : null,
           },
         });
       }
@@ -1092,11 +1267,17 @@ export class ProductService {
     let sku = existing.sku;
     if (input.sku && input.sku.trim().toUpperCase() !== existing.sku) {
       sku = input.sku.trim().toUpperCase();
-      const existingSku = await this.db.productVariant.findFirst({
-        where: { org_id: orgId, sku: { equals: sku, mode: 'insensitive' }, id: { not: variantId } },
-        select: { id: true },
-      });
-      if (existingSku) {
+      const [existingSkuInVariants, existingSkuInProducts] = await Promise.all([
+        this.db.productVariant.findFirst({
+          where: { org_id: orgId, sku: { equals: sku, mode: 'insensitive' }, id: { not: variantId } },
+          select: { id: true },
+        }),
+        this.db.product.findFirst({
+          where: { org_id: orgId, sku: { equals: sku, mode: 'insensitive' }, is_deleted: false },
+          select: { id: true },
+        }),
+      ]);
+      if (existingSkuInVariants || existingSkuInProducts) {
         throw new AppError('PRODUCT_SKU_DUPLICATE', `Variant SKU "${sku}" already exists in this organization`, 409, {
           field: 'sku',
         });
@@ -1107,16 +1288,58 @@ export class ProductService {
     if (input.barcode !== undefined) {
       barcode = input.barcode?.trim() || null;
       if (barcode && barcode !== existing.barcode) {
-        const existingBarcode = await this.db.productVariant.findFirst({
-          where: { org_id: orgId, barcode, id: { not: variantId } },
-          select: { id: true },
-        });
-        if (existingBarcode) {
+        const [existingBarcodeInVariants, existingBarcodeInProducts] = await Promise.all([
+          this.db.productVariant.findFirst({
+            where: { org_id: orgId, barcode, id: { not: variantId } },
+            select: { id: true },
+          }),
+          this.db.product.findFirst({
+            where: { org_id: orgId, barcode, is_deleted: false },
+            select: { id: true },
+          }),
+        ]);
+        if (existingBarcodeInVariants || existingBarcodeInProducts) {
           throw new AppError('PRODUCT_BARCODE_DUPLICATE', `Barcode "${barcode}" already exists`, 409, {
             field: 'barcode',
           });
         }
       }
+    }
+
+    let attributes = existing.attributes;
+    if (input.attributes !== undefined) {
+      const normalizedAttributes: Record<string, string> = {};
+      for (const [k, v] of Object.entries(input.attributes)) {
+        const normKey = k.trim();
+        if (normKey) {
+          normalizedAttributes[normKey] = String(v).trim();
+        }
+      }
+
+      const otherVariants = await this.db.productVariant.findMany({
+        where: { product_id: productId, org_id: orgId, is_deleted: false, id: { not: variantId } },
+        select: { id: true, attributes: true },
+      });
+
+      const isDuplicateAttr = otherVariants.some((v) => {
+        const existingAttrs = (v.attributes || {}) as Record<string, string>;
+        const existingKeys = Object.keys(existingAttrs);
+        const newKeys = Object.keys(normalizedAttributes);
+        if (existingKeys.length !== newKeys.length) return false;
+        return newKeys.every(
+          (key) => existingAttrs[key]?.toLowerCase() === normalizedAttributes[key]?.toLowerCase()
+        );
+      });
+
+      if (isDuplicateAttr) {
+        throw new AppError(
+          'VARIANT_ATTRIBUTES_DUPLICATE',
+          'Another variant with identical attributes already exists for this product',
+          409,
+          { field: 'attributes' }
+        );
+      }
+      attributes = normalizedAttributes;
     }
 
     const nextCost = input.costPrice !== undefined ? input.costPrice : Number(existing.cost_price);
@@ -1160,7 +1383,8 @@ export class ProductService {
       if (input.compareAtPrice !== undefined) {
         updateData.compare_at_price = input.compareAtPrice !== null ? new Decimal(input.compareAtPrice) : null;
       }
-      if (input.attributes !== undefined) updateData.attributes = input.attributes;
+      if (input.attributes !== undefined) updateData.attributes = attributes;
+      if (input.lowStockThreshold !== undefined) updateData.low_stock_threshold = input.lowStockThreshold;
       if (input.isActive !== undefined) updateData.is_active = input.isActive;
 
       return await tx.productVariant.update({
@@ -1431,38 +1655,37 @@ export class ProductService {
       throw err;
     }
 
-    // Persist all image records in a single database transaction
+    // Persist all image records in a single database transaction using batched createManyAndReturn
+    const dbPersistStart = Date.now();
     const createdImages = await this.db.$transaction(async (tx) => {
-      const records: ProductImage[] = [];
-      for (const res of processedResults) {
-        const imageRecord = await tx.productImage.create({
-          data: {
-            org_id: orgId,
-            product_id: productId,
-            variant_id: variantId || null,
-            url: res.processed.url,
-            thumbnail_200: res.processed.thumbnail_200,
-            thumbnail_400: res.processed.thumbnail_400,
-            thumbnail_800: res.processed.thumbnail_800,
-            thumbnail_1200: res.processed.thumbnail_1200,
-            sort_order: res.task.sortOrder,
-            is_primary: res.task.isPrimary,
-            file_size: res.processed.file_size,
-            mime_type: res.processed.mime_type,
-          },
+      const records = await tx.productImage.createManyAndReturn({
+        data: processedResults.map((res) => ({
+          org_id: orgId,
+          product_id: productId,
+          variant_id: variantId || null,
+          url: res.processed.url,
+          thumbnail_200: res.processed.thumbnail_200,
+          thumbnail_400: res.processed.thumbnail_400,
+          thumbnail_800: res.processed.thumbnail_800,
+          thumbnail_1200: res.processed.thumbnail_1200,
+          sort_order: res.task.sortOrder,
+          is_primary: res.task.isPrimary,
+          file_size: res.processed.file_size,
+          mime_type: res.processed.mime_type,
+        })),
+      });
+
+      const primaryResult = processedResults.find((r) => r.task.isPrimary);
+      if (primaryResult && !variantId) {
+        await tx.product.update({
+          where: { id: productId },
+          data: { image_url: primaryResult.processed.url },
         });
-
-        if (res.task.isPrimary && !variantId) {
-          await tx.product.update({
-            where: { id: productId },
-            data: { image_url: res.processed.url },
-          });
-        }
-
-        records.push(imageRecord);
       }
+
       return records;
     });
+    const dbPersistDurationMs = Date.now() - dbPersistStart;
 
     const totalDurationMs = Date.now() - uploadBatchStart;
     const totalSharpMs = processedResults.reduce((sum, r) => sum + (r?.processed.sharpDurationMs || 0), 0);
@@ -1470,7 +1693,7 @@ export class ProductService {
 
     console.info(
       `[ImageUpload] Processed ${files.length} images for product ${productId} in ${totalDurationMs}ms ` +
-      `(Sharp: ${totalSharpMs}ms, Storage: ${totalStorageMs}ms, Concurrency: ${concurrency})`
+      `(Sharp: ${totalSharpMs}ms, Storage: ${totalStorageMs}ms, DB: ${dbPersistDurationMs}ms, Concurrency: ${concurrency})`
     );
 
     this.invalidateCache(orgId, { type: 'product_images:updated', payload: { id: productId } });
@@ -1633,15 +1856,7 @@ export class ProductService {
       throw new AppError('IMAGE_NOT_FOUND', 'Image not found', 404);
     }
 
-    // Delete image files from storage
-    const ext = image.url.split('.').pop();
-    await imageUploadService.deleteProductImageFiles({
-      orgId,
-      productId: image.product_id,
-      imageId: image.id,
-      ext,
-    });
-
+    // 1. Delete record and promote next primary in database transaction first
     await this.db.$transaction(async (tx) => {
       await tx.productImage.delete({
         where: { id: imageId },
@@ -1675,6 +1890,15 @@ export class ProductService {
           });
         }
       }
+    });
+
+    // 2. Delete image files from storage with retry after database transaction has committed
+    const ext = image.url.split('.').pop();
+    await imageUploadService.deleteProductImageFiles({
+      orgId,
+      productId: image.product_id,
+      imageId: image.id,
+      ext,
     });
 
     this.invalidateCache(orgId, { type: 'product_images:updated', payload: { id: image.product_id } });

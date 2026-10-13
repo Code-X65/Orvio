@@ -34,6 +34,7 @@ import {
 import { Button } from '../../../components/ui/button';
 import { Input } from '../../../components/ui/input';
 import { Badge } from '../../../components/ui/badge';
+import { Skeleton } from '../../../components/ui/skeleton';
 import { toast } from 'sonner';
 import { useUrlActionState } from '../../../hooks/useUrlActionState';
 import {
@@ -111,6 +112,252 @@ function ProductThumbnail({
       onError={() => setHasError(true)}
       className={className}
     />
+  );
+}
+
+function ProductMetricsSkeleton({ branchId }: { branchId?: string }) {
+  const count = branchId ? 5 : 4;
+  return (
+    <div
+      className={`grid gap-3 mt-4 pt-3 border-t border-[#2d3139]/60 ${
+        branchId ? 'grid-cols-2 sm:grid-cols-3 md:grid-cols-5' : 'grid-cols-2 sm:grid-cols-4'
+      }`}
+    >
+      {Array.from({ length: count }).map((_, i) => (
+        <div key={i} className="bg-[#141519] border border-[#2d3139] rounded-lg p-2.5">
+          <Skeleton className="h-3 w-20" />
+          <Skeleton className="h-6 w-14 mt-1.5" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ProductTableSkeleton({ rows = 8 }: { rows?: number }) {
+  return (
+    <div className="border border-[#2d3139] rounded-xl overflow-hidden bg-[#181a20] shadow-sm">
+      <div className="overflow-x-auto">
+        <table className="w-full text-left border-collapse text-xs">
+          <thead>
+            <tr className="border-b border-[#2d3139] bg-[#141519]/80 text-slate-400 font-semibold uppercase tracking-wider text-[10px]">
+              <th className="py-3 px-4 w-10"></th>
+              <th className="py-3 px-4">Product</th>
+              <th className="py-3 px-4">SKU / Barcode</th>
+              <th className="py-3 px-4">Brand</th>
+              <th className="py-3 px-4">Category</th>
+              <th className="py-3 px-4 text-right">Cost Price</th>
+              <th className="py-3 px-4 text-right">Selling Price</th>
+              <th className="py-3 px-4 text-center">Stock Level</th>
+              <th className="py-3 px-4 text-center">Status</th>
+              <th className="py-3 px-4 text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-[#2d3139]/60">
+            {Array.from({ length: rows }).map((_, i) => (
+              <tr key={i} className="hover:bg-[#181a20]/40">
+                <td className="py-3 px-4">
+                  <Skeleton className="w-3.5 h-3.5 rounded" />
+                </td>
+                <td className="py-3 px-4">
+                  <div className="flex items-center gap-3">
+                    <Skeleton className="w-9 h-9 rounded-lg shrink-0" />
+                    <div className="space-y-1.5 min-w-0">
+                      <Skeleton className="h-3.5 w-36" />
+                      <Skeleton className="h-2.5 w-20" />
+                    </div>
+                  </div>
+                </td>
+                <td className="py-3 px-4">
+                  <div className="space-y-1">
+                    <Skeleton className="h-3 w-20" />
+                    <Skeleton className="h-2.5 w-24" />
+                  </div>
+                </td>
+                <td className="py-3 px-4">
+                  <Skeleton className="h-4 w-16 rounded" />
+                </td>
+                <td className="py-3 px-4">
+                  <Skeleton className="h-4 w-20 rounded" />
+                </td>
+                <td className="py-3 px-4 text-right">
+                  <Skeleton className="h-3.5 w-16 ml-auto" />
+                </td>
+                <td className="py-3 px-4 text-right">
+                  <Skeleton className="h-3.5 w-16 ml-auto" />
+                </td>
+                <td className="py-3 px-4 text-center">
+                  <Skeleton className="h-5 w-20 rounded-full mx-auto" />
+                </td>
+                <td className="py-3 px-4 text-center">
+                  <Skeleton className="h-5 w-14 rounded-full mx-auto" />
+                </td>
+                <td className="py-3 px-4 text-right">
+                  <div className="flex items-center justify-end gap-1.5">
+                    <Skeleton className="h-6 w-6 rounded" />
+                    <Skeleton className="h-6 w-6 rounded" />
+                    <Skeleton className="h-6 w-6 rounded" />
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function ProductVariantsSkeleton() {
+  return (
+    <div className="max-h-[420px] overflow-hidden rounded border border-[#2d3139]/60">
+      <table className="w-full text-left border-collapse text-xs">
+        <thead className="bg-[#15161b]">
+          <tr className="border-b border-[#2d3139] text-slate-500 text-[10px] uppercase font-semibold">
+            <th className="py-2 px-3">Variant Name</th>
+            <th className="py-2 px-3">SKU</th>
+            <th className="py-2 px-3">Attributes</th>
+            <th className="py-2 px-3 text-right">Cost Price</th>
+            <th className="py-2 px-3 text-right">Selling Price</th>
+            <th className="py-2 px-3 text-center">Status</th>
+            <th className="py-2 px-3 text-right">Actions</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-[#2d3139]/40 bg-[#141519]">
+          {[1, 2, 3].map((i) => (
+            <tr key={i} className="hover:bg-[#1a1b22]">
+              <td className="py-2 px-3">
+                <div className="flex items-center gap-2">
+                  <Skeleton className="w-6 h-6 rounded shrink-0" />
+                  <Skeleton className="h-3 w-28" />
+                </div>
+              </td>
+              <td className="py-2 px-3">
+                <Skeleton className="h-3 w-20" />
+              </td>
+              <td className="py-2 px-3">
+                <Skeleton className="h-4 w-24 rounded" />
+              </td>
+              <td className="py-2 px-3 text-right">
+                <Skeleton className="h-3 w-16 ml-auto" />
+              </td>
+              <td className="py-2 px-3 text-right">
+                <Skeleton className="h-3 w-16 ml-auto" />
+              </td>
+              <td className="py-2 px-3 text-center">
+                <Skeleton className="h-4 w-12 rounded-full mx-auto" />
+              </td>
+              <td className="py-2 px-3 text-right">
+                <div className="flex items-center justify-end gap-1">
+                  <Skeleton className="h-6 w-6 rounded" />
+                  <Skeleton className="h-6 w-6 rounded" />
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ProductDeleteUsageSkeleton() {
+  return (
+    <div className="my-4 p-4 rounded-lg bg-[#141519] border border-[#2d3139] space-y-2">
+      <div className="flex items-center gap-2">
+        <Skeleton className="w-4 h-4 rounded-full" />
+        <Skeleton className="h-3.5 w-48" />
+      </div>
+      <Skeleton className="h-3 w-full" />
+      <Skeleton className="h-3 w-4/5" />
+    </div>
+  );
+}
+
+function ProductPriceHistorySkeleton() {
+  return (
+    <div className="space-y-3">
+      {[1, 2, 3].map((i) => (
+        <div
+          key={i}
+          className="bg-[#141519] border border-[#2d3139] rounded-lg p-3.5 space-y-2.5 text-xs"
+        >
+          <div className="flex items-center justify-between">
+            <Skeleton className="h-3 w-32" />
+            <Skeleton className="h-4 w-16 rounded-full" />
+          </div>
+          <div className="grid grid-cols-2 gap-3 pt-1">
+            <div className="bg-[#181a20] p-2.5 rounded border border-[#2d3139] space-y-1.5">
+              <Skeleton className="h-2.5 w-16" />
+              <Skeleton className="h-4 w-24" />
+            </div>
+            <div className="bg-[#181a20] p-2.5 rounded border border-[#2d3139] space-y-1.5">
+              <Skeleton className="h-2.5 w-16" />
+              <Skeleton className="h-4 w-24" />
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ProductDetailSkeleton() {
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-start justify-between border-b border-[#2d3139] pb-4">
+        <div className="space-y-2">
+          <div className="flex items-center gap-2.5">
+            <Skeleton className="h-6 w-48" />
+            <Skeleton className="h-5 w-20 rounded-md" />
+            <Skeleton className="h-5 w-14 rounded-full" />
+          </div>
+          <div className="flex items-center gap-4">
+            <Skeleton className="h-3 w-28" />
+            <Skeleton className="h-3 w-32" />
+            <Skeleton className="h-3 w-16" />
+          </div>
+        </div>
+        <Skeleton className="h-8 w-8 rounded-lg" />
+      </div>
+
+      {/* Main Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-start">
+        {/* Left Column: Visual Gallery Skeleton */}
+        <div className="space-y-3">
+          <Skeleton className="w-full aspect-square rounded-xl" />
+          <div className="flex gap-2">
+            {[1, 2, 3, 4].map((i) => (
+              <Skeleton key={i} className="w-16 h-16 rounded-lg shrink-0" />
+            ))}
+          </div>
+        </div>
+
+        {/* Right Column: Details & Pricing Skeleton */}
+        <div className="space-y-5">
+          <div className="p-4 rounded-xl bg-[#141519] border border-[#2d3139] space-y-3">
+            <Skeleton className="h-3.5 w-32" />
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Skeleton className="h-3 w-20" />
+                <Skeleton className="h-6 w-28" />
+              </div>
+              <div className="space-y-1">
+                <Skeleton className="h-3 w-20" />
+                <Skeleton className="h-6 w-28" />
+              </div>
+            </div>
+          </div>
+          <div className="p-4 rounded-xl bg-[#141519] border border-[#2d3139] space-y-2.5">
+            <Skeleton className="h-3.5 w-28" />
+            <div className="grid grid-cols-2 gap-2">
+              <Skeleton className="h-8 rounded-lg" />
+              <Skeleton className="h-8 rounded-lg" />
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -364,9 +611,6 @@ export function ProductsPage({
       }
       toast.error(err?.message || 'Failed to update product');
     },
-    onSuccess: () => {
-      toast.success('Product updated successfully');
-    },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['inventory', 'catalog'] });
       queryClient.invalidateQueries({ queryKey: ['inventory', 'products'] });
@@ -612,7 +856,6 @@ export function ProductsPage({
       };
       const res = await productApi.createProduct(createPayload);
       productId = res.product.id;
-      toast.success('Product created successfully');
     }
 
     if (productId && newFiles && newFiles.length > 0) {
@@ -622,7 +865,9 @@ export function ProductsPage({
         toast.error(err?.message || 'Failed to upload some product images');
       }
     }
-    await fetchProducts();
+
+    toast.success(editingProduct ? 'Product updated successfully' : 'Product created successfully');
+    fetchProducts();
   };
 
   // Open edit drawer
@@ -688,9 +933,9 @@ export function ProductsPage({
         compareAtPrice: data.compareAtPrice,
         attributes: data.attributes,
         isActive: data.isActive,
+        lowStockThreshold: data.lowStockThreshold,
         priceChangeReason: data.priceChangeReason,
       });
-      toast.success('Variant updated successfully');
     } else {
       const createPayload: CreateVariantPayload = {
         ...(data as CreateVariantPayload),
@@ -698,7 +943,6 @@ export function ProductsPage({
       };
       const vRes = await productApi.createVariant(variantTargetProduct.id, createPayload);
       variantId = vRes.variant.id;
-      toast.success('Variant added successfully');
     }
 
     if (variantId && newFiles && newFiles.length > 0) {
@@ -709,16 +953,19 @@ export function ProductsPage({
       }
     }
 
-    // Refresh variants for this product
-    const updated = await productApi.getProductById(variantTargetProduct.id);
-    setProductVariantsMap((prev) => ({
-      ...prev,
-      [variantTargetProduct.id]: updated.product.variants || [],
-    }));
+    toast.success(editingVariant ? 'Variant updated successfully' : 'Variant added successfully');
+
+    // Refresh variants for this product in background
+    productApi.getProductById(variantTargetProduct.id).then((updated) => {
+      setProductVariantsMap((prev) => ({
+        ...prev,
+        [variantTargetProduct.id]: updated.product.variants || [],
+      }));
+    }).catch(() => {});
 
     // Ensure expanded
     setExpandedProductIds((prev) => new Set([...prev, variantTargetProduct.id]));
-    await fetchProducts();
+    fetchProducts();
   };
 
   // Delete product handler (soft delete)
@@ -893,15 +1140,18 @@ export function ProductsPage({
         </div>
 
         {/* Quick Stats Grid */}
-        <div className={`grid gap-3 mt-4 pt-3 border-t border-[#2d3139]/60 ${
-          branchId ? 'grid-cols-2 sm:grid-cols-3 md:grid-cols-5' : 'grid-cols-2 sm:grid-cols-4'
-        }`}>
-          <div className="bg-[#141519] border border-[#2d3139] rounded-lg p-2.5">
-            <div className="text-[11px] text-slate-400 font-medium">Total Products</div>
-            <div className="text-lg font-bold text-white mt-0.5">
-              {branchSummary?.totalAssignedProducts ?? totalCount}
+        {loading && products.length === 0 ? (
+          <ProductMetricsSkeleton branchId={branchId} />
+        ) : (
+          <div className={`grid gap-3 mt-4 pt-3 border-t border-[#2d3139]/60 ${
+            branchId ? 'grid-cols-2 sm:grid-cols-3 md:grid-cols-5' : 'grid-cols-2 sm:grid-cols-4'
+          }`}>
+            <div className="bg-[#141519] border border-[#2d3139] rounded-lg p-2.5">
+              <div className="text-[11px] text-slate-400 font-medium">Total Products</div>
+              <div className="text-lg font-bold text-white mt-0.5">
+                {branchSummary?.totalAssignedProducts ?? totalCount}
+              </div>
             </div>
-          </div>
           <div className="bg-[#141519] border border-[#2d3139] rounded-lg p-2.5">
             <div className="text-[11px] text-slate-400 font-medium">Active Items</div>
             <div className="text-lg font-bold text-emerald-400 mt-0.5">
@@ -937,6 +1187,7 @@ export function ProductsPage({
             <div className="text-lg font-bold text-rose-400 mt-0.5">{outOfStockCount}</div>
           </div>
         </div>
+        )}
 
         {/* Filters Bar */}
         <div className="flex flex-col md:flex-row items-stretch md:items-center gap-3 mt-4">
@@ -1064,10 +1315,7 @@ export function ProductsPage({
       {/* Main Content Area */}
       <div className="p-6">
         {loading && products.length === 0 ? (
-          <div className="py-24 flex flex-col items-center justify-center text-slate-400 gap-3">
-            <Loader2 className="w-8 h-8 text-[#985184] animate-spin" />
-            <p className="text-xs">Loading product catalog...</p>
-          </div>
+          <ProductTableSkeleton rows={8} />
         ) : error ? (
           <div className="py-16 bg-rose-500/5 border border-rose-500/20 rounded-xl p-6 text-center max-w-md mx-auto">
             <AlertTriangle className="w-8 h-8 text-rose-400 mx-auto mb-2" />
@@ -1105,7 +1353,7 @@ export function ProductsPage({
             </Button>
           </div>
         ) : (
-          <div className="border border-[#2d3139] rounded-xl overflow-hidden bg-[#181a20] shadow-sm">
+          <div className={`border border-[#2d3139] rounded-xl overflow-hidden bg-[#181a20] shadow-sm transition-opacity ${loading ? 'opacity-65 pointer-events-none' : ''}`}>
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse text-xs">
                 <thead>
@@ -1469,10 +1717,7 @@ export function ProductsPage({
                                   </div>
 
                                   {isLoadingVariants ? (
-                                    <div className="py-4 flex items-center justify-center text-slate-400 text-xs gap-2">
-                                      <Loader2 className="w-3.5 h-3.5 animate-spin text-[#985184]" />
-                                      Loading variants...
-                                    </div>
+                                    <ProductVariantsSkeleton />
                                   ) : variants.length === 0 ? (
                                     <div className="py-4 text-center text-slate-400 text-xs">
                                       No variants created yet. Click "Add Variant" to create options (size, color, etc.).
@@ -1491,6 +1736,7 @@ export function ProductsPage({
                                             <th className="py-2 px-3">Attributes</th>
                                             <th className="py-2 px-3 text-right">Cost Price</th>
                                             <th className="py-2 px-3 text-right">Selling Price</th>
+                                            <th className="py-2 px-3 text-right">Stock</th>
                                             <th className="py-2 px-3 text-center">Status</th>
                                             <th className="py-2 px-3 text-right">Actions</th>
                                           </tr>
@@ -1568,6 +1814,18 @@ export function ProductsPage({
                                                   {v.compare_at_price && Number(v.compare_at_price) > Number(v.selling_price) && (
                                                     <span className="text-[10px] text-slate-500 line-through">
                                                       {currency} {Number(v.compare_at_price).toLocaleString()}
+                                                    </span>
+                                                  )}
+                                                </div>
+                                              </td>
+                                              <td className="py-2 px-3 text-right">
+                                                <div className="flex flex-col items-end">
+                                                  <span className="font-mono font-semibold text-slate-200">
+                                                    {v.total_stock !== undefined ? v.total_stock : '—'}
+                                                  </span>
+                                                  {v.available_stock !== undefined && (
+                                                    <span className="text-[10px] text-emerald-400 font-mono">
+                                                      {v.available_stock} avail
                                                     </span>
                                                   )}
                                                 </div>
@@ -1720,10 +1978,7 @@ export function ProductsPage({
 
             {/* Loading stock inspection */}
             {loadingDeleteUsage ? (
-              <div className="my-4 p-4 rounded-lg bg-[#141519] border border-[#2d3139] flex items-center justify-center gap-2 text-xs text-slate-400">
-                <Loader2 className="w-4 h-4 animate-spin text-[#985184]" />
-                <span>Checking branch stock levels & reservations...</span>
-              </div>
+              <ProductDeleteUsageSkeleton />
             ) : deleteUsage?.hasReservedStock ? (
               /* State 1: Active Reserved Stock (Strict Block) */
               <div className="my-4 p-3.5 rounded-lg bg-rose-950/30 border border-rose-500/30 space-y-2">
@@ -1892,10 +2147,7 @@ export function ProductsPage({
 
             <div className="overflow-y-auto py-4 flex-1 space-y-3 pr-1">
               {loadingHistory ? (
-                <div className="py-12 flex flex-col items-center justify-center text-slate-400 gap-2">
-                  <Loader2 className="w-6 h-6 animate-spin text-[#985184]" />
-                  <p className="text-xs">Loading price revision logs...</p>
-                </div>
+                <ProductPriceHistorySkeleton />
               ) : priceHistoryList.length === 0 ? (
                 <div className="py-12 text-center text-slate-400 flex flex-col items-center justify-center">
                   <div className="w-10 h-10 rounded-full bg-[#202229] flex items-center justify-center text-slate-500 mb-2">
@@ -2097,10 +2349,7 @@ export function ProductsPage({
         >
           <div className="bg-[#181a20] border border-[#2d3139] rounded-2xl max-w-4xl w-full p-6 shadow-2xl text-slate-100 max-h-[92vh] overflow-y-auto animate-in zoom-in-95">
             {loadingDetail || !detailProduct ? (
-              <div className="py-24 flex flex-col items-center justify-center gap-3 text-slate-400">
-                <Loader2 className="w-8 h-8 animate-spin text-[#985184]" />
-                <span className="text-sm font-medium">Loading product visuals & gallery...</span>
-              </div>
+              <ProductDetailSkeleton />
             ) : (
               <div className="space-y-6">
                 {/* Header */}

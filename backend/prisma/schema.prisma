@@ -429,29 +429,31 @@ model Product {
 }
 
 model ProductVariant {
-  id               String                @id @default(cuid())
-  org_id           String
-  product_id       String
-  sku              String
-  barcode          String?
-  cost_price       Decimal               @db.Decimal(12, 2)
-  selling_price    Decimal               @db.Decimal(12, 2)
-  compare_at_price Decimal?              @db.Decimal(12, 2)
-  attributes       Json
-  is_active        Boolean               @default(true)
-  is_deleted       Boolean               @default(false)
-  deleted_at       DateTime?
-  created_at       DateTime              @default(now())
-  updated_at       DateTime              @updatedAt
+  id                  String                @id @default(cuid())
+  org_id              String
+  product_id          String
+  sku                 String
+  barcode             String?
+  cost_price          Decimal               @db.Decimal(12, 2)
+  selling_price       Decimal               @db.Decimal(12, 2)
+  compare_at_price    Decimal?              @db.Decimal(12, 2)
+  attributes          Json
+  low_stock_threshold Int?
+  is_active           Boolean               @default(true)
+  is_deleted          Boolean               @default(false)
+  deleted_at          DateTime?
+  created_at          DateTime              @default(now())
+  updated_at          DateTime              @updatedAt
 
-  organization     Organization          @relation(fields: [org_id], references: [id], onDelete: Cascade)
-  product          Product               @relation(fields: [product_id], references: [id], onDelete: Cascade)
-  images           ProductImage[]
-  stock_levels     StockLevel[]
-  stock_movements  StockMovement[]
-  price_history    ProductPriceHistory[]
+  organization        Organization          @relation(fields: [org_id], references: [id], onDelete: Cascade)
+  product             Product               @relation(fields: [product_id], references: [id], onDelete: Cascade)
+  images              ProductImage[]
+  stock_levels        StockLevel[]
+  stock_movements     StockMovement[]
+  price_history       ProductPriceHistory[]
 
   @@unique([org_id, sku])
+  @@index([org_id, barcode])
   @@index([product_id])
   @@index([product_id, is_deleted])
   @@index([org_id])
@@ -524,8 +526,8 @@ model StockLevel {
   variant             ProductVariant? @relation(fields: [variant_id], references: [id], onDelete: Cascade)
   branch              Branch          @relation(fields: [branch_id], references: [id], onDelete: Cascade)
 
-  @@unique([org_id, product_id, branch_id])
   @@unique([org_id, variant_id, branch_id])
+  @@index([org_id, product_id, branch_id])
   @@index([org_id])
   @@index([branch_id])
   @@map("stock_levels")

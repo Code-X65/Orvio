@@ -55,11 +55,16 @@ export function GuestGuard({ children }: GuestGuardProps) {
       (locationState?.from
         ? `${locationState.from.pathname || ''}${locationState.from.search || ''}`
         : undefined);
+    const savedRedirect = typeof window !== 'undefined' ? sessionStorage.getItem('orvio_redirect_after_login') : null;
     const lastVisited = organization?.subdomain ? getLastVisitedPath(organization.subdomain) : null;
     const defaultFallback = isTenantSubdomain() ? '/inventory' : '/orvio';
 
-    const candidate = queryReturnUrl || stateReturnUrl || lastVisited || defaultFallback;
+    const candidate = queryReturnUrl || stateReturnUrl || savedRedirect || lastVisited || defaultFallback;
     const targetDestination = sanitizeReturnUrl(candidate, defaultFallback);
+
+    if (savedRedirect && typeof window !== 'undefined') {
+      sessionStorage.removeItem('orvio_redirect_after_login');
+    }
 
     // Cross-subdomain workspace redirection
     if (organization?.subdomain && typeof window !== 'undefined') {
@@ -67,11 +72,7 @@ export function GuestGuard({ children }: GuestGuardProps) {
       const orgSub = organization.subdomain.toLowerCase();
 
       if (!currentHost.startsWith(orgSub)) {
-        const targetUrl = buildSafeWorkspaceUrl(
-          orgSub,
-          targetDestination,
-          accessToken ? { token: accessToken } : undefined
-        );
+        const targetUrl = buildSafeWorkspaceUrl(orgSub, targetDestination);
         window.location.href = targetUrl;
         return null;
       }

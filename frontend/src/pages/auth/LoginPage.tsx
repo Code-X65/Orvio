@@ -76,10 +76,14 @@ export function LoginPage() {
   const locationState = location.state as
     | { returnUrl?: string; from?: { pathname?: string; search?: string } }
     | undefined;
+  const savedRedirect = typeof window !== 'undefined' ? sessionStorage.getItem('orvio_redirect_after_login') : null;
   const rawReturnUrl =
+    savedRedirect ||
     searchParams.get('returnUrl') ||
     locationState?.returnUrl ||
-    (locationState?.from
+    (typeof locationState?.from === 'string'
+      ? locationState.from
+      : locationState?.from
       ? `${locationState.from.pathname || ''}${locationState.from.search || ''}`
       : undefined);
 
@@ -150,11 +154,25 @@ export function LoginPage() {
       const defaultFallback = isTenantSubdomain() ? '/inventory' : '/orvio';
       const targetDestination = sanitizeReturnUrl(rawReturnUrl || lastPath || defaultFallback, defaultFallback);
 
-      if (targetSubdomain && currentSubdomain && currentSubdomain.toLowerCase() !== targetSubdomain.toLowerCase()) {
-        const targetUrl = buildSafeWorkspaceUrl(targetSubdomain, targetDestination, { token: response.accessToken });
-        window.location.href = targetUrl;
-      } else if (!currentSubdomain && targetSubdomain) {
-        const targetUrl = buildSafeWorkspaceUrl(targetSubdomain, targetDestination, { token: response.accessToken });
+      if (typeof window !== 'undefined') {
+        sessionStorage.removeItem('orvio_redirect_after_login');
+      }
+
+      if (
+        (targetSubdomain && currentSubdomain && currentSubdomain.toLowerCase() !== targetSubdomain.toLowerCase()) ||
+        (!currentSubdomain && targetSubdomain)
+      ) {
+        let handoffParams: Record<string, string> | undefined;
+        try {
+          const { createHandoffTicket } = await import('../../lib/api/auth');
+          const ticketRes = await createHandoffTicket();
+          if (ticketRes?.ticket) {
+            handoffParams = { ticket: ticketRes.ticket };
+          }
+        } catch {
+          // If ticket creation fails, fall through to cookie-first workspace navigation
+        }
+        const targetUrl = buildSafeWorkspaceUrl(targetSubdomain, targetDestination, handoffParams);
         window.location.href = targetUrl;
       } else {
         navigate(targetDestination);

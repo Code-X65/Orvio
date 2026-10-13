@@ -4,7 +4,6 @@ import { Button } from '../../../components/ui/button';
 import { Input } from '../../../components/ui/input';
 import { Badge } from '../../../components/ui/badge';
 import { Textarea } from '../../../components/ui/textarea';
-import { useFormDraft } from '../../../hooks/useFormDraft';
 import type { Brand, CreateBrandPayload, UpdateBrandPayload } from '../brands-api';
 import { brandApi } from '../brands-api';
 
@@ -41,16 +40,6 @@ export function BrandForm({
   const [mounted, setMounted] = React.useState(isOpen);
   const [animating, setAnimating] = React.useState(false);
 
-  const draftKey = editingBrand?.id ? `brand_${editingBrand.id}` : 'brand_new';
-  const { draft, saveDraft, clearDraft, hasDraft } = useFormDraft<{
-    name?: string;
-    slug?: string;
-    logoUrl?: string;
-    websiteUrl?: string;
-    description?: string;
-    isActive?: boolean;
-  }>(draftKey, {});
-
   const [name, setName] = React.useState('');
   const [slug, setSlug] = React.useState('');
   const [slugManuallyEdited, setSlugManuallyEdited] = React.useState(false);
@@ -60,13 +49,6 @@ export function BrandForm({
   const [isActive, setIsActive] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
-
-  // Auto-save draft when not editing existing brand
-  React.useEffect(() => {
-    if (!editingBrand && (name || slug || logoUrl || websiteUrl || description)) {
-      saveDraft({ name, slug, logoUrl, websiteUrl, description, isActive });
-    }
-  }, [editingBrand, name, slug, logoUrl, websiteUrl, description, isActive, saveDraft]);
 
   React.useEffect(() => {
     let timer: NodeJS.Timeout;
@@ -90,13 +72,13 @@ export function BrandForm({
       setDescription(editingBrand.description || '');
       setIsActive(editingBrand.is_active ?? true);
     } else {
-      setName(draft?.name ?? '');
-      setSlug(draft?.slug ?? '');
-      setSlugManuallyEdited(Boolean(draft?.slug));
-      setLogoUrl(draft?.logoUrl ?? '');
-      setWebsiteUrl(draft?.websiteUrl ?? '');
-      setDescription(draft?.description ?? '');
-      setIsActive(draft?.isActive ?? true);
+      setName('');
+      setSlug('');
+      setSlugManuallyEdited(false);
+      setLogoUrl('');
+      setWebsiteUrl('');
+      setDescription('');
+      setIsActive(true);
     }
     setError(null);
   }, [editingBrand, isOpen]);
@@ -149,7 +131,6 @@ export function BrandForm({
         onSuccess?.(resultBrand);
       }
 
-      clearDraft();
       onClose();
     } catch (err: any) {
       const msg = err?.message || 'Failed to save brand. Please try again.';
@@ -187,11 +168,6 @@ export function BrandForm({
                 <h2 className="text-base font-semibold text-white">
                   {editingBrand ? 'Edit Brand' : isQuickCreate ? 'Quick Create Brand' : 'Add New Brand'}
                 </h2>
-                {hasDraft && !editingBrand && (
-                  <Badge className="border-amber-500/30 bg-amber-500/10 text-amber-400 text-[10px] py-0 px-2 font-normal">
-                    Draft Restored
-                  </Badge>
-                )}
               </div>
               <p className="text-xs text-slate-400">
                 {editingBrand

@@ -120,6 +120,7 @@ export const createVariantSchema = z
     attributes: z.record(z.string()).refine((obj) => Object.keys(obj).length > 0, {
       message: 'At least one variant attribute (e.g. size, color) is required',
     }),
+    lowStockThreshold: z.number().int().min(0).nullable().optional(),
     isActive: z.boolean().default(true),
     initialStock: z.number().min(0).optional().default(0),
     branchId: z.string().trim().optional(),
@@ -137,6 +138,7 @@ export const updateVariantSchema = z
     sellingPrice: z.number().min(0).optional(),
     compareAtPrice: z.number().min(0).nullable().optional(),
     attributes: z.record(z.string()).optional(),
+    lowStockThreshold: z.number().int().min(0).nullable().optional(),
     isActive: z.boolean().optional(),
     priceChangeReason: z.string().trim().max(500).optional(),
   })

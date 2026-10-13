@@ -16,6 +16,8 @@ export interface StockItemView {
   id: string;
   productId: string;
   variantId: string | null;
+  variantName?: string | null;
+  variantAttributes?: Record<string, string> | null;
   productName: string;
   sku: string;
   barcode: string | null;
@@ -45,6 +47,45 @@ export interface StockSummaryView {
 
 export class StockService {
   constructor(private db: PrismaClient = defaultPrisma) {}
+
+  private async validateProductAndVariant(
+    tx: Prisma.TransactionClient,
+    orgId: string,
+    productId: string,
+    variantId?: string | null
+  ) {
+    const product = await tx.product.findFirst({
+      where: { id: productId, org_id: orgId, is_deleted: false },
+      select: { id: true, name: true, has_variants: true },
+    });
+
+    if (!product) {
+      throw new AppError('PRODUCT_NOT_FOUND', 'Product not found in this organization', 404);
+    }
+
+    if (product.has_variants && !variantId) {
+      throw new AppError(
+        'VARIANT_REQUIRED_FOR_STOCK_OPERATION',
+        `Product "${product.name}" has variants enabled. Please select a specific variant for stock operations.`,
+        400,
+        { field: 'variantId' }
+      );
+    }
+
+    if (variantId) {
+      const variant = await tx.productVariant.findFirst({
+        where: { id: variantId, product_id: productId, org_id: orgId, is_deleted: false },
+        select: { id: true, sku: true },
+      });
+      if (!variant) {
+        throw new AppError('VARIANT_NOT_FOUND', 'Variant not found for this product', 404, {
+          field: 'variantId',
+        });
+      }
+    }
+
+    return product;
+  }
 
   private invalidateStockCache(orgId: string, branchId?: string) {
     inventoryCache.clearPrefix(`stock:summary:${orgId}`);
@@ -144,6 +185,8 @@ export class StockService {
               { product: { name: { contains: query.search, mode: 'insensitive' } } },
               { product: { sku: { contains: query.search, mode: 'insensitive' } } },
               { product: { barcode: { contains: query.search, mode: 'insensitive' } } },
+              { variant: { sku: { contains: query.search, mode: 'insensitive' } } },
+              { variant: { barcode: { contains: query.search, mode: 'insensitive' } } },
             ],
           }
         : {}),
@@ -172,6 +215,15 @@ export class StockService {
               brand: { select: { name: true } },
             },
           },
+          variant: {
+            select: {
+              id: true,
+              sku: true,
+              barcode: true,
+              attributes: true,
+              low_stock_threshold: true,
+            },
+          },
           branch: {
             select: {
               id: true,
@@ -191,7 +243,11 @@ export class StockService {
         const onHand = Number(item.quantity_on_hand);
         const reserved = Number(item.reserved);
         const available = Math.max(0, onHand - reserved);
-        const threshold = item.low_stock_threshold ?? item.product?.low_stock_threshold ?? 0;
+        const threshold =
+          item.low_stock_threshold ??
+          item.variant?.low_stock_threshold ??
+          item.product?.low_stock_threshold ??
+          0;
 
         let status: 'in_stock' | 'low_stock' | 'out_of_stock';
         if (onHand <= 0) {
@@ -202,13 +258,19 @@ export class StockService {
           status = 'in_stock';
         }
 
+        const variantName = item.variant
+          ? Object.values((item.variant.attributes || {}) as Record<string, string>).join(' / ')
+          : null;
+
         return {
           id: item.id,
           productId: item.product_id ?? '',
           variantId: item.variant_id,
+          variantName,
+          variantAttributes: (item.variant?.attributes as Record<string, string>) || null,
           productName: item.product?.name ?? 'Unknown Product',
-          sku: item.product?.sku ?? '',
-          barcode: item.product?.barcode ?? null,
+          sku: item.variant?.sku ?? item.product?.sku ?? '',
+          barcode: item.variant?.barcode ?? item.product?.barcode ?? null,
           imageUrl: item.product?.image_url ?? null,
           categoryName: item.product?.category?.name ?? null,
           brandName: item.product?.brand?.name ?? null,
@@ -277,6 +339,13 @@ export class StockService {
               image_url: true,
             },
           },
+          variant: {
+            select: {
+              id: true,
+              sku: true,
+              attributes: true,
+            },
+          },
           branch: {
             select: {
               id: true,
@@ -299,26 +368,33 @@ export class StockService {
     ]);
 
     return {
-      movements: movements.map((m) => ({
-        id: m.id,
-        orgId: m.org_id,
-        branchId: m.branch_id,
-        branchName: m.branch.name,
-        productId: m.product_id,
-        productName: m.product.name,
-        productSku: m.product.sku,
-        productImageUrl: m.product.image_url,
-        movementType: m.movement_type,
-        quantity: Number(m.quantity),
-        balanceBefore: Number(m.balance_before),
-        balanceAfter: Number(m.balance_after),
-        reason: m.reason,
-        referenceId: m.reference_id,
-        actorId: m.actor_id,
-        actorName: m.actor?.full_name ?? 'System',
-        notes: m.notes,
-        createdAt: m.created_at.toISOString(),
-      })),
+      movements: movements.map((m) => {
+        const variantName = m.variant
+          ? Object.values((m.variant.attributes || {}) as Record<string, string>).join(' / ')
+          : null;
+        return {
+          id: m.id,
+          orgId: m.org_id,
+          branchId: m.branch_id,
+          branchName: m.branch.name,
+          productId: m.product_id,
+          variantId: m.variant_id,
+          variantName,
+          productName: m.product.name,
+          productSku: m.variant?.sku ?? m.product.sku,
+          productImageUrl: m.product.image_url,
+          movementType: m.movement_type,
+          quantity: Number(m.quantity),
+          balanceBefore: Number(m.balance_before),
+          balanceAfter: Number(m.balance_after),
+          reason: m.reason,
+          referenceId: m.reference_id,
+          actorId: m.actor_id,
+          actorName: m.actor?.full_name ?? 'System',
+          notes: m.notes,
+          createdAt: m.created_at.toISOString(),
+        };
+      }),
       pagination: {
         total,
         page,
@@ -335,21 +411,15 @@ export class StockService {
     const { branchId, productId, variantId, quantity, notes } = payload;
 
     const result = await this.db.$transaction(async (tx) => {
-      // 1. Validate Product and Branch belong to org
+      // 1. Validate Product, Variant and Branch belong to org
       const [product, branch] = await Promise.all([
-        tx.product.findFirst({
-          where: { id: productId, org_id: orgId, is_deleted: false },
-          select: { id: true, name: true },
-        }),
+        this.validateProductAndVariant(tx, orgId, productId, variantId),
         tx.branch.findFirst({
           where: { id: branchId, org_id: orgId, is_deleted: false },
           select: { id: true, name: true },
         }),
       ]);
 
-      if (!product) {
-        throw new AppError('PRODUCT_NOT_FOUND', 'Product not found in this organization', 404);
-      }
       if (!branch) {
         throw new AppError('BRANCH_NOT_FOUND', 'Branch not found or inactive', 404);
       }
@@ -426,19 +496,13 @@ export class StockService {
 
     const result = await this.db.$transaction(async (tx) => {
       const [product, branch] = await Promise.all([
-        tx.product.findFirst({
-          where: { id: productId, org_id: orgId, is_deleted: false },
-          select: { id: true },
-        }),
+        this.validateProductAndVariant(tx, orgId, productId, variantId),
         tx.branch.findFirst({
           where: { id: branchId, org_id: orgId, is_deleted: false },
           select: { id: true },
         }),
       ]);
 
-      if (!product) {
-        throw new AppError('PRODUCT_NOT_FOUND', 'Product not found', 404);
-      }
       if (!branch) {
         throw new AppError('BRANCH_NOT_FOUND', 'Branch not found or inactive', 404);
       }
@@ -514,17 +578,13 @@ export class StockService {
 
     const result = await this.db.$transaction(async (tx) => {
       const [product, branch] = await Promise.all([
-        tx.product.findFirst({
-          where: { id: productId, org_id: orgId, is_deleted: false },
-          select: { id: true },
-        }),
+        this.validateProductAndVariant(tx, orgId, productId, variantId),
         tx.branch.findFirst({
           where: { id: branchId, org_id: orgId, is_deleted: false },
           select: { id: true },
         }),
       ]);
 
-      if (!product) throw new AppError('PRODUCT_NOT_FOUND', 'Product not found', 404);
       if (!branch) throw new AppError('BRANCH_NOT_FOUND', 'Branch not found or inactive', 404);
 
       const existingLevel = await tx.stockLevel.findFirst({
@@ -634,15 +694,11 @@ export class StockService {
           where: { id: destinationBranchId, org_id: orgId, is_deleted: false },
           select: { id: true, name: true },
         }),
-        tx.product.findFirst({
-          where: { id: productId, org_id: orgId, is_deleted: false },
-          select: { id: true, name: true },
-        }),
+        this.validateProductAndVariant(tx, orgId, productId, variantId),
       ]);
 
       if (!sourceBranch) throw new AppError('BRANCH_NOT_FOUND', 'Source branch not found or inactive', 404);
       if (!destBranch) throw new AppError('BRANCH_NOT_FOUND', 'Destination branch not found or inactive', 404);
-      if (!product) throw new AppError('PRODUCT_NOT_FOUND', 'Product not found', 404);
 
       // 2. Check source available stock
       const sourceLevel = await tx.stockLevel.findFirst({

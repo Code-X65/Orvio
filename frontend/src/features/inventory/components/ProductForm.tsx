@@ -22,7 +22,7 @@ import { Button } from '../../../components/ui/button';
 import { Input } from '../../../components/ui/input';
 import { Badge } from '../../../components/ui/badge';
 import { Textarea } from '../../../components/ui/textarea';
-import { useFormDraft } from '../../../hooks/useFormDraft';
+import { useAuthStore } from '../../../stores/auth-store';
 import type { CategoryTreeNode } from '../categories-api';
 import { flattenCategoriesForSelection } from './CategoryForm';
 import {
@@ -187,22 +187,6 @@ export function ProductForm({
   const [mounted, setMounted] = React.useState(isOpen);
   const [animating, setAnimating] = React.useState(false);
 
-  const draftKey = editingProduct?.id ? `product_${editingProduct.id}` : 'product_new';
-  const { draft, saveDraft, clearDraft, hasDraft } = useFormDraft<{
-    name?: string;
-    sku?: string;
-    barcode?: string;
-    categoryId?: string | null;
-    brandId?: string | null;
-    costPrice?: number | '';
-    costPriceDisplay?: string;
-    sellingPrice?: number | '';
-    sellingPriceDisplay?: string;
-    compareAtPrice?: number | '';
-    compareAtPriceDisplay?: string;
-    description?: string;
-  }>(draftKey, {});
-
   // Form State
   const [name, setName] = React.useState('');
   const [sku, setSku] = React.useState('');
@@ -225,41 +209,6 @@ export function ProductForm({
   const [description, setDescription] = React.useState('');
   const [isActive, setIsActive] = React.useState(true);
   const [metadata, setMetadata] = React.useState<Record<string, any>>({});
-
-  // Auto-save draft when fields change (for new product)
-  React.useEffect(() => {
-    if (!editingProduct && (name || sku || barcode || description || costPriceDisplay || sellingPriceDisplay)) {
-      saveDraft({
-        name,
-        sku,
-        barcode,
-        description,
-        costPrice,
-        costPriceDisplay,
-        sellingPrice,
-        sellingPriceDisplay,
-        compareAtPrice,
-        compareAtPriceDisplay,
-        categoryId,
-        brandId,
-      });
-    }
-  }, [
-    editingProduct,
-    name,
-    sku,
-    barcode,
-    description,
-    costPrice,
-    costPriceDisplay,
-    sellingPrice,
-    sellingPriceDisplay,
-    compareAtPrice,
-    compareAtPriceDisplay,
-    categoryId,
-    brandId,
-    saveDraft,
-  ]);
 
   // Image Gallery State
   const maxProductImages: number = (businessType && BUSINESS_TYPE_IMAGE_LIMITS[businessType]) ? BUSINESS_TYPE_IMAGE_LIMITS[businessType] : 5;
@@ -389,23 +338,23 @@ export function ProductForm({
         }).catch(() => {});
       }
     } else {
-      setName(draft?.name || '');
-      setSku(draft?.sku || '');
-      setBarcode(draft?.barcode || '');
-      setCategoryId(draft?.categoryId || defaultCategoryId || null);
-      setBrandId(draft?.brandId || null);
-      setCostPrice(draft?.costPrice !== undefined ? draft.costPrice : '');
-      setCostPriceDisplay(draft?.costPriceDisplay || '');
-      setSellingPrice(draft?.sellingPrice !== undefined ? draft.sellingPrice : '');
-      setSellingPriceDisplay(draft?.sellingPriceDisplay || '');
-      setCompareAtPrice(draft?.compareAtPrice !== undefined ? draft.compareAtPrice : '');
-      setCompareAtPriceDisplay(draft?.compareAtPriceDisplay || '');
+      setName('');
+      setSku('');
+      setBarcode('');
+      setCategoryId(defaultCategoryId || null);
+      setBrandId(null);
+      setCostPrice('');
+      setCostPriceDisplay('');
+      setSellingPrice('');
+      setSellingPriceDisplay('');
+      setCompareAtPrice('');
+      setCompareAtPriceDisplay('');
       setUnitOfMeasure('pcs');
       setTrackQuantity(true);
       setInitialStock(0);
       setLowStockThreshold(5);
       setHasVariants(false);
-      setDescription(draft?.description || '');
+      setDescription('');
       setIsActive(true);
       setMetadata({});
       setUploadedImages([]);
@@ -565,7 +514,6 @@ export function ProductForm({
       } else {
         await onSubmit(payload);
       }
-      clearDraft();
       triggerClose();
     } catch (err: any) {
       setError(err?.message || 'Failed to save product. Please check the fields and try again.');
@@ -613,11 +561,6 @@ export function ProductForm({
                   <h3 className="text-base font-bold text-white tracking-tight">
                     {editingProduct ? 'Edit Product' : 'Add New Product'}
                   </h3>
-                  {hasDraft && !editingProduct && (
-                    <Badge variant="outline" className="text-[10px] bg-amber-500/10 text-amber-300 border-amber-500/30">
-                      Draft Restored
-                    </Badge>
-                  )}
                 </div>
                 <p className="text-xs text-slate-400">
                   {editingProduct
@@ -1204,7 +1147,9 @@ export function ProductForm({
               className="bg-[#985184] hover:bg-[#985184]/90 text-white text-xs h-9 px-4 font-medium flex items-center gap-2 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isSubmitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-              {editingProduct ? 'Save Changes' : 'Create Product'}
+              {isSubmitting
+                ? (uploadedImages.some((img) => img.file) ? 'Saving & Uploading...' : 'Saving...')
+                : (editingProduct ? 'Save Changes' : 'Create Product')}
             </Button>
           </div>
         </aside>

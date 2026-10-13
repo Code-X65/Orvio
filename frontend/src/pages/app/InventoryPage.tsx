@@ -1,66 +1,38 @@
 import * as React from 'react';
 import { useAuthStore } from '../../stores/auth-store';
-import { getInventoryOnboardingStatus, type InventoryOnboardingStatusResponse } from '../../features/inventory/api';
+import { useInventoryOnboarding } from '../../features/inventory/hooks';
 import { InventorySetupWizard } from '../../features/inventory/components/InventorySetupWizard';
 import { InventoryWorkspacePage } from './InventoryWorkspacePage';
 import { BranchGatewayScreen } from '../../features/inventory/components/BranchGatewayScreen';
 import { AddBranchWizardModal } from '../../features/inventory/components/AddBranchWizardModal';
-import { Loader2, AlertCircle, RefreshCw, ArrowLeft } from 'lucide-react';
-import { Button } from '../../components/ui/button';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { Loader2, ArrowLeft } from 'lucide-react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { SeoHead } from '../../components/seo/SeoHead';
+import { ErrorState } from '../../components/ui/ErrorState';
 
 export function InventoryPage() {
-  const { user } = useAuthStore();
+  const { user, organization } = useAuthStore();
   const location = useLocation();
   const navigate = useNavigate();
-  const [loading, setLoading] = React.useState(true);
-  const [error, setError] = React.useState<string | null>(null);
-  const [statusData, setStatusData] = React.useState<InventoryOnboardingStatusResponse | null>(null);
   const [isAddBranchWizardOpen, setIsAddBranchWizardOpen] = React.useState(false);
 
-  const fetchStatus = React.useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await getInventoryOnboardingStatus();
-      setStatusData(data);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Failed to check inventory onboarding status';
-      setError(msg);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const {
+    data: statusData,
+    isLoading: loading,
+    error,
+    refetch: fetchStatus,
+  } = useInventoryOnboarding(organization?.id);
 
-  React.useEffect(() => {
-    fetchStatus();
-  }, [fetchStatus]);
-
-  if (loading) {
+  if (loading && !statusData) {
     return (
-      <div
-        className="min-h-screen bg-[#111215] text-slate-100 flex flex-col items-center justify-center p-4 relative overflow-hidden font-sans selection:bg-[#985184] selection:text-white"
-        style={{
-          backgroundImage: 'radial-gradient(circle, rgba(255, 255, 255, 0.07) 1px, transparent 1px)',
-          backgroundSize: '24px 24px',
-        }}
-      >
+      <div className="min-h-screen bg-[#111215] text-slate-100 flex flex-col items-center justify-center p-4">
         <SeoHead
-          title="Loading Inventory Workspace — Orvio"
-          description="Accessing organization stock, branches, and point of sale workspace."
+          title="Loading Inventory — Orvio"
+          description="Preparing inventory workspace."
         />
-        {/* Subtle Ambient Glow with #985184 */}
-        <div className="fixed top-1/3 left-1/2 -translate-x-1/2 w-[600px] h-[300px] bg-[#985184]/12 rounded-full blur-[140px] pointer-events-none -z-10" />
-
-        <div className="flex flex-col items-center gap-4 text-center z-10">
-          <div className="w-12 h-12 rounded-sm bg-[#fbb945]/10 text-[#985184] flex items-center justify-center shadow-sm">
-            <Loader2 className="w-6 h-6 animate-spin text-[#985184]" />
-          </div>
-          <div>
-            <h2 className="text-base font-bold text-white tracking-tight">Accessing Inventory Workspace</h2>
-            <p className="text-xs text-slate-400 mt-1">Verifying organization branch status & stock catalog...</p>
-          </div>
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 className="w-7 h-7 animate-spin text-[#985184]" />
+          <p className="text-xs text-slate-400 font-medium">Preparing workspace...</p>
         </div>
       </div>
     );
@@ -68,52 +40,24 @@ export function InventoryPage() {
 
   if (error || !statusData) {
     return (
-      <div
-        className="min-h-screen bg-[#111215] text-slate-100 flex flex-col items-center justify-center p-4 relative overflow-hidden font-sans selection:bg-[#985184] selection:text-white"
-        style={{
-          backgroundImage: 'radial-gradient(circle, rgba(255, 255, 255, 0.07) 1px, transparent 1px)',
-          backgroundSize: '24px 24px',
-        }}
-      >
+      <>
         <SeoHead
           title="Error Loading Inventory — Orvio"
           description="Trouble loading inventory onboarding details."
         />
-        {/* Subtle Ambient Glow with #985184 */}
-        <div className="fixed top-1/3 left-1/2 -translate-x-1/2 w-[600px] h-[300px] bg-[#985184]/12 rounded-full blur-[140px] pointer-events-none -z-10" />
-
-        <div className="max-w-md w-full bg-transparent text-center space-y-4 z-10 py-6">
-          <div className="w-10 h-10 rounded-sm bg-rose-500/10 text-rose-400 flex items-center justify-center mx-auto">
-            <AlertCircle className="w-5 h-5" />
-          </div>
-          <div>
-            <h2 className="text-base font-bold text-white tracking-tight">Unable to Load Inventory</h2>
-            <p className="text-xs text-slate-400 mt-1 leading-relaxed">
-              {error || 'An unexpected error occurred while loading your organization workspace.'}
-            </p>
-          </div>
-          <div className="flex items-center justify-center gap-3 pt-3">
-            <Link to="/dashboard">
-              <Button
-                variant="outline"
-                size="sm"
-                className="text-xs h-8 rounded-sm bg-transparent border border-white/10 text-slate-300 hover:text-white hover:bg-white/5 cursor-pointer"
-              >
-                <ArrowLeft className="w-3.5 h-3.5 mr-1.5" />
-                Return to Launchpad
-              </Button>
-            </Link>
-            <Button
-              onClick={fetchStatus}
-              size="sm"
-              className="bg-[#985184] hover:bg-[#854372] text-white text-xs h-8 rounded-sm font-semibold cursor-pointer shadow-sm"
-            >
-              <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
-              Retry
-            </Button>
-          </div>
-        </div>
-      </div>
+        <ErrorState
+          error={error}
+          title="Unable to Load Inventory"
+          onRetry={() => { fetchStatus(); }}
+          isRetrying={loading}
+          secondaryAction={{
+            label: 'Return to Launchpad',
+            href: '/dashboard',
+            icon: <ArrowLeft className="w-3.5 h-3.5 mr-1.5" />,
+          }}
+          variant="page"
+        />
+      </>
     );
   }
 
@@ -186,7 +130,7 @@ export function InventoryPage() {
         initialStepData={statusData.stepData}
         userEmail={user?.email}
         userPhone={user?.phone || undefined}
-        onCompleted={fetchStatus}
+        onCompleted={() => { fetchStatus(); }}
       />
     </>
   );

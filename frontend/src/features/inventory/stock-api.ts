@@ -4,6 +4,8 @@ export interface StockItem {
   id: string;
   productId: string;
   variantId: string | null;
+  variantName?: string | null;
+  variantAttributes?: Record<string, string> | null;
   productName: string;
   sku: string;
   barcode: string | null;
@@ -37,6 +39,8 @@ export interface StockMovement {
   branchId: string;
   branchName: string;
   productId: string;
+  variantId?: string | null;
+  variantName?: string | null;
   productName: string;
   productSku: string;
   productImageUrl: string | null;

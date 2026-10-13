@@ -130,14 +130,6 @@ export const magicLoginSchema = z
 
 export type MagicLoginInput = z.infer<typeof magicLoginSchema>;
 
-export const refreshSchema = z
-  .object({
-    refreshToken: z.string().trim().optional(),
-  })
-  .strict();
-
-export type RefreshInput = z.infer<typeof refreshSchema>;
-
 export const checkEmailSchema = z
   .object({
     email: z.string().trim().toLowerCase().email('Please enter a valid email address'),
@@ -267,4 +259,12 @@ export const auditLogQuerySchema = z
   .strict();
 
 export type AuditLogQueryInput = z.infer<typeof auditLogQuerySchema>;
+
+export const handoffTicketExchangeSchema = z
+  .object({
+    ticket: z.string().trim().min(16, 'Ticket must be at least 16 characters').max(128, 'Ticket must not exceed 128 characters'),
+  })
+  .strict();
+
+export type HandoffTicketExchangeInput = z.infer<typeof handoffTicketExchangeSchema>;
 

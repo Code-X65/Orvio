@@ -47,7 +47,7 @@ describe('Refresh Token Theft & Reuse Detection (Integration)', () => {
     const refresh1Res = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/auth/refresh',
-      payload: { refreshToken: tokenA },
+      cookies: { refreshToken: tokenA },
     });
     expect(refresh1Res.statusCode).toBe(200);
 
@@ -59,7 +59,7 @@ describe('Refresh Token Theft & Reuse Detection (Integration)', () => {
     const reuseAttemptRes = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/auth/refresh',
-      payload: { refreshToken: tokenA },
+      cookies: { refreshToken: tokenA },
     });
     expect(reuseAttemptRes.statusCode).toBe(401);
     expect(reuseAttemptRes.json().error.code).toBe('INVALID_REFRESH_TOKEN');
@@ -68,7 +68,7 @@ describe('Refresh Token Theft & Reuse Detection (Integration)', () => {
     const victimAttemptRes = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/auth/refresh',
-      payload: { refreshToken: tokenB },
+      cookies: { refreshToken: tokenB },
     });
     expect(victimAttemptRes.statusCode).toBe(401);
   }, 35000);

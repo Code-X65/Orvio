@@ -4,7 +4,6 @@ import { Button } from '../../../components/ui/button';
 import { Input } from '../../../components/ui/input';
 import { Badge } from '../../../components/ui/badge';
 import { Textarea } from '../../../components/ui/textarea';
-import { useFormDraft } from '../../../hooks/useFormDraft';
 import type { Category, CategoryTreeNode } from '../categories-api';
 
 export interface CategoryFormData {
@@ -58,27 +57,12 @@ export function CategoryForm({
   const [mounted, setMounted] = React.useState(isOpen);
   const [animating, setAnimating] = React.useState(false);
 
-  const draftKey = editingCategory?.id ? `category_${editingCategory.id}` : 'category_new';
-  const { draft, saveDraft, clearDraft, hasDraft } = useFormDraft<{
-    name?: string;
-    description?: string;
-    parentId?: string | null;
-    isActive?: boolean;
-  }>(draftKey, {});
-
   const [name, setName] = React.useState('');
   const [description, setDescription] = React.useState('');
   const [parentId, setParentId] = React.useState<string | null>(null);
   const [isActive, setIsActive] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
-
-  // Auto-save draft when not editing existing category
-  React.useEffect(() => {
-    if (!editingCategory && (name || description || parentId)) {
-      saveDraft({ name, description, parentId, isActive });
-    }
-  }, [editingCategory, name, description, parentId, isActive, saveDraft]);
 
   const [imageFile, setImageFile] = React.useState<File | null>(null);
   const [imagePreviewUrl, setImagePreviewUrl] = React.useState<string | null>(null);
@@ -111,10 +95,10 @@ export function CategoryForm({
       setIsActive(editingCategory.is_active);
       setImagePreviewUrl(editingCategory.image_url || null);
     } else {
-      setName(draft?.name || '');
-      setDescription(draft?.description || '');
-      setParentId(draft?.parentId ?? defaultParentId ?? null);
-      setIsActive(draft?.isActive ?? true);
+      setName('');
+      setDescription('');
+      setParentId(defaultParentId ?? null);
+      setIsActive(true);
       setImagePreviewUrl(null);
     }
     setImageFile(null);
@@ -201,7 +185,6 @@ export function CategoryForm({
       } else {
         await onSubmit(payload);
       }
-      clearDraft();
       triggerClose();
     } catch (err: any) {
       setError(err?.message || 'Failed to save category. Please check details and try again.');
@@ -238,11 +221,6 @@ export function CategoryForm({
                 <h3 className="text-base font-bold text-white tracking-tight">
                   {editingCategory ? 'Edit Category' : 'Create Category'}
                 </h3>
-                {hasDraft && !editingCategory && (
-                  <Badge variant="outline" className="text-[10px] bg-amber-500/10 text-amber-300 border-amber-500/30">
-                    Draft Restored
-                  </Badge>
-                )}
               </div>
               <p className="text-xs text-slate-400">
                 {editingCategory

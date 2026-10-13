@@ -472,7 +472,14 @@ export function StockManagementPage({
                           )}
                         </div>
                         <div>
-                          <div className="font-semibold text-slate-200">{m.productName}</div>
+                          <div className="font-semibold text-slate-200 flex items-center gap-1.5">
+                            <span>{m.productName}</span>
+                            {m.variantName && (
+                              <span className="text-[10px] font-normal px-1 py-0.2 bg-[#985184]/20 text-[#fbb945] rounded border border-[#985184]/30">
+                                {m.variantName}
+                              </span>
+                            )}
+                          </div>
                           <div className="text-[10px] text-slate-400 flex items-center gap-2">
                             <span>{m.branchName}</span>
                             <span>•</span>
@@ -573,7 +580,14 @@ export function StockManagementPage({
                     items.map((item) => (
                       <tr key={item.id} className="hover:bg-[#1a1b22] transition-colors">
                         <td className="py-3 px-4">
-                          <div className="font-semibold text-slate-200">{item.productName}</div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold text-slate-200">{item.productName}</span>
+                            {item.variantId && (
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-[#985184]/20 border border-[#985184]/40 text-[#fbb945]">
+                                {item.variantName || (item.variantAttributes ? Object.entries(item.variantAttributes).map(([k, v]) => `${k}: ${v}`).join(', ') : 'Variant')}
+                              </span>
+                            )}
+                          </div>
                           <div className="text-[10px] text-slate-400 font-mono">
                             SKU: {item.sku} {item.categoryName ? `• ${item.categoryName}` : ''}
                           </div>
@@ -742,7 +756,14 @@ export function StockManagementPage({
                           })}
                         </td>
                         <td className="py-3 px-4">
-                          <div className="font-semibold text-slate-200">{m.productName}</div>
+                          <div className="font-semibold text-slate-200 flex items-center gap-1.5">
+                            <span>{m.productName}</span>
+                            {m.variantName && (
+                              <span className="text-[10px] font-normal px-1 py-0.2 bg-[#985184]/20 text-[#fbb945] rounded border border-[#985184]/30">
+                                {m.variantName}
+                              </span>
+                            )}
+                          </div>
                           <div className="text-[10px] text-slate-400 font-mono">SKU: {m.productSku}</div>
                         </td>
                         <td className="py-3 px-4 text-slate-300">{m.branchName}</td>
@@ -834,6 +855,7 @@ export function StockManagementPage({
         onClose={handleCloseModals}
         selectedItem={effectiveSelectedItem}
         initialProductId={actionProductId || selectedStockItem?.productId}
+        initialVariantId={effectiveSelectedItem?.variantId || undefined}
         stockItems={items}
         branchId={effectiveBranchId}
         branches={branches}
@@ -845,6 +867,7 @@ export function StockManagementPage({
         onClose={handleCloseModals}
         selectedItem={effectiveSelectedItem}
         initialProductId={actionProductId || selectedStockItem?.productId}
+        initialVariantId={effectiveSelectedItem?.variantId || undefined}
         stockItems={items}
         branchId={effectiveBranchId}
         branches={branches}
@@ -856,6 +879,7 @@ export function StockManagementPage({
         onClose={handleCloseModals}
         selectedItem={effectiveSelectedItem}
         initialProductId={actionProductId || selectedStockItem?.productId}
+        initialVariantId={effectiveSelectedItem?.variantId || undefined}
         stockItems={items}
         branchId={effectiveBranchId}
         branches={branches}
@@ -867,6 +891,7 @@ export function StockManagementPage({
         onClose={handleCloseModals}
         selectedItem={effectiveSelectedItem}
         initialProductId={actionProductId || selectedStockItem?.productId}
+        initialVariantId={effectiveSelectedItem?.variantId || undefined}
         stockItems={items}
         branchId={effectiveBranchId}
         branches={branches}

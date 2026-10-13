@@ -15,6 +15,7 @@ import {
 import { Button } from '../../../components/ui/button';
 import { Input } from '../../../components/ui/input';
 import { Badge } from '../../../components/ui/badge';
+import { Skeleton } from '../../../components/ui/skeleton';
 import { toast } from 'sonner';
 import { useUrlActionState } from '../../../hooks/useUrlActionState';
 import {
@@ -92,6 +93,70 @@ function findCategoryInTree(nodes: CategoryTreeNode[], id: string): CategoryTree
     }
   }
   return null;
+}
+
+function CategoryTreeSkeleton() {
+  const skeletonRows = [
+    { level: 0, hasChildren: true, nameW: 'w-36', slugW: 'w-20', badgeW: 'w-16' },
+    { level: 1, hasChildren: false, nameW: 'w-28', slugW: 'w-16', badgeW: 'w-12' },
+    { level: 1, hasChildren: true, nameW: 'w-32', slugW: 'w-18', badgeW: 'w-14' },
+    { level: 2, hasChildren: false, nameW: 'w-24', slugW: 'w-14', badgeW: 'w-10' },
+    { level: 0, hasChildren: true, nameW: 'w-40', slugW: 'w-22', badgeW: 'w-16' },
+    { level: 1, hasChildren: false, nameW: 'w-24', slugW: 'w-14', badgeW: 'w-12' },
+    { level: 0, hasChildren: false, nameW: 'w-32', slugW: 'w-16', badgeW: 'w-12' },
+    { level: 0, hasChildren: true, nameW: 'w-28', slugW: 'w-18', badgeW: 'w-14' },
+  ];
+
+  return (
+    <div className="bg-[#14151a] p-4 rounded-sm border border-[#252830] space-y-1.5">
+      {skeletonRows.map((row, index) => (
+        <div
+          key={index}
+          className="flex items-center justify-between p-2.5 rounded-sm border border-[#20222a] bg-[#181a20]"
+          style={{ marginLeft: `${row.level * 20}px` }}
+        >
+          {/* Left Column: Chevron, Icon, Title & Details */}
+          <div className="flex items-center gap-2.5 min-w-0 pr-3">
+            <Skeleton className="w-5 h-5 rounded-sm shrink-0" />
+            <Skeleton className="w-7 h-7 rounded-sm shrink-0" />
+            <div className="flex items-center gap-2">
+              <Skeleton className={`h-3.5 ${row.nameW}`} />
+              <Skeleton className={`h-3 ${row.slugW}`} />
+              {row.hasChildren && <Skeleton className={`h-4 ${row.badgeW} rounded-sm`} />}
+              <Skeleton className="h-4 w-16 rounded-sm" />
+            </div>
+          </div>
+
+          {/* Right Column: Actions */}
+          <div className="flex items-center gap-1 shrink-0">
+            <Skeleton className="w-6 h-6 rounded-sm" />
+            <Skeleton className="w-6 h-6 rounded-sm" />
+            <Skeleton className="w-6 h-6 rounded-sm" />
+            <Skeleton className="w-6 h-6 rounded-sm" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function CategoryUsageSkeleton() {
+  return (
+    <div className="py-4 space-y-3">
+      <div className="bg-[#141519] border border-[#2d3139] rounded-lg p-3.5 space-y-2.5">
+        <div className="flex items-center gap-2">
+          <Skeleton className="w-4 h-4 rounded-full" />
+          <Skeleton className="h-4 w-48" />
+        </div>
+        <Skeleton className="h-3 w-full" />
+        <Skeleton className="h-3 w-3/4" />
+      </div>
+      <div className="flex justify-end gap-2 pt-2">
+        <Skeleton className="h-8 w-20 rounded-md" />
+        <Skeleton className="h-8 w-24 rounded-md" />
+      </div>
+    </div>
+  );
 }
 
 export function CategoriesPage({ organization, onNavigateToProducts, branchId }: CategoriesPageProps) {
@@ -226,7 +291,6 @@ export function CategoriesPage({ organization, onNavigateToProducts, branchId }:
         isActive: data.isActive,
       });
       catId = editingCategory.id;
-      toast.success(`Category "${data.name}" updated successfully.`);
     } else {
       const res = await categoryApi.createCategory({
         name: data.name,
@@ -236,7 +300,6 @@ export function CategoriesPage({ organization, onNavigateToProducts, branchId }:
         branchId,
       });
       catId = res.category.id;
-      toast.success(`Category "${data.name}" created successfully.`);
     }
 
     if (imageFile) {
@@ -253,7 +316,13 @@ export function CategoriesPage({ organization, onNavigateToProducts, branchId }:
       }
     }
 
-    await fetchCategories();
+    toast.success(
+      editingCategory
+        ? `Category "${data.name}" updated successfully.`
+        : `Category "${data.name}" created successfully.`
+    );
+
+    fetchCategories();
     closeAction();
   };
 
@@ -546,10 +615,7 @@ export function CategoriesPage({ organization, onNavigateToProducts, branchId }:
 
       {/* Content Area */}
       {loading && categories.length === 0 ? (
-        <div className="py-16 text-center text-slate-400 bg-[#181a20] rounded-sm border border-[#252830]">
-          <Loader2 className="w-8 h-8 animate-spin mx-auto text-[#fbb945] mb-3" />
-          <p className="text-xs">Loading categories hierarchy...</p>
-        </div>
+        <CategoryTreeSkeleton />
       ) : categories.length === 0 ? (
         /* Empty State */
         <div className="p-8 text-center bg-[#181a20] rounded-sm border border-[#252830] space-y-4 max-w-lg mx-auto mt-6">
@@ -605,7 +671,7 @@ export function CategoriesPage({ organization, onNavigateToProducts, branchId }:
         </div>
       ) : (
         /* Category Hierarchy Tree */
-        <div className="bg-[#14151a] p-4 rounded-sm border border-[#252830]">
+        <div className={`bg-[#14151a] p-4 rounded-sm border border-[#252830] transition-opacity ${loading ? 'opacity-65 pointer-events-none' : ''}`}>
           <CategoryTree
             nodes={filteredNodes}
             onEdit={handleOpenEdit}
@@ -650,10 +716,7 @@ export function CategoriesPage({ organization, onNavigateToProducts, branchId }:
             </div>
 
             {usageLoading ? (
-              <div className="py-8 flex flex-col items-center justify-center text-slate-400 gap-2">
-                <Loader2 className="w-5 h-5 animate-spin text-[#985184]" />
-                <p className="text-xs">Checking assigned products and subcategories...</p>
-              </div>
+              <CategoryUsageSkeleton />
             ) : categoryUsage?.childCount && categoryUsage.childCount > 0 ? (
               <div className="space-y-3">
                 <div className="bg-rose-500/10 border border-rose-500/25 rounded-lg p-3.5 text-xs text-rose-300">

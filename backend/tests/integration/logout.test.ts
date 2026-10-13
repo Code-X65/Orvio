@@ -90,7 +90,7 @@ describe('POST /api/v1/auth/logout (Session Revocation)', () => {
     const refreshAttempt = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/auth/refresh',
-      payload: { refreshToken: rawRefreshToken },
+      cookies: { refreshToken: rawRefreshToken },
     });
     expect(refreshAttempt.statusCode).toBe(401);
   }, 35000);

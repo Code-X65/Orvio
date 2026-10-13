@@ -24,6 +24,9 @@ export interface ProductVariant {
   attributes: Record<string, string>;
   images?: ProductImage[];
   is_active: boolean;
+  total_stock?: number;
+  available_stock?: number;
+  low_stock_threshold?: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -169,6 +172,7 @@ export interface CreateVariantPayload {
   isActive?: boolean;
   initialStock?: number;
   branchId?: string;
+  lowStockThreshold?: number | null;
   priceChangeReason?: string;
 }
 
@@ -252,6 +256,7 @@ export interface UpdateVariantPayload {
   compareAtPrice?: number | null;
   attributes?: Record<string, string>;
   isActive?: boolean;
+  lowStockThreshold?: number | null;
   priceChangeReason?: string;
 }
 
