@@ -40,7 +40,7 @@ export interface BranchGatewayScreenProps {
     total_on_hand?: number;
   }>;
   onSelectBranch: (branchId: string) => void;
-  onOpenAddBranch: () => void;
+  onOpenAddBranch?: () => void;
 }
 
 function getBranchIcon(type: string) {
@@ -111,14 +111,16 @@ export function BranchGatewayScreen({
           </div>
         </div>
 
-        <Button
-          onClick={onOpenAddBranch}
-          size="sm"
-          className="bg-[#985184] hover:bg-[#854372] text-white text-xs h-8 rounded-sm font-semibold cursor-pointer shadow-md shadow-[#985184]/20"
-        >
-          <Plus className="w-3.5 h-3.5 mr-1.5" />
-          Add Branch
-        </Button>
+        {onOpenAddBranch && (
+          <Button
+            onClick={onOpenAddBranch}
+            size="sm"
+            className="bg-[#985184] hover:bg-[#854372] text-white text-xs h-8 rounded-sm font-semibold cursor-pointer shadow-md shadow-[#985184]/20"
+          >
+            <Plus className="w-3.5 h-3.5 mr-1.5" />
+            Add Branch
+          </Button>
+        )}
       </header>
 
       {/* Main Content Area */}
@@ -268,27 +270,29 @@ export function BranchGatewayScreen({
           </div>
 
           {/* Quick Create Card */}
-          <div
-            onClick={onOpenAddBranch}
-            role="button"
-            tabIndex={0}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                onOpenAddBranch();
-              }
-            }}
-            className="group flex flex-col items-center justify-center p-6 rounded-xl border border-dashed border-white/20 bg-white/[0.01] hover:bg-[#985184]/5 hover:border-[#985184]/40 transition-all cursor-pointer text-center min-h-[160px]"
-          >
-            <div className="w-10 h-10 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-slate-400 group-hover:text-[#fbb945] group-hover:border-[#985184]/40 transition-colors mb-2">
-              <Plus className="w-5 h-5" />
+          {onOpenAddBranch && (
+            <div
+              onClick={onOpenAddBranch}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  onOpenAddBranch();
+                }
+              }}
+              className="group flex flex-col items-center justify-center p-6 rounded-xl border border-dashed border-white/20 bg-white/[0.01] hover:bg-[#985184]/5 hover:border-[#985184]/40 transition-all cursor-pointer text-center min-h-[160px]"
+            >
+              <div className="w-10 h-10 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-slate-400 group-hover:text-[#fbb945] group-hover:border-[#985184]/40 transition-colors mb-2">
+                <Plus className="w-5 h-5" />
+              </div>
+              <span className="text-xs font-bold text-white group-hover:text-[#fbb945] transition-colors">
+                Add New Branch Location
+              </span>
+              <span className="text-[11px] text-slate-400 mt-0.5">
+                Set up store, warehouse, studio or clone catalog
+              </span>
             </div>
-            <span className="text-xs font-bold text-white group-hover:text-[#fbb945] transition-colors">
-              Add New Branch Location
-            </span>
-            <span className="text-[11px] text-slate-400 mt-0.5">
-              Set up store, warehouse, studio or clone catalog
-            </span>
-          </div>
+          )}
         </div>
       </main>
     </div>

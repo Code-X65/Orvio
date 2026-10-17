@@ -22,6 +22,7 @@ import { orgRoutes } from './modules/organizations/org.routes.js';
 import { onboardingRoutes } from './modules/onboarding/onboarding.routes.js';
 import { inventoryRoutes } from './modules/inventory/routes.js';
 import { supplierRoutes } from './modules/inventory/suppliers-routes.js';
+import { staffProtectedRoutes, publicInvitationRoutes } from './modules/organizations/staff.routes.js';
 import { websocketPlugin } from './infrastructure/websocket/websocket-plugin.js';
 
 export interface AppDeps {
@@ -223,6 +224,8 @@ export function buildApp(deps?: AppDeps): FastifyInstance {
   app.register(onboardingRoutes, { prefix: '/api/v1/onboarding' });
   app.register(inventoryRoutes, { prefix: '/api/v1/inventory' });
   app.register(supplierRoutes, { prefix: '/api/v1/suppliers' });
+  app.register(staffProtectedRoutes, { prefix: '/api/v1/organizations/:orgId/staff' });
+  app.register(publicInvitationRoutes, { prefix: '/api/v1/invitations' });
 
   // Real-Time WebSocket Events
   app.register(websocketPlugin, { prefix: '/api/v1' });

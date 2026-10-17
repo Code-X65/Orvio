@@ -49,12 +49,18 @@ function TenantDashboardInner() {
   const {
     user,
     organization,
+    membership,
     installedProducts,
     isEmailUnverified,
     installApp,
     uninstallApp,
     setPrimaryApp,
   } = useWorkspace();
+
+  const userRole = membership?.org_role || membership?.role || 'owner';
+  const isOwner = userRole === 'owner';
+  const isManager = userRole === 'manager';
+  const isAdministrative = isOwner || isManager;
 
   const currentSubdomain = getSubdomainFromHostname() || organization?.subdomain || 'demo';
   const navigate = useNavigate();
@@ -154,8 +160,20 @@ function TenantDashboardInner() {
     );
   };
 
-  // 1. Only show the active applications the organization is registered for (no background)
-  const registeredAppTiles: LaunchpadAppTile[] = installedProducts.map((p) => {
+  // Determine which apps are accessible to the user
+  const rawAppAccess = membership?.app_access;
+  const allowedAppKeys = !isAdministrative
+    ? (Array.isArray(rawAppAccess) && rawAppAccess.length > 0
+        ? rawAppAccess.map((k) => k.toLowerCase())
+        : ['inventory'])
+    : null;
+
+  const accessibleProducts = allowedAppKeys
+    ? installedProducts.filter((p) => allowedAppKeys.includes(p.product_key.toLowerCase()))
+    : installedProducts;
+
+  // 1. Only show the active applications the user has access to
+  const registeredAppTiles: LaunchpadAppTile[] = accessibleProducts.map((p) => {
     const catalogApp = getAppById(p.product_key);
     const appName = catalogApp?.name || p.product_key.charAt(0).toUpperCase() + p.product_key.slice(1);
     return {
@@ -174,7 +192,7 @@ function TenantDashboardInner() {
     };
   });
 
-  // 2. Employees Icon (no background color)
+  // 2. Employees Icon (no background color) - Administrative only
   const employeesTile: LaunchpadAppTile = {
     id: 'employees',
     name: 'Employees',
@@ -196,7 +214,7 @@ function TenantDashboardInner() {
     },
   };
 
-  // 3. Apps / Marketplace Icon (no background color)
+  // 3. Apps / Marketplace Icon (no background color) - Owner only
   const appsMarketplaceTile: LaunchpadAppTile = {
     id: 'apps',
     name: 'Apps',
@@ -216,7 +234,7 @@ function TenantDashboardInner() {
     },
   };
 
-  // 4. Organization Settings Icon (no background color)
+  // 4. Organization Settings Icon (no background color) - Administrative only
   const settingsTile: LaunchpadAppTile = {
     id: 'settings',
     name: 'Settings',
@@ -233,12 +251,12 @@ function TenantDashboardInner() {
     },
   };
 
-  // Combine only the required tiles: Active Registered Apps + Employees + Apps (Marketplace) + Settings
+  // Combine tiles: Staff only see their permitted apps; Owners/Managers see administrative tools
   const allTiles: LaunchpadAppTile[] = [
     ...registeredAppTiles,
-    employeesTile,
-    appsMarketplaceTile,
-    settingsTile,
+    ...(isAdministrative ? [employeesTile] : []),
+    ...(isOwner ? [appsMarketplaceTile] : []),
+    ...(isAdministrative ? [settingsTile] : []),
   ];
 
   return (
@@ -338,41 +356,47 @@ function TenantDashboardInner() {
                       </div>
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsProfileMenuOpen(false);
-                        setIsMarketplaceOpen(true);
-                      }}
-                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-slate-300 hover:text-white hover:bg-white/5 transition-colors cursor-pointer text-left"
-                    >
-                      <Grid className="h-3.5 w-3.5 text-indigo-400" />
-                      <span>App Marketplace</span>
-                    </button>
+                    {isOwner && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsProfileMenuOpen(false);
+                          setIsMarketplaceOpen(true);
+                        }}
+                        className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-slate-300 hover:text-white hover:bg-white/5 transition-colors cursor-pointer text-left"
+                      >
+                        <Grid className="h-3.5 w-3.5 text-indigo-400" />
+                        <span>App Marketplace</span>
+                      </button>
+                    )}
 
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsProfileMenuOpen(false);
-                        showRedirectPopup('Settings', 'Opening organization settings...');
-                      }}
-                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-slate-300 hover:text-white hover:bg-white/5 transition-colors cursor-pointer text-left"
-                    >
-                      <Settings className="h-3.5 w-3.5 text-amber-400" />
-                      <span>Organization Settings</span>
-                    </button>
+                    {isAdministrative && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsProfileMenuOpen(false);
+                            showRedirectPopup('Settings', 'Opening organization settings...');
+                          }}
+                          className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-slate-300 hover:text-white hover:bg-white/5 transition-colors cursor-pointer text-left"
+                        >
+                          <Settings className="h-3.5 w-3.5 text-amber-400" />
+                          <span>Organization Settings</span>
+                        </button>
 
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsProfileMenuOpen(false);
-                        showRedirectPopup('Employees', 'Opening staff & role management...');
-                      }}
-                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-slate-300 hover:text-white hover:bg-white/5 transition-colors cursor-pointer text-left"
-                    >
-                      <Users className="h-3.5 w-3.5 text-purple-400" />
-                      <span>Manage Employees</span>
-                    </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsProfileMenuOpen(false);
+                            showRedirectPopup('Employees', 'Opening staff & role management...');
+                          }}
+                          className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-slate-300 hover:text-white hover:bg-white/5 transition-colors cursor-pointer text-left"
+                        >
+                          <Users className="h-3.5 w-3.5 text-purple-400" />
+                          <span>Manage Employees</span>
+                        </button>
+                      </>
+                    )}
 
                     <div className="border-t border-white/5 my-1" />
 

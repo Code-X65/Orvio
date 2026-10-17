@@ -1,6 +1,12 @@
 import { ApiError } from './client';
 
-export type AuthErrorCode = 'TOKEN_EXPIRED' | 'REFRESH_EXPIRED' | 'NETWORK_ERROR' | 'UNAUTHORIZED';
+export type AuthErrorCode =
+  | 'TOKEN_EXPIRED'
+  | 'REFRESH_EXPIRED'
+  | 'NETWORK_ERROR'
+  | 'UNAUTHORIZED'
+  | 'ACCOUNT_SUSPENDED'
+  | 'MEMBERSHIP_DEACTIVATED';
 
 export class AuthError extends Error {
   readonly code: AuthErrorCode;

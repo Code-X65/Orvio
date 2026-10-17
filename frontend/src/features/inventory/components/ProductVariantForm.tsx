@@ -11,10 +11,13 @@ import {
   TrendingUp,
   AlertTriangle,
   Tag,
-  ShieldAlert,
   ArrowRight,
   ImageIcon,
+  SlidersHorizontal,
+  ShieldAlert,
 } from 'lucide-react';
+import { branchApi, type Branch } from '../branches-api';
+import { AdjustStockModal } from './AdjustStockModal';
 import { Button } from '../../../components/ui/button';
 import { Input } from '../../../components/ui/input';
 import {
@@ -68,6 +71,9 @@ export function ProductVariantForm({
   const [compareAtPrice, setCompareAtPrice] = React.useState<number | ''>('');
   const [compareAtPriceDisplay, setCompareAtPriceDisplay] = React.useState('');
   const [initialStock, setInitialStock] = React.useState<number | ''>(0);
+  const [selectedBranchId, setSelectedBranchId] = React.useState<string>('');
+  const [branches, setBranches] = React.useState<Branch[]>([]);
+  const [isAdjustModalOpen, setIsAdjustModalOpen] = React.useState(false);
   const [attributes, setAttributes] = React.useState<AttributeRow[]>([
     { key: 'Size', value: '' },
   ]);
@@ -102,8 +108,25 @@ export function ProductVariantForm({
     return () => clearTimeout(timer);
   }, [isOpen]);
 
-  // Sync state on open
-  React.useEffect(() => {
+    // Load branches on open
+    React.useEffect(() => {
+      if (isOpen) {
+        branchApi
+          .getBranches({ activeOnly: true })
+          .then((res) => {
+            const list = res.branches || [];
+            setBranches(list);
+            const primary = list.find((b) => b.is_primary) || list[0];
+            if (primary) {
+              setSelectedBranchId(primary.id);
+            }
+          })
+          .catch(() => {});
+      }
+    }, [isOpen]);
+
+    // Sync state on open
+    React.useEffect(() => {
     if (editingVariant) {
       setName(editingVariant.name || Object.values(editingVariant.attributes || {}).join(' / '));
       setSku(editingVariant.sku);
@@ -284,7 +307,8 @@ export function ProductVariantForm({
       costPrice: costPrice !== '' ? Number(costPrice) : undefined,
       sellingPrice: sellingPrice !== '' ? Number(sellingPrice) : undefined,
       compareAtPrice: compareAtPrice !== '' ? Number(compareAtPrice) : undefined,
-      initialStock: initialStock !== '' ? Number(initialStock) : 0,
+      initialStock: !editingVariant && initialStock !== '' ? Number(initialStock) : undefined,
+      branchId: !editingVariant ? (selectedBranchId || undefined) : undefined,
       isActive,
     };
 
@@ -597,7 +621,7 @@ export function ProductVariantForm({
             </div>
 
             {/* Stock Level */}
-            {!editingVariant && (
+            {!editingVariant ? (
               <div className="border-t border-[#2d3139]/80 pt-4 space-y-2">
                 <label className="block text-xs font-semibold text-slate-300">
                   Initial Stock Level
@@ -613,8 +637,63 @@ export function ProductVariantForm({
                   className="bg-[#121316] border-[#2d3139] text-white text-sm focus:border-[#985184]"
                 />
                 <span className="text-[10px] text-slate-500">
-                  Stock allocated for this variant at primary branch
+                  {branches.length > 1
+                    ? 'Target branch for opening stock allocation'
+                    : 'Stock allocated for this variant at primary branch'}
                 </span>
+                {branches.length > 1 && (
+                  <div className="mt-2.5">
+                    <label className="block text-[11px] font-medium text-slate-400 mb-1">
+                      Assign to Branch:
+                    </label>
+                    <select
+                      value={selectedBranchId}
+                      onChange={(e) => setSelectedBranchId(e.target.value)}
+                      className="w-full text-xs bg-[#121316] border border-[#2d3139] rounded px-2.5 py-1.5 text-white focus:outline-none focus:border-[#985184]"
+                    >
+                      {branches.map((b) => (
+                        <option key={b.id} value={b.id}>
+                          {b.name} {b.is_primary ? '(Primary)' : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="border-t border-[#2d3139]/80 pt-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300">
+                      Current Stock Level
+                    </label>
+                    <span className="text-[11px] text-slate-400">
+                      Direct stock editing is disabled to preserve audit integrity
+                    </span>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setIsAdjustModalOpen(true)}
+                    className="text-xs h-7 px-2.5 border-[#2d3139] hover:bg-[#202227] text-slate-200"
+                  >
+                    <SlidersHorizontal className="w-3.5 h-3.5 mr-1.5 text-[#985184]" />
+                    Adjust Stock
+                  </Button>
+                </div>
+                <div className="grid grid-cols-2 gap-3 p-3 bg-[#121316] border border-[#2d3139] rounded-lg">
+                  <div>
+                    <div className="text-[10px] text-slate-500 uppercase tracking-wider">Total On Hand</div>
+                    <div className="text-base font-bold text-white mt-0.5">{editingVariant.total_stock ?? 0}</div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] text-slate-500 uppercase tracking-wider">Available</div>
+                    <div className="text-base font-bold text-emerald-400 mt-0.5">
+                      {editingVariant.available_stock ?? editingVariant.total_stock ?? 0}
+                    </div>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -744,6 +823,21 @@ export function ProductVariantForm({
             </div>
           </div>
         </div>
+      )}
+
+      {/* Adjust Stock Modal from Variant Form */}
+      {editingVariant && isAdjustModalOpen && (
+        <AdjustStockModal
+          isOpen={isAdjustModalOpen}
+          onClose={() => setIsAdjustModalOpen(false)}
+          initialProductId={parentProduct?.id}
+          initialVariantId={editingVariant.id}
+          branches={branches.map((b) => ({ id: b.id, name: b.name }))}
+          branchId={selectedBranchId || undefined}
+          onSuccess={() => {
+            setIsAdjustModalOpen(false);
+          }}
+        />
       )}
     </>
   );

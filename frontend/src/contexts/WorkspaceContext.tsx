@@ -15,7 +15,14 @@ import { toast } from 'sonner';
 export interface WorkspaceContextValue {
   user: AuthUser | null;
   organization: AuthOrganization | null;
-  membership: { id: string; role: string; status: string } | null;
+  membership: {
+    id: string;
+    role: string;
+    org_role?: string;
+    scope_all_branches?: boolean;
+    app_access?: string[];
+    status: string;
+  } | null;
   branch: { id: string; name: string; type: string; status: string } | null;
   branches: Array<{ id: string; name: string; type: string; status: string }>;
   installedProducts: WorkspaceProductItem[];
@@ -161,12 +168,14 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
 
   const can = React.useCallback(
     (permission: string) => {
-      // Owner has full administrative permissions
-      const role = workspaceData?.membership?.role || 'owner';
+      const role = workspaceData?.membership?.org_role || workspaceData?.membership?.role || 'owner';
       if (role === 'owner' || role === 'admin') return true;
+      if (role === 'manager') {
+        return permission !== 'manage_billing' && permission !== 'install_apps';
+      }
       return false;
     },
-    [workspaceData?.membership?.role]
+    [workspaceData?.membership?.org_role, workspaceData?.membership?.role]
   );
 
   const installApp = async (productKey: string) => {

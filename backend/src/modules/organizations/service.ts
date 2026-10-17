@@ -157,9 +157,43 @@ export class OrgService {
             org_id: orgId,
             user_id: userId,
           },
+          include: {
+            branch_accesses: {
+              include: {
+                branch: true,
+              },
+            },
+          },
         });
 
-        const defaultBranch = org.branches.find((b) => b.type === 'store') ?? org.branches[0] ?? null;
+        const isElevatedRole = membership?.org_role === 'owner' || membership?.org_role === 'manager';
+        const hasUniversalBranchScope = isElevatedRole || Boolean(membership?.scope_all_branches);
+
+        // Branch filtering: only owners, managers, or members with scope_all_branches see all branches
+        let allowedBranches = org.branches;
+        let defaultBranch: Branch | null = null;
+
+        if (!hasUniversalBranchScope && membership) {
+          const grantedBranchIds = new Set(membership.branch_accesses.map((ba) => ba.branch_id));
+          allowedBranches = org.branches.filter((b) => grantedBranchIds.has(b.id));
+
+          const defaultBA = membership.branch_accesses.find((ba) => ba.is_default);
+          defaultBranch =
+            (defaultBA ? allowedBranches.find((b) => b.id === defaultBA.branch_id) : null) ??
+            allowedBranches[0] ??
+            null;
+        } else {
+          defaultBranch = org.branches.find((b) => b.type === 'store') ?? org.branches[0] ?? null;
+        }
+
+        // Product filtering: only owners and managers see all workspace apps
+        let allowedProducts = org.products;
+        if (!isElevatedRole && membership) {
+          const rawAppAccess = membership.app_access as string[] | null;
+          const permittedAppKeys = Array.isArray(rawAppAccess) && rawAppAccess.length > 0 ? rawAppAccess : ['inventory'];
+          allowedProducts = org.products.filter((p) => permittedAppKeys.includes(p.product_key));
+        }
+
         const orgUrl = this.computeOrgUrl(org.subdomain);
 
         return {
@@ -169,8 +203,8 @@ export class OrgService {
           },
           membership,
           branch: defaultBranch,
-          branches: org.branches,
-          products: org.products,
+          branches: allowedBranches,
+          products: allowedProducts,
         };
       },
       30_000 // 30s TTL

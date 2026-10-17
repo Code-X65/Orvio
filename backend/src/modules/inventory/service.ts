@@ -29,8 +29,24 @@ export interface InventoryOnboardingStatusResult {
 export class InventoryOnboardingService {
   constructor(private db: PrismaClient = defaultPrisma) {}
 
-  async getStatus(orgId: string): Promise<InventoryOnboardingStatusResult> {
-    const cacheKey = `inv_onb_status:${orgId}`;
+  async getStatus(
+    orgId: string,
+    userId?: string,
+    membership?: {
+      role: string;
+      org_role?: string | null;
+      scope_all_branches?: boolean | null;
+      branch_accesses?: Array<{ branch_id: string }>;
+    } | null
+  ): Promise<InventoryOnboardingStatusResult> {
+    const isElevated = membership?.role === 'owner' || membership?.org_role === 'manager';
+    const hasGlobalScope = isElevated || Boolean(membership?.scope_all_branches);
+    const allowedBranchIds = hasGlobalScope
+      ? null
+      : membership?.branch_accesses?.map((ba) => ba.branch_id) || [];
+
+    const cacheScope = hasGlobalScope ? 'global' : (allowedBranchIds?.slice().sort().join(',') || 'none');
+    const cacheKey = `inv_onb_status:${orgId}:${cacheScope}`;
 
     return await inventoryCache.fetchOrCompute(
       cacheKey,
@@ -54,19 +70,24 @@ export class InventoryOnboardingService {
           throw new AppError('ORGANIZATION_NOT_FOUND', 'Organization not found', 404);
         }
 
+        // Filter branches if caller is scoped to specific branches
+        const visibleBranches = allowedBranchIds
+          ? org.branches.filter((b) => allowedBranchIds.includes(b.id))
+          : org.branches;
+
         const onboarding = org.inventory_onboarding;
         const isCompleted = onboarding?.status === 'completed';
         const activeBranch =
+          visibleBranches.find((b) => b.is_primary) ??
+          visibleBranches[0] ??
           (onboarding?.branch && !onboarding.branch.is_deleted ? onboarding.branch : null) ??
-          org.branches.find((b) => b.is_primary) ??
-          org.branches[0] ??
           null;
 
         return {
           completed: isCompleted,
           status: isCompleted ? 'completed' : 'pending',
           branch: activeBranch,
-          branches: org.branches,
+          branches: visibleBranches,
           stepData: onboarding?.step_data ?? null,
           organization: {
             id: org.id,

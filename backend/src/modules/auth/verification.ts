@@ -99,6 +99,7 @@ export async function verifyAndConsumeToken(
           memberships: {
             include: {
               organization: true,
+              branch_accesses: true,
             },
           },
         },

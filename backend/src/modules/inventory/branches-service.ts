@@ -44,8 +44,13 @@ export class BranchService {
     }
   }
 
-  async listBranches(orgId: string, query?: ListBranchesQueryInput): Promise<BranchListItem[]> {
-    const cacheKey = `branches_list:${orgId}:${JSON.stringify(query || {})}`;
+  async listBranches(
+    orgId: string,
+    query?: ListBranchesQueryInput,
+    allowedBranchIds?: string[] | null
+  ): Promise<BranchListItem[]> {
+    const scopeTag = allowedBranchIds ? allowedBranchIds.slice().sort().join(',') : 'all';
+    const cacheKey = `branches_list:${orgId}:${scopeTag}:${JSON.stringify(query || {})}`;
 
     return await inventoryCache.fetchOrCompute(
       cacheKey,
@@ -53,6 +58,10 @@ export class BranchService {
         const whereClause: any = {
           org_id: orgId,
         };
+
+        if (allowedBranchIds !== undefined && allowedBranchIds !== null) {
+          whereClause.id = { in: allowedBranchIds };
+        }
 
         if (!query?.includeDeleted) {
           whereClause.is_deleted = false;

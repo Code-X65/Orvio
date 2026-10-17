@@ -337,6 +337,9 @@ export class AuthService {
       email: result.user.email,
       org_id: result.org.id,
       role: 'owner',
+      org_role: 'owner',
+      scope_all_branches: true,
+      branch_scope: [],
       membership_id: result.membership.id,
       session_id: familyId,
     });
@@ -428,7 +431,7 @@ export class AuthService {
         memberships: {
           where: { status: 'active' },
           orderBy: { created_at: 'asc' },
-          include: { organization: true },
+          include: { organization: true, branch_accesses: true },
         },
       },
     });
@@ -448,11 +451,16 @@ export class AuthService {
 
     // 5. Sign new tokens
     const familyId = generateOpaqueToken().rawToken;
+    const branchScope = primaryMembership?.branch_accesses?.map((ba) => ba.branch_id) || [];
+    const scopeAll = primaryMembership?.scope_all_branches ?? (primaryMembership?.role === 'owner');
     const accessToken = await signAccessToken({
       sub: updatedUser.id,
       email: updatedUser.email,
       org_id: primaryMembership?.org_id,
       role: primaryMembership?.role,
+      org_role: primaryMembership?.org_role ?? primaryMembership?.role,
+      scope_all_branches: scopeAll,
+      branch_scope: branchScope,
       membership_id: primaryMembership?.id,
       session_id: familyId,
     });
@@ -574,11 +582,16 @@ export class AuthService {
 
     // 3. Issue Session Tokens with family ID
     const familyId = generateOpaqueToken().rawToken;
+    const branchScope = primaryMembership?.branch_accesses?.map((ba) => ba.branch_id) || [];
+    const scopeAll = primaryMembership?.scope_all_branches ?? (primaryMembership?.role === 'owner');
     const accessToken = await signAccessToken({
       sub: tokenRecord.user.id,
       email: tokenRecord.user.email,
       org_id: orgId,
       role: primaryMembership?.role,
+      org_role: primaryMembership?.org_role ?? primaryMembership?.role,
+      scope_all_branches: scopeAll,
+      branch_scope: branchScope,
       membership_id: primaryMembership?.id,
       session_id: familyId,
     });
@@ -704,7 +717,7 @@ export class AuthService {
         memberships: {
           where: { status: 'active' },
           orderBy: { created_at: 'asc' },
-          include: { organization: true },
+          include: { organization: true, branch_accesses: true },
         },
       },
     });
@@ -782,11 +795,16 @@ export class AuthService {
     });
 
     const familyId = generateOpaqueToken().rawToken;
+    const branchScope = activeMembership?.branch_accesses?.map((ba) => ba.branch_id) || [];
+    const scopeAll = activeMembership?.scope_all_branches ?? (activeMembership?.role === 'owner');
     const accessToken = await signAccessToken({
       sub: user.id,
       email: user.email,
       org_id: activeMembership?.org_id,
       role: activeMembership?.role,
+      org_role: activeMembership?.org_role ?? activeMembership?.role,
+      scope_all_branches: scopeAll,
+      branch_scope: branchScope,
       membership_id: activeMembership?.id,
       session_id: familyId,
     });
@@ -905,7 +923,7 @@ export class AuthService {
             memberships: {
               where: { status: 'active' },
               orderBy: { created_at: 'asc' },
-              include: { organization: true },
+              include: { organization: true, branch_accesses: true },
             },
           },
         },
@@ -947,11 +965,16 @@ export class AuthService {
             primaryMembership.organization.status !== 'deleted'
           ) {
             const currentSessionId = activeSibling.session_id ?? activeSibling.family_id ?? generateOpaqueToken().rawToken;
+            const siblingBranchScope = primaryMembership.branch_accesses?.map((ba) => ba.branch_id) || [];
+            const siblingScopeAll = primaryMembership.scope_all_branches ?? (primaryMembership.role === 'owner');
             const accessToken = await signAccessToken({
               sub: user.id,
               email: user.email,
               org_id: primaryMembership.org_id,
               role: primaryMembership.role,
+              org_role: primaryMembership.org_role ?? primaryMembership.role,
+              scope_all_branches: siblingScopeAll,
+              branch_scope: siblingBranchScope,
               membership_id: primaryMembership.id,
               session_id: currentSessionId,
             });
@@ -1018,11 +1041,16 @@ export class AuthService {
     }
 
     const currentSessionId = tokenRecord.session_id ?? tokenRecord.family_id ?? generateOpaqueToken().rawToken;
+    const refreshBranchScope = primaryMembership?.branch_accesses?.map((ba) => ba.branch_id) || [];
+    const refreshScopeAll = primaryMembership?.scope_all_branches ?? (primaryMembership?.role === 'owner');
     const accessToken = await signAccessToken({
       sub: user.id,
       email: user.email,
       org_id: primaryMembership?.org_id,
       role: primaryMembership?.role,
+      org_role: primaryMembership?.org_role ?? primaryMembership?.role,
+      scope_all_branches: refreshScopeAll,
+      branch_scope: refreshBranchScope,
       membership_id: primaryMembership?.id,
       session_id: currentSessionId,
     });

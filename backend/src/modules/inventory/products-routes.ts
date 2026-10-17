@@ -105,11 +105,12 @@ export async function productRoutes(app: FastifyInstance) {
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const orgId = getOrgId(request);
+      const userId = request.auth?.user?.id ?? request.auth?.claims?.sub ?? null;
       const body = createProductSchema.parse(request.body);
       const db = (request.server as { prisma?: typeof defaultPrisma }).prisma ?? defaultPrisma;
       const service = new ProductService(db);
 
-      const product = await service.createProduct(orgId, body);
+      const product = await service.createProduct(orgId, body, userId);
       return sendData(reply, { product }, 201);
     }
   );
@@ -259,12 +260,13 @@ export async function productRoutes(app: FastifyInstance) {
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const orgId = getOrgId(request);
+      const userId = request.auth?.user?.id ?? request.auth?.claims?.sub ?? null;
       const { id } = z.object({ id: z.string().min(1) }).parse(request.params);
       const body = createVariantSchema.parse(request.body);
       const db = (request.server as { prisma?: typeof defaultPrisma }).prisma ?? defaultPrisma;
       const service = new ProductService(db);
 
-      const variant = await service.createVariant(orgId, id, body);
+      const variant = await service.createVariant(orgId, id, body, userId);
       return sendData(reply, { variant }, 201);
     }
   );

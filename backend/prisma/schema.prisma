@@ -28,6 +28,14 @@ enum membership_role {
   member
 }
 
+enum org_role {
+  owner
+  manager
+  storekeeper
+  cashier
+  accountant
+}
+
 enum membership_status {
   active
   invited
@@ -150,21 +158,43 @@ model Organization {
 }
 
 model Membership {
-  id          String            @id @default(cuid())
-  org_id      String
-  user_id     String
-  role        membership_role   @default(member)
-  status      membership_status @default(active)
-  invited_at  DateTime?
-  accepted_at DateTime?         @default(now())
-  created_at  DateTime          @default(now())
-  updated_at  DateTime          @updatedAt
+  id                 String                   @id @default(cuid())
+  org_id             String
+  user_id            String
+  role               membership_role          @default(member)
+  org_role           org_role                 @default(owner)
+  scope_all_branches Boolean                  @default(false)
+  app_access         Json?
+  status             membership_status        @default(active)
+  invited_at         DateTime?
+  accepted_at        DateTime?                @default(now())
+  created_at         DateTime                 @default(now())
+  updated_at         DateTime                 @updatedAt
 
-  organization Organization @relation(fields: [org_id], references: [id], onDelete: Cascade)
-  user         User         @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  organization       Organization             @relation(fields: [org_id], references: [id], onDelete: Cascade)
+  user               User                     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  branch_accesses    MembershipBranchAccess[]
 
   @@unique([org_id, user_id])
+  @@index([org_id, scope_all_branches])
   @@map("user_memberships")
+}
+
+model MembershipBranchAccess {
+  id            String     @id @default(cuid())
+  membership_id String
+  branch_id     String
+  is_default    Boolean    @default(false)
+  granted_at    DateTime   @default(now())
+  created_at    DateTime   @default(now())
+  updated_at    DateTime   @updatedAt
+
+  membership    Membership @relation(fields: [membership_id], references: [id], onDelete: Cascade)
+  branch        Branch     @relation(fields: [branch_id], references: [id], onDelete: Cascade)
+
+  @@unique([membership_id, branch_id])
+  @@index([branch_id])
+  @@map("membership_branch_accesses")
 }
 
 model Branch {
@@ -197,6 +227,8 @@ model Branch {
   categories            Category[]            @relation("BranchCategories")
   brands                Brand[]               @relation("BranchBrands")
   stock_receipts        StockReceipt[]
+  branch_accesses       MembershipBranchAccess[]
+  audit_logs            AuditLog[]
 
   @@index([org_id])
   @@index([org_id, is_deleted])
@@ -224,7 +256,10 @@ model WorkspaceInvitation {
   org_id        String
   email         String
   role          membership_role @default(member)
+  org_role      org_role?
+  default_branch_id String?
   product_roles Json?
+  app_keys      Json?
   branch_ids    Json?
   token_hash    String          @unique
   status        String          @default("pending")
@@ -339,6 +374,7 @@ model AuditLog {
   id         String   @id @default(cuid())
   user_id    String?
   org_id     String?
+  branch_id  String?
   event      String
   status     String   @default("success") // success | failed
   ip_address String?
@@ -348,9 +384,11 @@ model AuditLog {
 
   user         User?         @relation(fields: [user_id], references: [id], onDelete: Cascade)
   organization Organization? @relation(fields: [org_id], references: [id], onDelete: Cascade)
+  branch       Branch?       @relation(fields: [branch_id], references: [id], onDelete: SetNull)
 
   @@index([user_id])
   @@index([org_id])
+  @@index([branch_id])
   @@index([event])
   @@index([created_at])
   @@map("audit_logs")

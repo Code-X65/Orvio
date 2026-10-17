@@ -1,1085 +1,684 @@
 import * as React from 'react';
-import { useNavigate, Link } from 'react-router-dom';
-import {
-  Package,
-  Dumbbell,
-  ShoppingBag,
-  Store,
-  CreditCard,
-  Receipt,
-  Users,
-  Calendar,
-  Layers,
-  Sparkles,
-  Check,
-  ArrowRight,
-  ArrowLeft,
-  ShieldCheck,
-  Loader2,
-  CheckCircle2,
-  Globe,
-  MessageSquare,
-  Building2,
-  Zap,
-  TrendingUp,
-  FileText,
-  DollarSign,
-  PieChart,
-  Briefcase,
-  User,
-  Phone,
-  Mail,
-  Lock,
-  RotateCcw,
-  AlertCircle,
-} from 'lucide-react';
+import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { SeoHead } from '../../components/seo/SeoHead';
-import { Button } from '../../components/ui/button';
-import { Card } from '../../components/ui/card';
-import { Badge } from '../../components/ui/badge';
-import { startFreeTrial, checkSubdomainAvailability, checkEmailAvailability } from '../../features/trial/api';
-import { useAuthStore } from '../../stores/auth-store';
-import { toast } from 'sonner';
+import { DarkMarketingNavbar } from '../../components/marketing/DarkMarketingNavbar';
 
-export interface AppItem {
+interface AppDefinition {
   id: string;
   name: string;
-  category: 'Operations' | 'Sales' | 'Finance' | 'Productivity';
-  icon: React.ComponentType<{ className?: string }>;
+  color: string;
   iconBg: string;
   iconColor: string;
-  backendKey: 'inventory' | 'gym';
-  description: string;
+  icon: React.ReactNode;
 }
 
-const APPS_LIST: AppItem[] = [
-  // Operations
-  {
-    id: 'inventory',
-    name: 'Inventory',
-    category: 'Operations',
-    icon: Package,
-    iconBg: 'bg-amber-500/10 border-amber-500/20',
-    iconColor: 'text-amber-500',
-    backendKey: 'inventory',
-    description: 'Stock tracking, barcode scans & multi-branch',
-  },
-  {
-    id: 'pos',
-    name: 'Point of Sale',
-    category: 'Operations',
-    icon: Store,
-    iconBg: 'bg-rose-500/10 border-rose-500/20',
-    iconColor: 'text-rose-500',
-    backendKey: 'inventory',
-    description: 'Fast retail checkout & thermal printer',
-  },
-  {
-    id: 'gym',
-    name: 'Gym Management',
-    category: 'Operations',
-    icon: Dumbbell,
-    iconBg: 'bg-emerald-500/10 border-emerald-500/20',
-    iconColor: 'text-emerald-500',
-    backendKey: 'gym',
-    description: 'Memberships, biometric gates & classes',
-  },
-  {
-    id: 'ecommerce',
-    name: 'eCommerce Store',
-    category: 'Operations',
-    icon: ShoppingBag,
-    iconBg: 'bg-purple-500/10 border-purple-500/20',
-    iconColor: 'text-purple-500',
-    backendKey: 'inventory',
-    description: 'Online store & WhatsApp orders',
-  },
+interface AppSection {
+  id: string;
+  title: string;
+  apps: AppDefinition[];
+}
 
-  // Sales
+const APP_SECTIONS: AppSection[] = [
   {
-    id: 'crm',
-    name: 'CRM',
-    category: 'Sales',
-    icon: Users,
-    iconBg: 'bg-teal-500/10 border-teal-500/20',
-    iconColor: 'text-teal-500',
-    backendKey: 'inventory',
-    description: 'Leads, deals & customer tracking',
+    id: 'website',
+    title: 'Website',
+    apps: [
+      {
+        id: 'website',
+        name: 'Website',
+        color: 'cyan',
+        iconBg: 'bg-cyan-500/10',
+        iconColor: 'text-cyan-400',
+        icon: (
+          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24">
+            <path d="M12 2a10 10 0 100 20 10 10 0 000-20z" stroke="currentColor" strokeWidth="2" />
+            <path d="M2.5 9h19M2.5 15h19" stroke="currentColor" strokeWidth="1.8" />
+            <ellipse cx="12" cy="12" rx="4" ry="10" stroke="currentColor" strokeWidth="1.8" />
+          </svg>
+        ),
+      },
+      {
+        id: 'ecommerce',
+        name: 'eCommerce',
+        color: 'fuchsia',
+        iconBg: 'bg-fuchsia-500/15',
+        iconColor: 'text-fuchsia-400',
+        icon: (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+            <path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z" />
+            <line x1="3" x2="21" y1="6" y2="6" />
+            <path d="M16 10a4 4 0 01-8 0" />
+          </svg>
+        ),
+      },
+      {
+        id: 'blog',
+        name: 'Blog',
+        color: 'sky',
+        iconBg: 'bg-sky-500/10',
+        iconColor: 'text-sky-400',
+        icon: (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+            <path d="M12 19l7-7 3 3-7 7-3-3z" />
+            <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z" />
+            <path d="M2 2l7.586 7.586" />
+            <circle cx="11" cy="11" r="2" />
+          </svg>
+        ),
+      },
+      {
+        id: 'forum',
+        name: 'Forum',
+        color: 'rose',
+        iconBg: 'bg-rose-500/10',
+        iconColor: 'text-rose-400',
+        icon: (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+            <path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z" />
+          </svg>
+        ),
+      },
+      {
+        id: 'elearning',
+        name: 'eLearning',
+        color: 'teal',
+        iconBg: 'bg-teal-500/10',
+        iconColor: 'text-teal-400',
+        icon: (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+            <path d="M22 10v6M2 10l10-5 10 5-10 5z" />
+            <path d="M6 12v5c3 3 9 3 12 0v-5" />
+          </svg>
+        ),
+      },
+      {
+        id: 'events',
+        name: 'Events',
+        color: 'emerald',
+        iconBg: 'bg-emerald-500/10',
+        iconColor: 'text-emerald-400',
+        icon: (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+            <rect height="18" rx="2" ry="2" width="18" x="3" y="4" />
+            <line x1="16" x2="16" y1="2" y2="6" />
+            <line x1="8" x2="8" y1="2" y2="6" />
+            <line x1="3" x2="21" y1="10" y2="10" />
+            <path d="M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01" />
+          </svg>
+        ),
+      },
+    ],
   },
   {
     id: 'sales',
-    name: 'Sales & Quotes',
-    category: 'Sales',
-    icon: TrendingUp,
-    iconBg: 'bg-indigo-500/10 border-indigo-500/20',
-    iconColor: 'text-indigo-500',
-    backendKey: 'inventory',
-    description: 'Quotations, proforma & sales orders',
+    title: 'Sales',
+    apps: [
+      {
+        id: 'crm',
+        name: 'CRM',
+        color: 'teal',
+        iconBg: 'bg-teal-500/10',
+        iconColor: 'text-teal-400',
+        icon: (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+            <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2" />
+            <circle cx="9" cy="7" r="4" />
+            <path d="M23 21v-2a4 4 0 00-3-3.87" />
+            <path d="M16 3.13a4 4 0 010 7.75" />
+          </svg>
+        ),
+      },
+      {
+        id: 'pos',
+        name: 'Point of Sale',
+        color: 'amber',
+        iconBg: 'bg-amber-500/15',
+        iconColor: 'text-amber-400',
+        icon: (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+            <rect x="2" y="4" width="20" height="16" rx="2" />
+            <path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M6 16h12" />
+          </svg>
+        ),
+      },
+      {
+        id: 'sales',
+        name: 'Sales',
+        color: 'indigo',
+        iconBg: 'bg-indigo-500/10',
+        iconColor: 'text-indigo-400',
+        icon: (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+            <line x1="12" y1="1" x2="12" y2="23" />
+            <path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6" />
+          </svg>
+        ),
+      },
+      {
+        id: 'subscriptions',
+        name: 'Subscriptions',
+        color: 'purple',
+        iconBg: 'bg-purple-500/10',
+        iconColor: 'text-purple-400',
+        icon: (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+            <path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+        ),
+      },
+      {
+        id: 'invoicing',
+        name: 'Invoicing',
+        color: 'sky',
+        iconBg: 'bg-sky-500/10',
+        iconColor: 'text-sky-400',
+        icon: (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+            <polyline points="14 2 14 8 20 8" />
+            <line x1="16" y1="13" x2="8" y2="13" />
+            <line x1="16" y1="17" x2="8" y2="17" />
+          </svg>
+        ),
+      },
+      {
+        id: 'rental',
+        name: 'Rental',
+        color: 'emerald',
+        iconBg: 'bg-emerald-500/10',
+        iconColor: 'text-emerald-400',
+        icon: (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+            <rect x="1" y="3" width="15" height="13" />
+            <polygon points="16 8 20 8 23 11 23 16 16 16 16 8" />
+            <circle cx="5.5" cy="18.5" r="2.5" />
+            <circle cx="18.5" cy="18.5" r="2.5" />
+          </svg>
+        ),
+      },
+    ],
   },
   {
-    id: 'subscriptions',
-    name: 'Subscriptions',
-    category: 'Sales',
-    icon: CreditCard,
-    iconBg: 'bg-sky-500/10 border-sky-500/20',
-    iconColor: 'text-sky-500',
-    backendKey: 'gym',
-    description: 'Automated recurring billing & plans',
+    id: 'operations',
+    title: 'Operations',
+    apps: [
+      {
+        id: 'accounting',
+        name: 'Accounting',
+        color: 'rose',
+        iconBg: 'bg-rose-500/10',
+        iconColor: 'text-rose-400',
+        icon: (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+            <rect x="2" y="3" width="20" height="18" rx="2" />
+            <line x1="8" y1="7" x2="16" y2="7" />
+            <line x1="8" y1="11" x2="16" y2="11" />
+            <line x1="8" y1="15" x2="12" y2="15" />
+          </svg>
+        ),
+      },
+      {
+        id: 'gym',
+        name: 'Gym Management',
+        color: 'fuchsia',
+        iconBg: 'bg-fuchsia-500/10',
+        iconColor: 'text-fuchsia-400',
+        icon: (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+            <path d="M6 5v14M18 5v14M3 9v6M21 9v6M3 12h18" strokeLinecap="round" />
+          </svg>
+        ),
+      },
+      {
+        id: 'project',
+        name: 'Project',
+        color: 'sky',
+        iconBg: 'bg-sky-500/10',
+        iconColor: 'text-sky-400',
+        icon: (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+            <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
+          </svg>
+        ),
+      },
+      {
+        id: 'timesheets',
+        name: 'Timesheets',
+        color: 'violet',
+        iconBg: 'bg-violet-500/10',
+        iconColor: 'text-violet-400',
+        icon: (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="10" />
+            <polyline points="12 6 12 12 16 14" />
+          </svg>
+        ),
+      },
+      {
+        id: 'fieldservice',
+        name: 'Field Service',
+        color: 'amber',
+        iconBg: 'bg-amber-500/10',
+        iconColor: 'text-amber-400',
+        icon: (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+            <path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z" />
+          </svg>
+        ),
+      },
+      {
+        id: 'helpdesk',
+        name: 'Helpdesk',
+        color: 'teal',
+        iconBg: 'bg-teal-500/10',
+        iconColor: 'text-teal-400',
+        icon: (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+            <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
+          </svg>
+        ),
+      },
+      {
+        id: 'planning',
+        name: 'Planning',
+        color: 'emerald',
+        iconBg: 'bg-emerald-500/10',
+        iconColor: 'text-emerald-400',
+        icon: (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+            <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+            <line x1="16" y1="2" x2="16" y2="6" />
+            <line x1="8" y1="2" x2="8" y2="6" />
+            <line x1="3" y1="10" x2="21" y2="10" />
+          </svg>
+        ),
+      },
+    ],
   },
   {
-    id: 'whatsapp',
-    name: 'WhatsApp Marketing',
-    category: 'Sales',
-    icon: MessageSquare,
-    iconBg: 'bg-emerald-500/10 border-emerald-500/20',
-    iconColor: 'text-emerald-600',
-    backendKey: 'inventory',
-    description: 'Broadcast alerts & receipt sharing',
+    id: 'supply-chain',
+    title: 'Manufacturing & Supply Chain',
+    apps: [
+      {
+        id: 'inventory',
+        name: 'Inventory',
+        color: 'amber',
+        iconBg: 'bg-amber-500/15',
+        iconColor: 'text-amber-400',
+        icon: (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+            <path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z" />
+            <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
+            <line x1="12" y1="22.08" x2="12" y2="12" />
+          </svg>
+        ),
+      },
+      {
+        id: 'manufacturing',
+        name: 'Manufacturing',
+        color: 'rose',
+        iconBg: 'bg-rose-500/10',
+        iconColor: 'text-rose-400',
+        icon: (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+            <path d="M2 20h20M5 20V8l5 4V4l5 4v12" />
+          </svg>
+        ),
+      },
+      {
+        id: 'purchase',
+        name: 'Purchase',
+        color: 'teal',
+        iconBg: 'bg-teal-500/10',
+        iconColor: 'text-teal-400',
+        icon: (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+            <circle cx="9" cy="21" r="1" />
+            <circle cx="20" cy="21" r="1" />
+            <path d="M1 1h4l2.68 13.39a2 2 0 002 1.61h9.72a2 2 0 002-1.61L23 6H6" />
+          </svg>
+        ),
+      },
+      {
+        id: 'maintenance',
+        name: 'Maintenance',
+        color: 'sky',
+        iconBg: 'bg-sky-500/10',
+        iconColor: 'text-sky-400',
+        icon: (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+            <path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z" />
+          </svg>
+        ),
+      },
+      {
+        id: 'quality',
+        name: 'Quality',
+        color: 'emerald',
+        iconBg: 'bg-emerald-500/10',
+        iconColor: 'text-emerald-400',
+        icon: (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+            <path d="M9 12l2 2 4-4" />
+          </svg>
+        ),
+      },
+    ],
   },
-
-  // Finance
   {
-    id: 'invoicing',
-    name: 'Invoicing',
-    category: 'Finance',
-    icon: Receipt,
-    iconBg: 'bg-blue-500/10 border-blue-500/20',
-    iconColor: 'text-blue-500',
-    backendKey: 'inventory',
-    description: 'Custom invoices, taxes & reminders',
+    id: 'hr',
+    title: 'Human Resources',
+    apps: [
+      {
+        id: 'employees',
+        name: 'Employees',
+        color: 'purple',
+        iconBg: 'bg-purple-500/10',
+        iconColor: 'text-purple-400',
+        icon: (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+            <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2" />
+            <circle cx="12" cy="7" r="4" />
+          </svg>
+        ),
+      },
+      {
+        id: 'recruitment',
+        name: 'Recruitment',
+        color: 'blue',
+        iconBg: 'bg-blue-500/10',
+        iconColor: 'text-blue-400',
+        icon: (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+            <circle cx="11" cy="11" r="8" />
+            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+          </svg>
+        ),
+      },
+      {
+        id: 'time-off',
+        name: 'Time Off',
+        color: 'emerald',
+        iconBg: 'bg-emerald-500/10',
+        iconColor: 'text-emerald-400',
+        icon: (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="10" />
+            <polyline points="12 6 12 12 14 14" />
+          </svg>
+        ),
+      },
+      {
+        id: 'appraisals',
+        name: 'Appraisals',
+        color: 'amber',
+        iconBg: 'bg-amber-500/10',
+        iconColor: 'text-amber-400',
+        icon: (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+          </svg>
+        ),
+      },
+    ],
   },
-  {
-    id: 'accounting',
-    name: 'Accounting',
-    category: 'Finance',
-    icon: PieChart,
-    iconBg: 'bg-violet-500/10 border-violet-500/20',
-    iconColor: 'text-violet-500',
-    backendKey: 'inventory',
-    description: 'Ledgers, chart of accounts & balance sheet',
-  },
-  {
-    id: 'expenses',
-    name: 'Expenses',
-    category: 'Finance',
-    icon: DollarSign,
-    iconBg: 'bg-cyan-500/10 border-cyan-500/20',
-    iconColor: 'text-cyan-500',
-    backendKey: 'inventory',
-    description: 'Employee reimbursements & receipts',
-  },
-
-  // Productivity
-  {
-    id: 'appointments',
-    name: 'Appointments',
-    category: 'Productivity',
-    icon: Calendar,
-    iconBg: 'bg-pink-500/10 border-pink-500/20',
-    iconColor: 'text-pink-500',
-    backendKey: 'gym',
-    description: 'Online booking calendar & reminders',
-  },
-  {
-    id: 'employees',
-    name: 'Employees & HR',
-    category: 'Productivity',
-    icon: Briefcase,
-    iconBg: 'bg-amber-600/10 border-amber-600/20',
-    iconColor: 'text-amber-600',
-    backendKey: 'inventory',
-    description: 'Staff directory, shifts & permissions',
-  },
-  {
-    id: 'website',
-    name: 'Website Builder',
-    category: 'Productivity',
-    icon: Globe,
-    iconBg: 'bg-indigo-600/10 border-indigo-600/20',
-    iconColor: 'text-indigo-600',
-    backendKey: 'inventory',
-    description: 'Custom landing pages & domain hosting',
-  },
-];
-
-const CATEGORIES: ('Operations' | 'Sales' | 'Finance' | 'Productivity')[] = [
-  'Operations',
-  'Sales',
-  'Finance',
-  'Productivity',
 ];
 
 export function TrialPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
 
-  // Wizard Step State (1: App Selection, 2: Organization Form)
-  const [currentStep, setCurrentStep] = React.useState<'apps' | 'org_details'>('apps');
+  // Selected apps state: defaults to POS and Inventory (2 apps selected)
+  const [selectedApps, setSelectedApps] = React.useState<Map<string, AppDefinition>>(() => {
+    const initialMap = new Map<string, AppDefinition>();
+    
+    // Look for initial apps in all sections
+    const allApps = APP_SECTIONS.flatMap((s) => s.apps);
+    const posApp = allApps.find((a) => a.id === 'pos');
+    const invApp = allApps.find((a) => a.id === 'inventory');
+    
+    if (posApp) initialMap.set('pos', posApp);
+    if (invApp) initialMap.set('inventory', invApp);
 
-  // Selected Apps state
-  const [selectedAppIds, setSelectedAppIds] = React.useState<string[]>(['inventory']);
+    // Also check query param ?app=
+    const queryApp = searchParams.get('app');
+    if (queryApp) {
+      const match = allApps.find((a) => a.id === queryApp);
+      if (match) initialMap.set(match.id, match);
+    }
 
-  // Organization Form State
-  const [firstName, setFirstName] = React.useState('');
-  const [lastName, setLastName] = React.useState('');
-  const [organizationName, setOrganizationName] = React.useState('');
-  const [subdomain, setSubdomain] = React.useState('');
-  const [isSubdomainCustom, setIsSubdomainCustom] = React.useState(false);
-  const [email, setEmail] = React.useState('');
-  const [phone, setPhone] = React.useState('');
-  const [country] = React.useState('Nigeria');
-  const [language, setLanguage] = React.useState('English');
-  const [organizationSize, setOrganizationSize] = React.useState('1 - 5 employees');
-  const [primaryInterest, setPrimaryInterest] = React.useState('Use it in my organization');
+    return initialMap;
+  });
 
-  // Subdomain Validation State
-  const [subdomainStatus, setSubdomainStatus] = React.useState<'idle' | 'checking' | 'available' | 'taken'>('idle');
-  const [subdomainReason, setSubdomainReason] = React.useState<string | null>(null);
-  const [subdomainSuggestions, setSubdomainSuggestions] = React.useState<string[]>([]);
-
-  // Email Validation State
-  const [emailStatus, setEmailStatus] = React.useState<'idle' | 'checking' | 'available' | 'taken'>('idle');
-
-  const [loading, setLoading] = React.useState(false);
-  const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
-
-  const deriveSlug = (text: string) => {
-    return text
-      .toLowerCase()
-      .trim()
-      .replace(/[^a-z0-9]/g, '')
-      .slice(0, 25);
-  };
-
-  const toggleAppSelection = (appId: string) => {
-    setSelectedAppIds((prev) => {
-      if (prev.includes(appId)) {
-        if (prev.length === 1) {
-          toast.error('Please keep at least one application selected');
-          return prev;
-        }
-        return prev.filter((id) => id !== appId);
+  const toggleApp = (app: AppDefinition) => {
+    setSelectedApps((prev) => {
+      const next = new Map(prev);
+      if (next.has(app.id)) {
+        next.delete(app.id);
       } else {
-        return [...prev, appId];
+        next.set(app.id, app);
       }
+      return next;
     });
   };
 
-  const handleOrgNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = e.target.value;
-    setOrganizationName(val);
-    if (!isSubdomainCustom) {
-      const slug = deriveSlug(val);
-      setSubdomain(slug);
-    }
+  const removeApp = (appId: string) => {
+    setSelectedApps((prev) => {
+      const next = new Map(prev);
+      next.delete(appId);
+      return next;
+    });
   };
 
-  const handleSubdomainChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setIsSubdomainCustom(true);
-    const cleaned = e.target.value
-      .toLowerCase()
-      .replace(/[^a-z0-9]/g, '')
-      .slice(0, 30);
-    setSubdomain(cleaned);
+  const handleContinue = () => {
+    const appIds = Array.from(selectedApps.keys());
+    if (typeof window !== 'undefined') {
+      sessionStorage.setItem('orvio_selected_apps', JSON.stringify(appIds));
+    }
+    navigate(`/signup?apps=${encodeURIComponent(appIds.join(','))}`);
   };
 
-  const handleResetSubdomain = () => {
-    setIsSubdomainCustom(false);
-    const slug = deriveSlug(organizationName);
-    setSubdomain(slug);
-  };
-
-  const handlePickSuggestion = (candidate: string) => {
-    setIsSubdomainCustom(true);
-    setSubdomain(candidate);
-  };
-
-  React.useEffect(() => {
-    const clean = subdomain.trim();
-    if (!clean || clean.length < 3) {
-      setSubdomainStatus('idle');
-      setSubdomainReason(null);
-      return;
-    }
-
-    const timer = setTimeout(async () => {
-      setSubdomainStatus('checking');
-      try {
-        const res = await checkSubdomainAvailability(clean);
-        if (res.available) {
-          setSubdomainStatus('available');
-          setSubdomainReason(null);
-          setSubdomainSuggestions([]);
-        } else {
-          setSubdomainStatus('taken');
-          setSubdomainReason(res.reason || 'ALREADY_TAKEN');
-          setSubdomainSuggestions(res.suggestions || []);
-        }
-      } catch {
-        setSubdomainStatus('idle');
-      }
-    }, 300);
-
-    return () => clearTimeout(timer);
-  }, [subdomain]);
-
-  // Real-time debounced email availability checker
-  React.useEffect(() => {
-    const cleanEmail = email.trim().toLowerCase();
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-    if (!cleanEmail || !emailRegex.test(cleanEmail)) {
-      setEmailStatus('idle');
-      return;
-    }
-
-    const timer = setTimeout(async () => {
-      setEmailStatus('checking');
-      try {
-        const res = await checkEmailAvailability(cleanEmail);
-        if (res.available) {
-          setEmailStatus('available');
-        } else {
-          setEmailStatus('taken');
-        }
-      } catch {
-        setEmailStatus('idle');
-      }
-    }, 350);
-
-    return () => clearTimeout(timer);
-  }, [email]);
-
-  const handleContinueToOrgDetails = () => {
-    if (selectedAppIds.length === 0) {
-      toast.error('Please select at least one application to continue');
-      return;
-    }
-    setCurrentStep('org_details');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setErrorMessage(null);
-
-    if (!firstName.trim()) {
-      setErrorMessage('First Name is required.');
-      return;
-    }
-
-    if (!lastName.trim()) {
-      setErrorMessage('Last Name is required.');
-      return;
-    }
-
-    if (!organizationName.trim()) {
-      setErrorMessage('Organization Name is required.');
-      return;
-    }
-
-    if (!email.trim()) {
-      setErrorMessage('Valid work email is required.');
-      return;
-    }
-
-    if (emailStatus === 'taken') {
-      setErrorMessage('This email address is already registered. Please log in or use a different email.');
-      return;
-    }
-
-    if (!phone.trim()) {
-      setErrorMessage('Phone number is required.');
-      return;
-    }
-
-    // Format phone with +234 if not present
-    let formattedPhone = phone.trim();
-    if (!formattedPhone.startsWith('+')) {
-      const cleanDigits = formattedPhone.replace(/\D/g, '');
-      if (cleanDigits.startsWith('234')) {
-        formattedPhone = `+${cleanDigits}`;
-      } else if (cleanDigits.startsWith('0')) {
-        formattedPhone = `+234${cleanDigits.slice(1)}`;
-      } else {
-        formattedPhone = `+234${cleanDigits}`;
-      }
-    }
-
-    setLoading(true);
-
-    try {
-      // Map selected App IDs to backend products
-      const selectedBackendApps: ('inventory' | 'gym')[] = Array.from(
-        new Set(
-          selectedAppIds.map((id) => {
-            const item = APPS_LIST.find((a) => a.id === id);
-            return item?.backendKey || 'inventory';
-          })
-        )
-      );
-
-      const primaryApp: 'inventory' | 'gym' = selectedAppIds.includes('gym') && !selectedAppIds.includes('inventory')
-        ? 'gym'
-        : 'inventory';
-
-      const response = await startFreeTrial({
-        selectedApps: selectedBackendApps.length > 0 ? selectedBackendApps : ['inventory'],
-        primaryApp,
-        firstName: firstName.trim(),
-        lastName: lastName.trim(),
-        fullName: `${firstName.trim()} ${lastName.trim()}`,
-        organizationName: organizationName.trim(),
-        subdomain: subdomain ? subdomain.toLowerCase().trim() : undefined,
-        email: email.toLowerCase().trim(),
-        phone: formattedPhone,
-        country,
-        language,
-        organizationSize,
-        primaryInterest,
-        termsAccepted: true,
-      });
-
-      useAuthStore.getState().setSession(
-        response.accessToken,
-        {
-          id: response.user.id,
-          email: response.user.email,
-          fullName: response.user.fullName,
-          phone: response.user.phone || null,
-          status: response.user.status,
-          emailVerifiedAt: response.user.emailVerifiedAt,
-        },
-        response.organization,
-        'pending-verification'
-      );
-
-      navigate(
-        `/thanks/trial?subdomain=${encodeURIComponent(response.organization.subdomain)}&token=${encodeURIComponent(response.accessToken)}`
-      );
-    } catch (err: any) {
-      const msg = err.message || 'Could not start your free trial. Please check your information.';
-      setErrorMessage(msg);
-      toast.error(msg);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const selectedAppsObjects = APPS_LIST.filter((app) => selectedAppIds.includes(app.id));
+  const selectedCount = selectedApps.size;
 
   return (
-    <>
+    <div
+      className="min-h-screen text-slate-100 flex flex-col selection:bg-[#714b67] selection:text-white antialiased font-sans"
+      style={{
+        backgroundColor: '#0d0b11',
+        backgroundImage: `
+          radial-gradient(at 0% 0%, rgba(113, 75, 103, 0.22) 0px, transparent 45%),
+          radial-gradient(at 100% 0%, rgba(251, 185, 69, 0.09) 0px, transparent 40%),
+          radial-gradient(at 50% 100%, rgba(113, 75, 103, 0.12) 0px, transparent 50%)
+        `,
+        backgroundAttachment: 'fixed',
+      }}
+    >
       <SeoHead
-        title="Choose your Apps | Start Free Trial | Orvio Hub"
-        description="Select your modular business applications for instant access on Orvio Hub."
+        title="Choose your Apps — Orvio"
+        description="Select the apps your business needs today. Connect more as you grow, with unified login and consolidated billing."
       />
 
-      <div className="min-h-screen bg-[#f8f9fa] text-slate-800 flex flex-col font-sans">
-        {/* Top Minimalist Header */}
-        <header className="w-full bg-white border-b border-slate-200/80 sticky top-0 z-30 shadow-xs">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-            <Link to="/" className="flex items-center gap-2.5">
-              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-tr from-indigo-600 via-indigo-700 to-sky-500 text-white shadow-md shadow-indigo-500/20 font-bold">
-                <Zap className="h-5 w-5 fill-white" />
-              </div>
-              <span className="text-xl font-extrabold tracking-tight text-slate-900">
-                Orvio<span className="text-indigo-600">Hub</span>
-              </span>
-            </Link>
+      {/* Unified Dark Marketing Navbar */}
+      <DarkMarketingNavbar />
 
-            <div className="flex items-center gap-4 text-xs font-semibold text-slate-600">
-              <Link to="/products" className="hover:text-indigo-600 hidden sm:inline-block">Apps</Link>
-              <Link to="/pricing" className="hover:text-indigo-600 hidden sm:inline-block">Pricing</Link>
-              <Link to="/contact" className="hover:text-indigo-600 hidden sm:inline-block">Help</Link>
-              <Link to="/login" className="px-3 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-700">
-                Sign In
-              </Link>
-            </div>
-          </div>
-        </header>
+      {/* Main Content */}
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-9 md:py-12">
+        {/* Title */}
+        <div className="text-center mb-10 sm:mb-14">
+          <h1 className="text-3xl sm:text-4xl md:text-5xl font-extrabold tracking-tight text-white inline-flex flex-wrap justify-center items-center gap-2">
+            <span>Choose your</span>
+            <span className="relative inline-block text-white font-extrabold">
+              Apps
+              <svg className="absolute -bottom-2 left-0 w-full overflow-visible" fill="none" height="10" preserveAspectRatio="none" viewBox="0 0 100 12">
+                <path d="M2 9C28 2 75 2 98 8" stroke="#fbb945" strokeLinecap="round" strokeWidth="4.5" />
+              </svg>
+            </span>
+          </h1>
+          <p className="mt-4 text-sm sm:text-base text-slate-400 font-normal">
+            Free instant access. No credit card required.
+          </p>
+        </div>
 
-        {/* STEP 1: CHOOSE YOUR APPS (Odoo Style) */}
-        {currentStep === 'apps' && (
-          <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-10">
-            {/* Title Section with Cursive Accent & Organic Underline */}
-            <div className="text-center space-y-2 mb-10">
-              <h1 className="text-4xl sm:text-5xl font-extrabold text-slate-900 tracking-tight relative inline-block">
-                <span className="font-serif italic font-normal mr-2 text-slate-800">Choose your</span>
-                <span className="relative font-black bg-gradient-to-r from-indigo-600 to-sky-600 bg-clip-text text-transparent">
-                  Apps
-                  {/* Organic curved underline */}
-                  <svg
-                    className="absolute -bottom-2.5 left-0 w-full h-3 text-emerald-400"
-                    viewBox="0 0 100 12"
-                    fill="none"
-                    xmlns="http://www.w3.org/2000/svg"
-                  >
-                    <path
-                      d="M2 9.5C25 3.5 75 3.5 98 9.5"
-                      stroke="currentColor"
-                      strokeWidth="3.5"
-                      strokeLinecap="round"
-                    />
-                  </svg>
-                </span>
-              </h1>
-              <p className="text-sm font-medium text-slate-500 pt-3">
-                Free instant access. No credit card required.
-              </p>
-            </div>
+        {/* 2-Column Layout: Catalog Grid + Sticky Summary */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+          {/* Catalog Area (Left 8 Cols) */}
+          <div className="lg:col-span-8 space-y-9">
+            {APP_SECTIONS.map((section) => (
+              <section key={section.id} className="space-y-3.5">
+                <div className="flex items-baseline space-x-2.5">
+                  <h2 className="font-handwriting text-3xl sm:text-4xl text-slate-100 font-bold tracking-wide italic">
+                    {section.title}
+                  </h2>
+                  <span className="text-xs text-slate-500 font-semibold tracking-wide">
+                    {section.apps.length} apps
+                  </span>
+                </div>
 
-            {/* 2-Column Layout: Grid of Apps on Left, Sticky Selection Summary Card on Right */}
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-              {/* Left Column: Categorized Apps Grid (8 cols) */}
-              <div className="lg:col-span-8 space-y-8">
-                {CATEGORIES.map((category) => {
-                  const categoryApps = APPS_LIST.filter((app) => app.category === category);
-                  return (
-                    <div key={category} className="space-y-3.5">
-                      <h3 className="text-lg font-bold font-serif italic text-slate-800 tracking-tight">
-                        {category}
-                      </h3>
-
-                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3.5">
-                        {categoryApps.map((app) => {
-                          const isSelected = selectedAppIds.includes(app.id);
-                          const IconComponent = app.icon;
-
-                          return (
-                            <button
-                              key={app.id}
-                              type="button"
-                              onClick={() => toggleAppSelection(app.id)}
-                              className={`flex items-center gap-3 p-3.5 rounded-2xl bg-white border text-left transition-all duration-150 cursor-pointer shadow-xs ${
-                                isSelected
-                                  ? 'border-indigo-600 ring-2 ring-indigo-500/20 shadow-md'
-                                  : 'border-slate-200/90 hover:border-slate-300 hover:shadow-xs'
-                              }`}
-                            >
-                              <div
-                                className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border ${app.iconBg} ${app.iconColor}`}
-                              >
-                                <IconComponent className="h-5 w-5" />
-                              </div>
-
-                              <div className="flex-1 min-w-0">
-                                <div className="text-sm font-bold text-slate-800 truncate">
-                                  {app.name}
-                                </div>
-                                <div className="text-[11px] text-slate-400 truncate">
-                                  {app.description}
-                                </div>
-                              </div>
-
-                              {isSelected && (
-                                <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-white">
-                                  <Check className="h-3 w-3 stroke-[3]" />
-                                </div>
-                              )}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* Right Column: Sticky Summary & Continue Action Card (4 cols) */}
-              <div className="lg:col-span-4 lg:sticky lg:top-24">
-                <Card className="bg-white border-slate-200/90 shadow-xl rounded-3xl p-6 space-y-6">
-                  <div className="flex items-center justify-between border-b border-slate-100 pb-4">
-                    <h3 className="text-base font-bold text-slate-900">
-                      {selectedAppIds.length} {selectedAppIds.length === 1 ? 'App' : 'Apps'} selected
-                    </h3>
-                    <Badge variant="glow" className="text-[10px] font-bold">
-                      Instant Access
-                    </Badge>
-                  </div>
-
-                  {/* List of Selected Apps */}
-                  <div className="space-y-2.5 max-h-64 overflow-y-auto pr-1">
-                    {selectedAppsObjects.map((app) => {
-                      const IconComponent = app.icon;
-                      return (
-                        <div
-                          key={app.id}
-                          className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 border border-slate-100"
-                        >
-                          <div className="flex items-center gap-2.5">
-                            <div
-                              className={`flex h-7 w-7 items-center justify-center rounded-lg border ${app.iconBg} ${app.iconColor}`}
-                            >
-                              <IconComponent className="h-4 w-4" />
-                            </div>
-                            <span className="text-xs font-bold text-slate-800">{app.name}</span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                  {section.apps.map((app) => {
+                    const isSelected = selectedApps.has(app.id);
+                    return (
+                      <button
+                        key={app.id}
+                        type="button"
+                        onClick={() => toggleApp(app)}
+                        className={`group text-left px-4 py-3 rounded-xl border app-pill-transition relative flex items-center justify-between cursor-pointer focus:outline-none ${
+                          isSelected
+                            ? 'bg-[#231a2c] border-[#714b67] shadow-card-active'
+                            : 'bg-[#16121f] border-[#262033] hover:border-[#39304a] hover:bg-[#1e182b]'
+                        }`}
+                      >
+                        <div className="flex items-center space-x-3.5 min-w-0">
+                          <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${app.iconBg} ${app.iconColor}`}>
+                            {app.icon}
                           </div>
-
-                          <button
-                            type="button"
-                            onClick={() => toggleAppSelection(app.id)}
-                            className="text-slate-400 hover:text-rose-500 text-xs px-1.5 font-bold"
-                            title="Remove"
+                          <span
+                            className={`text-sm font-semibold truncate ${
+                              isSelected ? 'text-white' : 'text-slate-200 group-hover:text-white'
+                            }`}
                           >
-                            ×
-                          </button>
+                            {app.name}
+                          </span>
                         </div>
-                      );
-                    })}
-                  </div>
 
-                  {/* Green Banner: Odoo-style free entitlement badge */}
-                  <div className="p-3.5 rounded-2xl bg-emerald-50 border border-emerald-200/70 text-emerald-800 text-xs font-semibold text-center flex items-center justify-center gap-2">
-                    <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
-                    <span>Free 14-day trial, with unlimited users.</span>
-                  </div>
+                        {isSelected ? (
+                          <span className="pill-check w-5 h-5 rounded-full bg-[#714b67] text-white flex items-center justify-center text-xs shadow-md border border-purple-400/40 shrink-0 ml-2">
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth="3" viewBox="0 0 24 24">
+                              <path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round" />
+                            </svg>
+                          </span>
+                        ) : (
+                          <span className="pill-check w-5 h-5 rounded-full border border-slate-700 bg-slate-800/40 opacity-0 group-hover:opacity-60 flex items-center justify-center transition-all shrink-0 ml-2" />
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
+            ))}
+          </div>
 
-                  {/* Big Prominent Continue Button */}
-                  <Button
-                    type="button"
-                    variant="primary"
-                    size="lg"
-                    onClick={handleContinueToOrgDetails}
-                    className="w-full h-13 text-base font-bold bg-[#714b67] hover:bg-[#5c3c54] text-white shadow-lg shadow-[#714b67]/25 rounded-2xl flex items-center justify-center gap-2 cursor-pointer transition-all"
-                  >
-                    <span>Continue</span>
-                    <ArrowRight className="h-4 w-4" />
-                  </Button>
-
-                  <div className="pt-2 text-center text-[11px] text-slate-400 space-y-1">
-                    <div className="flex items-center justify-center gap-1.5 font-medium">
-                      <ShieldCheck className="h-3.5 w-3.5 text-emerald-600" />
-                      <span>No credit card required</span>
-                    </div>
-                  </div>
-                </Card>
-              </div>
-            </div>
-          </main>
-        )}
-
-        {/* STEP 2: ORGANIZATION DETAILS FORM (Get Started Screen) */}
-        {currentStep === 'org_details' && (
-          <main className="flex-1 max-w-3xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-10 animate-in fade-in slide-in-from-bottom-3 duration-300">
-            {/* Header: Cursive Get Started with Green Underline */}
-            <div className="text-center space-y-2 mb-8">
-              <h1 className="text-4xl sm:text-5xl font-bold text-slate-900 tracking-tight font-serif italic relative inline-block">
-                Get{' '}
-                <span className="relative font-extrabold not-italic text-slate-900">
-                  Started
-                  {/* Green brush underline */}
-                  <svg
-                    className="absolute -bottom-2.5 left-0 w-full h-3 text-emerald-500"
-                    viewBox="0 0 100 12"
-                    fill="none"
-                    xmlns="http://www.w3.org/2000/svg"
-                  >
-                    <path
-                      d="M2 9.5C25 3.5 75 3.5 98 9.5"
-                      stroke="currentColor"
-                      strokeWidth="4"
-                      strokeLinecap="round"
-                    />
-                  </svg>
+          {/* Sticky Summary Drawer (Right 4 Cols) */}
+          <div className="lg:col-span-4 sticky top-24">
+            <div className="rounded-2xl border border-[#262033] bg-[#16121f] p-5 shadow-2xl backdrop-blur-md">
+              <div className="flex items-center justify-between pb-3.5 border-b border-[#262033]">
+                <h3 className="text-base font-bold text-white">Your Selection</h3>
+                <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-[#714b67]/20 text-purple-300 border border-[#714b67]/40">
+                  {selectedCount} {selectedCount === 1 ? 'App selected' : 'Apps selected'}
                 </span>
-              </h1>
-              <p className="text-sm font-semibold text-slate-600 pt-2">
-                Free instant access. No credit card required.
-              </p>
-            </div>
-
-            {/* Selected Apps Banner Card */}
-            <div className="w-full bg-slate-100/70 border border-slate-200/80 rounded-2xl p-4 flex items-center justify-between shadow-xs mb-6">
-              <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-500">
-                  <Package className="h-5 w-5" />
-                </div>
-                <div>
-                  <h3 className="text-sm font-bold text-slate-900">
-                    {selectedAppsObjects.map((a) => a.name).join(', ') || 'Inventory'}
-                  </h3>
-                </div>
               </div>
-              <button
-                type="button"
-                onClick={() => setCurrentStep('apps')}
-                className="text-xs font-semibold text-slate-600 hover:text-indigo-600 transition-colors cursor-pointer"
-              >
-                Change apps selection
-              </button>
-            </div>
 
-            <Card className="bg-white border-slate-200/90 shadow-xl rounded-3xl p-6 sm:p-8 space-y-6">
-              <form onSubmit={handleSubmit} className="space-y-5">
-                {errorMessage && (
-                  <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium flex items-center justify-between">
-                    <span>{errorMessage}</span>
-                    {errorMessage.includes('already exists') && (
-                      <Link to="/login" className="font-bold underline ml-2">
-                        Log In
-                      </Link>
-                    )}
+              {/* Scrollable list */}
+              <div className="py-3.5 space-y-2 max-h-60 overflow-y-auto custom-scrollbar">
+                {selectedCount === 0 ? (
+                  <div className="py-6 text-center text-xs text-slate-400 border border-dashed border-[#262033] rounded-xl">
+                    Select an app from the left to get started
                   </div>
-                )}
-
-                {/* 1. First Name and Last Name (2 Columns) */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-bold text-slate-700">
-                      First Name <span className="text-rose-500">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="e.g. Jame"
-                      value={firstName}
-                      onChange={(e) => setFirstName(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-indigo-600 focus:bg-white transition-colors"
-                      required
-                    />
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-bold text-slate-700">
-                      Last Name <span className="text-rose-500">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="e.g. Bolaji"
-                      value={lastName}
-                      onChange={(e) => setLastName(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-indigo-600 focus:bg-white transition-colors"
-                      required
-                    />
-                  </div>
-                </div>
-
-                {/* 2. Organization Name (Full Width) */}
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-700">
-                    Organization Name <span className="text-rose-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="Company Name"
-                    value={organizationName}
-                    onChange={handleOrgNameChange}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-indigo-600 focus:bg-white transition-colors"
-                    required
-                  />
-                </div>
-
-                {/* Subdomain Input with Custom Editing Power & Live Availability */}
-                <div className="space-y-1.5 bg-slate-50/80 p-3.5 rounded-2xl border border-slate-200/80">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
-                      <Globe className="h-3.5 w-3.5 text-indigo-600" />
-                      <span>Workspace Subdomain</span>
-                    </label>
-                    {isSubdomainCustom && (
+                ) : (
+                  Array.from(selectedApps.values()).map((app) => (
+                    <div
+                      key={app.id}
+                      className="flex items-center justify-between p-2.5 rounded-xl bg-[#1e182b] border border-[#39304a]/70 group transition-all"
+                    >
+                      <div className="flex items-center space-x-3 min-w-0">
+                        <div className={`w-7 h-7 rounded-lg ${app.iconBg} ${app.iconColor} flex items-center justify-center shrink-0`}>
+                          {app.icon}
+                        </div>
+                        <span className="text-sm font-semibold text-slate-100 truncate">{app.name}</span>
+                      </div>
                       <button
                         type="button"
-                        onClick={handleResetSubdomain}
-                        className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-700 flex items-center gap-1 cursor-pointer transition-colors"
-                        title="Re-sync with Organization Name"
+                        onClick={() => removeApp(app.id)}
+                        className="text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 p-1 rounded-md transition-colors shrink-0 ml-2"
+                        title="Remove app"
                       >
-                        <RotateCcw className="h-3 w-3" />
-                        <span>Reset to name</span>
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
                       </button>
-                    )}
-                  </div>
-
-                  <div className="relative flex items-center rounded-xl bg-white border border-slate-200 focus-within:border-indigo-600 focus-within:ring-2 focus-within:ring-indigo-500/10 transition-all overflow-hidden">
-                    <span className="pl-3.5 pr-1 text-xs text-slate-400 font-mono select-none">
-                      https://
-                    </span>
-                    <input
-                      type="text"
-                      placeholder="your-org"
-                      value={subdomain}
-                      onChange={handleSubdomainChange}
-                      className="w-full bg-transparent py-2.5 px-1 text-xs text-indigo-700 font-mono font-bold focus:outline-none placeholder:text-slate-300"
-                      required
-                    />
-                    <span className="pr-3.5 pl-1 text-xs text-slate-400 font-mono select-none">
-                      .localhost:4000
-                    </span>
-                  </div>
-
-                  {/* Real-time Status Badges & Suggestions */}
-                  <div className="pt-1 space-y-1.5">
-                    <div className="flex items-center justify-between text-xs">
-                      {subdomainStatus === 'checking' && (
-                        <span className="text-[11px] text-slate-500 flex items-center gap-1.5">
-                          <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-600" />
-                          <span>Checking availability...</span>
-                        </span>
-                      )}
-
-                      {subdomainStatus === 'available' && (
-                        <span className="text-[11px] text-emerald-600 flex items-center gap-1.5 font-bold">
-                          <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
-                          <span>Subdomain is available</span>
-                        </span>
-                      )}
-
-                      {subdomainStatus === 'taken' && (
-                        <span className="text-[11px] text-rose-600 flex items-center gap-1.5 font-bold">
-                          <AlertCircle className="h-3.5 w-3.5 text-rose-600" />
-                          <span>
-                            {subdomainReason === 'RESERVED'
-                              ? 'This subdomain is reserved for system use'
-                              : subdomainReason === 'TOO_SHORT'
-                              ? 'Subdomain must be at least 3 characters'
-                              : subdomainReason === 'INVALID_CHARACTERS'
-                              ? 'Only lowercase letters, numbers, and hyphens are allowed'
-                              : 'Subdomain is already taken'}
-                          </span>
-                        </span>
-                      )}
-
-                      {subdomainStatus === 'idle' && (
-                        <span className="text-[11px] text-slate-400">
-                          3-30 lowercase characters, numbers or hyphens
-                        </span>
-                      )}
                     </div>
+                  ))
+                )}
+              </div>
 
-                    {/* Suggestions list when taken */}
-                    {subdomainStatus === 'taken' && subdomainSuggestions.length > 0 && (
-                      <div className="flex flex-wrap items-center gap-1.5 pt-1">
-                        <span className="text-[11px] text-slate-500 font-medium">Available alternatives:</span>
-                        {subdomainSuggestions.map((candidate) => (
-                          <button
-                            key={candidate}
-                            type="button"
-                            onClick={() => handlePickSuggestion(candidate)}
-                            className="text-[11px] font-mono font-bold px-2 py-0.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 transition-colors cursor-pointer"
-                          >
-                            {candidate}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* 3. Email & Phone Number (2 Columns) */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div className="space-y-1.5">
-                    <div className="flex items-center justify-between">
-                      <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
-                        <Mail className="h-3.5 w-3.5 text-indigo-600" />
-                        <span>Work Email <span className="text-rose-500">*</span></span>
-                      </label>
-                      {emailStatus === 'checking' && (
-                        <span className="text-[11px] text-slate-500 flex items-center gap-1">
-                          <Loader2 className="h-3 w-3 animate-spin text-indigo-600" />
-                          <span>Checking...</span>
-                        </span>
-                      )}
-                      {emailStatus === 'available' && (
-                        <span className="text-[11px] text-emerald-600 flex items-center gap-1 font-bold">
-                          <CheckCircle2 className="h-3 w-3 text-emerald-600" />
-                          <span>Available</span>
-                        </span>
-                      )}
-                    </div>
-
-                    <div className="relative flex items-center">
-                      <input
-                        type="email"
-                        placeholder="e.g. you@company.com"
-                        value={email}
-                        onChange={(e) => {
-                          setEmail(e.target.value);
-                          if (errorMessage) setErrorMessage(null);
-                        }}
-                        className={`w-full bg-slate-50 border rounded-xl px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:bg-white transition-all ${
-                          emailStatus === 'taken'
-                            ? 'border-rose-400 focus:border-rose-600 bg-rose-50/40 pr-10'
-                            : emailStatus === 'available'
-                            ? 'border-emerald-400 focus:border-emerald-600 bg-emerald-50/20 pr-10'
-                            : 'border-slate-200 focus:border-indigo-600'
-                        }`}
-                        required
-                      />
-                      {emailStatus === 'available' && (
-                        <div className="absolute right-3.5 pointer-events-none">
-                          <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-                        </div>
-                      )}
-                      {emailStatus === 'taken' && (
-                        <div className="absolute right-3.5 pointer-events-none">
-                          <AlertCircle className="h-4 w-4 text-rose-500" />
-                        </div>
-                      )}
-                    </div>
-
-                    {emailStatus === 'taken' && (
-                      <div className="pt-0.5 text-[11px] text-rose-600 flex items-center justify-between">
-                        <span className="font-medium">Account with this email already exists.</span>
-                        <Link to="/login" className="font-bold underline text-indigo-600 hover:text-indigo-700 ml-1">
-                          Log in &rarr;
-                        </Link>
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-bold text-slate-700">
-                      Phone Number <span className="text-rose-500">*</span>
-                    </label>
-                    <div className="flex rounded-xl bg-slate-50 border border-slate-200 focus-within:border-indigo-600 focus-within:bg-white transition-colors overflow-hidden">
-                      <div
-                        className="flex items-center gap-1 px-3 bg-slate-100/90 border-r border-slate-200 text-xs font-bold text-slate-700 cursor-not-allowed select-none"
-                        title="Nigeria (+234) is currently active"
-                      >
-                        <span className="text-sm">🇳🇬</span>
-                        <span>+234</span>
-                      </div>
-                      <input
-                        type="tel"
-                        placeholder="907 332 5783"
-                        value={phone}
-                        maxLength={14}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          const digitsOnly = val.replace(/\D/g, '');
-                          if (digitsOnly.length <= 10) {
-                            setPhone(val.replace(/[^\d\s-]/g, ''));
-                          }
-                        }}
-                        className="w-full bg-transparent px-3 py-3 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none"
-                        required
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                {/* 4. Country & Language (2 Columns) */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-bold text-slate-700">
-                      Country
-                    </label>
-                    <div className="relative">
-                      <select
-                        disabled
-                        value={country}
-                        className="w-full bg-slate-100/80 border border-slate-200 rounded-xl px-4 py-3 text-sm text-slate-700 font-medium cursor-not-allowed appearance-none"
-                        title="Nigeria is currently the default regional deployment"
-                      >
-                        <option value="Nigeria">Nigeria</option>
-                      </select>
-                      <div className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none text-xs">
-                        ▼
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-bold text-slate-700">
-                      Language
-                    </label>
-                    <div className="relative">
-                      <select
-                        value={language}
-                        onChange={(e) => setLanguage(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm text-slate-900 font-medium focus:outline-none focus:border-indigo-600 focus:bg-white transition-colors appearance-none cursor-pointer"
-                      >
-                        <option value="English">English</option>
-                        <option value="French">French</option>
-                        <option value="Spanish">Spanish</option>
-                      </select>
-                      <div className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none text-xs">
-                        ▼
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* 5. Organization Size & Primary Interest (2 Columns) */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-bold text-slate-700">
-                      Organization size
-                    </label>
-                    <div className="relative">
-                      <select
-                        value={organizationSize}
-                        onChange={(e) => setOrganizationSize(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm text-slate-900 font-medium focus:outline-none focus:border-indigo-600 focus:bg-white transition-colors appearance-none cursor-pointer"
-                      >
-                        <option value="1 - 5 employees">1 - 5 employees</option>
-                        <option value="5 - 20 employees">5 - 20 employees</option>
-                        <option value="20 - 50 employees">20 - 50 employees</option>
-                        <option value="50 - 250 employees">50 - 250 employees</option>
-                        <option value="250+ employees">250+ employees</option>
-                      </select>
-                      <div className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none text-xs">
-                        ▼
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-bold text-slate-700">
-                      Primary Interest
-                    </label>
-                    <div className="relative">
-                      <select
-                        value={primaryInterest}
-                        onChange={(e) => setPrimaryInterest(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm text-slate-900 font-medium focus:outline-none focus:border-indigo-600 focus:bg-white transition-colors appearance-none cursor-pointer"
-                      >
-                        <option value="Use it in my organization">Use it in my organization</option>
-                        <option value="Provide services to other organizations">Provide services to other organizations</option>
-                        <option value="Explore / Student / Learning">Explore / Student / Learning</option>
-                      </select>
-                      <div className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none text-xs">
-                        ▼
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Legal / Policy Disclaimer */}
-                <p className="text-[12px] text-slate-500 text-center pt-2">
-                  By clicking on <strong className="text-slate-800">Start Now</strong>, you accept our{' '}
-                  <Link to="/legal/subscription" className="text-indigo-600 underline font-medium hover:text-indigo-700">
-                    Subscription Agreement
-                  </Link>{' '}
-                  and{' '}
-                  <Link to="/legal/privacy" className="text-indigo-600 underline font-medium hover:text-indigo-700">
-                    Privacy Policy
-                  </Link>
-                  .
+              {/* Green Banner */}
+              <div className="my-2.5 p-3 rounded-xl bg-[#142d20] border border-[#216345] text-center">
+                <p className="text-xs font-semibold text-[#6ee7b7] leading-relaxed">
+                  Free, with unlimited users,
+                  <br className="hidden sm:inline" /> forever.
                 </p>
+              </div>
 
-                {/* Centered Plum/Purple Start Now Button */}
-                <div className="flex justify-center pt-2">
-                  <Button
-                    type="submit"
-                    variant="primary"
-                    size="lg"
-                    disabled={loading || subdomainStatus === 'taken'}
-                    className="min-w-[180px] h-12 text-sm font-bold bg-[#714b67] hover:bg-[#5c3c54] text-white shadow-lg shadow-[#714b67]/25 rounded-xl flex items-center justify-center gap-2 cursor-pointer transition-all"
-                  >
-                    {loading ? (
-                      <>
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        <span>Starting Trial...</span>
-                      </>
-                    ) : (
-                      <span>Start Now</span>
-                    )}
-                  </Button>
-                </div>
-              </form>
-            </Card>
-          </main>
-        )}
-      </div>
-    </>
+              {/* CTA Button */}
+              <div className="mt-3">
+                <button
+                  type="button"
+                  disabled={selectedCount === 0}
+                  onClick={handleContinue}
+                  className={`w-full py-3 px-4 rounded-xl font-bold text-sm text-white bg-[#714b67] hover:bg-[#87597b] active:scale-[0.98] transition-all shadow-glow-primary border border-purple-400/30 flex items-center justify-center space-x-2 group ${
+                    selectedCount === 0 ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
+                  }`}
+                >
+                  <span>Continue</span>
+                  <svg className="w-4 h-4 text-purple-200 group-hover:translate-x-1 transition-transform" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
+                    <path d="M14 5l7 7m0 0l-7 7m7-7H3" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+              </div>
+
+              {/* Trust Note */}
+              <div className="mt-3.5 pt-3 border-t border-[#262033]/60 flex items-center justify-center space-x-1.5 text-xs text-slate-400">
+                <svg className="w-3.5 h-3.5 text-[#fbb945]" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
+                  <path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+                <span>No credit card required</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+
+      {/* Footer */}
+      <footer className="border-t border-[#262033] mt-16 py-8 bg-[#0d0b11]/60">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between text-xs text-slate-400 space-y-4 sm:space-y-0">
+          <div className="flex items-center space-x-2">
+            <span className="font-bold text-slate-200">Orvio</span>
+            <span>— All-in-one unified workspace &amp; business suite</span>
+          </div>
+          <div className="flex items-center space-x-6">
+            <Link to="/privacy" className="hover:text-white transition-colors">
+              Privacy Policy
+            </Link>
+            <Link to="/terms" className="hover:text-white transition-colors">
+              Terms of Service
+            </Link>
+            <Link to="/contact" className="hover:text-white transition-colors">
+              System Status
+            </Link>
+          </div>
+        </div>
+      </footer>
+    </div>
   );
 }

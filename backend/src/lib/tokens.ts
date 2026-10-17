@@ -75,6 +75,9 @@ export interface AccessTokenClaims {
   email: string;
   org_id?: string;
   role?: string;
+  org_role?: string;
+  scope_all_branches?: boolean;
+  branch_scope?: string[];
   membership_id?: string;
   session_id?: string;
   jti?: string;

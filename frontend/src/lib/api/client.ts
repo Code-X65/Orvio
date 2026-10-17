@@ -110,7 +110,26 @@ export async function executeTokenRefresh(): Promise<string | null> {
       });
 
       if (!response.ok) {
-        if (response.status === 401) {
+        if (response.status === 401 || response.status === 403) {
+          let reason: string | null = null;
+          try {
+            const errJson = await response.json();
+            const errCode = errJson?.error?.code || errJson?.code;
+            if (errCode === 'ACCOUNT_SUSPENDED') reason = 'suspended';
+            else if (errCode === 'MEMBERSHIP_DEACTIVATED') reason = 'deactivated';
+            else if (errCode === 'ORGANIZATION_SUSPENDED' || errCode === 'ORGANIZATION_ACCESS_DENIED') reason = 'org_suspended';
+          } catch {
+            // Ignore parse error
+          }
+
+          if (reason) {
+            useAuthStore.getState().clearSession(false, false);
+            if (typeof window !== 'undefined') {
+              window.location.replace(`/login?reason=${reason}`);
+            }
+            return null;
+          }
+
           useAuthStore.getState().clearSession(false, true);
           const currentPath =
             typeof window !== 'undefined'
@@ -290,6 +309,29 @@ export async function apiClient<T = unknown>(
       endpoint.includes('/auth/register');
 
     if (response.status === 401 && !_retry && !isAuthEndpoint) {
+      // Check if 401 is due to account suspension or membership deactivation
+      let isSuspended = false;
+      let suspendCode = '';
+      try {
+        const cloned = response.clone();
+        const json = await cloned.json();
+        suspendCode = json?.error?.code || json?.code || '';
+        if (suspendCode === 'ACCOUNT_SUSPENDED' || suspendCode === 'MEMBERSHIP_DEACTIVATED') {
+          isSuspended = true;
+        }
+      } catch {
+        // Ignore json parse error
+      }
+
+      if (isSuspended) {
+        useAuthStore.getState().clearSession(false, false);
+        if (typeof window !== 'undefined') {
+          const reason = suspendCode === 'ACCOUNT_SUSPENDED' ? 'suspended' : 'deactivated';
+          window.location.replace(`/login?reason=${reason}`);
+        }
+        throw new AuthError('Your account has been deactivated or suspended.', 'ACCOUNT_SUSPENDED', 401);
+      }
+
       const newToken = await executeTokenRefresh();
       if (newToken) {
         return apiClient<T>(endpoint, {
@@ -352,6 +394,23 @@ export async function apiClient<T = unknown>(
       const errorCode = errEnvelope?.error?.code || errEnvelope?.code || 'API_ERROR';
       const errorDetails = errEnvelope?.error?.details;
       const requestId = errEnvelope?.requestId || errEnvelope?.meta?.requestId;
+
+      if (
+        errorCode === 'ACCOUNT_SUSPENDED' ||
+        errorCode === 'MEMBERSHIP_DEACTIVATED' ||
+        errorCode === 'ORGANIZATION_SUSPENDED'
+      ) {
+        useAuthStore.getState().clearSession(false, false);
+        if (typeof window !== 'undefined') {
+          const reason =
+            errorCode === 'ACCOUNT_SUSPENDED'
+              ? 'suspended'
+              : errorCode === 'ORGANIZATION_SUSPENDED'
+              ? 'org_suspended'
+              : 'deactivated';
+          window.location.replace(`/login?reason=${reason}`);
+        }
+      }
 
       throw new ApiError(errorMessage, {
         code: errorCode,

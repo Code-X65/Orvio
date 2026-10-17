@@ -20,6 +20,7 @@ import { LoginPage } from '../../pages/auth/LoginPage';
 import { ForgotPasswordPage } from '../../pages/auth/ForgotPasswordPage';
 import { ResetPasswordPage } from '../../pages/auth/ResetPasswordPage';
 import { VerifyEmailPage } from '../../pages/auth/VerifyEmailPage';
+import { AcceptInvitePage } from '../../pages/auth/AcceptInvitePage';
 import { TrialPage } from '../../pages/marketing/TrialPage';
 import { TrialThanksPage } from '../../pages/marketing/TrialThanksPage';
 import { TenantDashboardPage } from '../../pages/app/TenantDashboardPage';
@@ -27,6 +28,7 @@ import { InventoryPage } from '../../pages/app/InventoryPage';
 import { AuthGuard } from '../guards/AuthGuard';
 import { GuestGuard } from '../guards/GuestGuard';
 import { SubdomainGuard } from '../guards/SubdomainGuard';
+import { RbacRouteGuard } from '../guards/RbacRouteGuard';
 import { isTenantSubdomain, getAccountsBaseUrl } from '../config/authUrls';
 
 function RootRedirect({ path }: { path: string }) {
@@ -43,9 +45,11 @@ function RootRedirect({ path }: { path: string }) {
 export const marketingRouter = createBrowserRouter([
   {
     path: '/',
+    element: <LandingPage />,
+  },
+  {
     element: <MarketingLayout />,
     children: [
-      { index: true, element: <LandingPage /> },
       { path: 'products', element: <ProductsPage /> },
       { path: 'products/inventory', element: <InventoryProductPage /> },
       { path: 'products/gym', element: <GymProductPage /> },
@@ -80,7 +84,9 @@ export const marketingRouter = createBrowserRouter([
     path: '/inventory',
     element: (
       <AuthGuard>
-        <InventoryPage />
+        <RbacRouteGuard requireApp="inventory">
+          <InventoryPage />
+        </RbacRouteGuard>
       </AuthGuard>
     ),
   },
@@ -88,7 +94,9 @@ export const marketingRouter = createBrowserRouter([
     path: '/inventory/*',
     element: (
       <AuthGuard>
-        <InventoryPage />
+        <RbacRouteGuard requireApp="inventory">
+          <InventoryPage />
+        </RbacRouteGuard>
       </AuthGuard>
     ),
   },
@@ -136,6 +144,10 @@ export const marketingRouter = createBrowserRouter([
     path: '/verify-email',
     element: <VerifyEmailPage />,
   },
+  {
+    path: '/invite',
+    element: <AcceptInvitePage />,
+  },
 ]);
 
 // Dedicated Tenant Workspace Router (<subdomain>.localhost:4000 or <subdomain>.orvio.com)
@@ -168,7 +180,9 @@ export const tenantRouter = createBrowserRouter([
     path: '/inventory',
     element: (
       <AuthGuard>
-        <InventoryPage />
+        <RbacRouteGuard requireApp="inventory">
+          <InventoryPage />
+        </RbacRouteGuard>
       </AuthGuard>
     ),
   },
@@ -176,7 +190,39 @@ export const tenantRouter = createBrowserRouter([
     path: '/inventory/*',
     element: (
       <AuthGuard>
-        <InventoryPage />
+        <RbacRouteGuard requireApp="inventory">
+          <InventoryPage />
+        </RbacRouteGuard>
+      </AuthGuard>
+    ),
+  },
+  {
+    path: '/employees',
+    element: (
+      <AuthGuard>
+        <RbacRouteGuard requireRole={['owner', 'manager']}>
+          <TenantDashboardPage />
+        </RbacRouteGuard>
+      </AuthGuard>
+    ),
+  },
+  {
+    path: '/apps',
+    element: (
+      <AuthGuard>
+        <RbacRouteGuard requireRole={['owner']}>
+          <TenantDashboardPage />
+        </RbacRouteGuard>
+      </AuthGuard>
+    ),
+  },
+  {
+    path: '/settings',
+    element: (
+      <AuthGuard>
+        <RbacRouteGuard requireRole={['owner', 'manager']}>
+          <TenantDashboardPage />
+        </RbacRouteGuard>
       </AuthGuard>
     ),
   },
@@ -219,6 +265,10 @@ export const tenantRouter = createBrowserRouter([
   {
     path: '/verify-email',
     element: <VerifyEmailPage />,
+  },
+  {
+    path: '/invite',
+    element: <AcceptInvitePage />,
   },
   {
     path: '*',

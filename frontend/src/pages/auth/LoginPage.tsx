@@ -73,6 +73,7 @@ export function LoginPage() {
 
   const location = useLocation();
   const searchParams = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '');
+  const reasonParam = searchParams.get('reason');
   const locationState = location.state as
     | { returnUrl?: string; from?: { pathname?: string; search?: string } }
     | undefined;
@@ -262,6 +263,31 @@ export function LoginPage() {
               : 'Enter your organization subdomain to continue to your workspace'}
           </p>
         </div>
+
+        {/* Deactivation / Suspension Alert Banner */}
+        {reasonParam && (
+          <div className="mt-4 sm:mx-auto sm:w-full sm:max-w-md z-10 px-4">
+            <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 flex items-start gap-3 text-rose-200 text-xs shadow-lg">
+              <AlertCircle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-bold text-rose-300">
+                  {reasonParam === 'suspended'
+                    ? 'Account Deactivated or Suspended'
+                    : reasonParam === 'org_suspended'
+                    ? 'Workspace Suspended'
+                    : 'Access Revoked'}
+                </p>
+                <p className="mt-1 text-slate-300 leading-relaxed">
+                  {reasonParam === 'suspended'
+                    ? 'Your user account has been deactivated or suspended. Please contact your organization administrator.'
+                    : reasonParam === 'org_suspended'
+                    ? 'This organization workspace is currently inactive or suspended. Please contact support.'
+                    : 'Your membership for this workspace has been revoked or deactivated. Please contact your administrator.'}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Form Container (No card background, no borders, max rounded-sm) */}
         <div className="mt-6 sm:mx-auto sm:w-full sm:max-w-md z-10">

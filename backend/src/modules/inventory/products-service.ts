@@ -155,7 +155,7 @@ export class ProductService {
     }
   }
 
-  async createProduct(orgId: string, input: CreateProductInput): Promise<Product> {
+  async createProduct(orgId: string, input: CreateProductInput, actorId?: string | null): Promise<Product> {
     // 1. Resolve SKU
     let sku = input.sku?.trim().toUpperCase();
     if (!sku) {
@@ -312,6 +312,19 @@ export class ProductService {
                 low_stock_threshold: input.lowStockThreshold ?? existingStockLevel.low_stock_threshold,
               },
             });
+            await this.db.stockMovement.create({
+              data: {
+                org_id: orgId,
+                branch_id: targetBranchId,
+                product_id: product.id,
+                movement_type: 'opening',
+                quantity: new Decimal(initialQty),
+                balance_before: new Decimal(0),
+                balance_after: new Decimal(initialQty),
+                actor_id: actorId ?? null,
+                notes: 'Initial opening stock on product creation',
+              },
+            });
           }
         } else {
           await this.db.stockLevel.create({
@@ -324,6 +337,21 @@ export class ProductService {
               low_stock_threshold: input.lowStockThreshold ?? null,
             },
           });
+          if (initialQty > 0) {
+            await this.db.stockMovement.create({
+              data: {
+                org_id: orgId,
+                branch_id: targetBranchId,
+                product_id: product.id,
+                movement_type: 'opening',
+                quantity: new Decimal(initialQty),
+                balance_before: new Decimal(0),
+                balance_after: new Decimal(initialQty),
+                actor_id: actorId ?? null,
+                notes: 'Initial opening stock on product creation',
+              },
+            });
+          }
         }
       }
     }
@@ -1099,7 +1127,12 @@ export class ProductService {
     return restored;
   }
 
-  async createVariant(orgId: string, productId: string, input: CreateVariantInput): Promise<ProductVariant> {
+  async createVariant(
+    orgId: string,
+    productId: string,
+    input: CreateVariantInput,
+    actorId?: string | null
+  ): Promise<ProductVariant> {
     const product = await this.db.product.findFirst({
       where: { id: productId, org_id: orgId, is_deleted: false },
     });
@@ -1245,6 +1278,21 @@ export class ProductService {
             product_id: productId,
             quantity_on_hand: new Decimal(input.initialStock),
             low_stock_threshold: input.lowStockThreshold !== undefined ? input.lowStockThreshold : null,
+          },
+        });
+
+        await this.db.stockMovement.create({
+          data: {
+            org_id: orgId,
+            branch_id: branchId,
+            product_id: productId,
+            variant_id: variant.id,
+            movement_type: 'opening',
+            quantity: new Decimal(input.initialStock),
+            balance_before: new Decimal(0),
+            balance_after: new Decimal(input.initialStock),
+            actor_id: actorId ?? null,
+            notes: 'Initial opening stock on variant creation',
           },
         });
       }

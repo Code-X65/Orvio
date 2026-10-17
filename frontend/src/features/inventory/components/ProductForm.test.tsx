@@ -331,4 +331,68 @@ describe('ProductForm Component', () => {
       })
     );
   });
+
+  it('displays read-only stock card and Adjust Stock button when editing an existing product', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    const onClose = vi.fn();
+    const mockProduct = {
+      id: 'prd-101',
+      org_id: 'org-1',
+      name: 'Existing Product',
+      sku: 'PRD-101',
+      barcode: '1234567890',
+      category_id: 'cat-1',
+      cost_price: 1000,
+      selling_price: 1500,
+      unit_of_measure: 'pcs' as const,
+      track_quantity: true,
+      low_stock_threshold: 5,
+      has_variants: false,
+      image_url: null,
+      is_active: true,
+      is_deleted: false,
+      business_type: null,
+      total_stock: 45,
+      reserved_stock: 5,
+      available_stock: 40,
+      stock_levels: [
+        {
+          branch_id: 'br-1',
+          branch_name: 'Main Warehouse',
+          quantity_on_hand: 45,
+          reserved: 5,
+          available: 40,
+        },
+      ],
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    render(
+      <ProductForm
+        isOpen={true}
+        onClose={onClose}
+        onSubmit={onSubmit}
+        editingProduct={mockProduct as any}
+        categories={mockCategories}
+        currency="NGN"
+      />
+    );
+
+    // Initial stock input must NOT be present
+    expect(screen.queryByText('Initial Stock Level')).not.toBeInTheDocument();
+
+    // Read-only stock card should be present
+    expect(screen.getByText('Current Stock Level')).toBeInTheDocument();
+    expect(screen.getByText('Read-Only')).toBeInTheDocument();
+    expect(screen.getAllByText('45').length).toBeGreaterThanOrEqual(1); // On Hand (total and/or branch breakdown)
+    expect(screen.getByText('5')).toBeInTheDocument(); // Reserved
+    expect(screen.getAllByText('40').length).toBeGreaterThanOrEqual(1); // Available
+    expect(screen.getByText('Main Warehouse')).toBeInTheDocument();
+
+    // Adjust Stock button should be present
+    const adjustBtn = screen.getByRole('button', { name: /Adjust Stock/i });
+    expect(adjustBtn).toBeInTheDocument();
+  });
 });
+

@@ -8,6 +8,8 @@ import {
 } from './branches-schemas.js';
 import { prisma as defaultPrisma } from '../../infrastructure/database/client.js';
 import { requireAuth } from '../../middleware/auth.js';
+import { requireRole } from '../../middleware/rbac.js';
+import { requireBranchScope } from '../../middleware/branch-guard.js';
 import { sendData } from '../../lib/envelope.js';
 import { AppError } from '../../lib/errors.js';
 import { z } from 'zod';
@@ -38,7 +40,24 @@ export async function branchRoutes(app: FastifyInstance) {
       const db = (request.server as { prisma?: typeof defaultPrisma }).prisma ?? defaultPrisma;
       const service = new BranchService(db);
 
-      const branches = await service.listBranches(orgId, query);
+      const membership = request.auth?.membership;
+      const isElevated = membership?.org_role === 'owner' || membership?.org_role === 'manager';
+      const hasAllBranches = isElevated || Boolean(membership?.scope_all_branches);
+
+      let allowedBranchIds: string[] | null = null;
+      if (!hasAllBranches && membership) {
+        if (membership.branch_accesses && Array.isArray(membership.branch_accesses)) {
+          allowedBranchIds = membership.branch_accesses.map((ba) => ba.branch_id);
+        } else {
+          const accesses = await db.membershipBranchAccess.findMany({
+            where: { membership_id: membership.id },
+            select: { branch_id: true },
+          });
+          allowedBranchIds = accesses.map((ba) => ba.branch_id);
+        }
+      }
+
+      const branches = await service.listBranches(orgId, query, allowedBranchIds);
       return sendData(reply, { branches }, 200);
     }
   );
@@ -47,7 +66,7 @@ export async function branchRoutes(app: FastifyInstance) {
   app.post(
     '/',
     {
-      preHandler: [requireAuth],
+      preHandler: [requireAuth, requireRole('owner', 'manager')],
       schema: {
         tags: ['Inventory Branches'],
         summary: 'Create a new branch for the organization',
@@ -70,7 +89,7 @@ export async function branchRoutes(app: FastifyInstance) {
   app.get(
     '/:id',
     {
-      preHandler: [requireAuth],
+      preHandler: [requireAuth, requireBranchScope],
       schema: {
         tags: ['Inventory Branches'],
         summary: 'Get details for a specific branch',
@@ -92,7 +111,7 @@ export async function branchRoutes(app: FastifyInstance) {
   app.get(
     '/:id/stock',
     {
-      preHandler: [requireAuth],
+      preHandler: [requireAuth, requireBranchScope],
       schema: {
         tags: ['Inventory Branches'],
         summary: 'Get inventory stock levels for a specific branch',
@@ -114,7 +133,7 @@ export async function branchRoutes(app: FastifyInstance) {
   app.patch(
     '/:id',
     {
-      preHandler: [requireAuth],
+      preHandler: [requireAuth, requireRole('owner', 'manager')],
       schema: {
         tags: ['Inventory Branches'],
         summary: 'Update branch details or set as primary',
@@ -138,7 +157,7 @@ export async function branchRoutes(app: FastifyInstance) {
   app.patch(
     '/:id/restore',
     {
-      preHandler: [requireAuth],
+      preHandler: [requireAuth, requireRole('owner', 'manager')],
       schema: {
         tags: ['Inventory Branches'],
         summary: 'Restore a soft-deleted branch',
@@ -160,7 +179,7 @@ export async function branchRoutes(app: FastifyInstance) {
   app.delete(
     '/:id',
     {
-      preHandler: [requireAuth],
+      preHandler: [requireAuth, requireRole('owner', 'manager')],
       schema: {
         tags: ['Inventory Branches'],
         summary: 'Archive/soft-delete branch with stock safeguard check',

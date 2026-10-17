@@ -1,13 +1,18 @@
 import type { FastifyRequest } from 'fastify';
-import type { User, Membership, Organization } from '@prisma/client';
+import type { User, Membership, Organization, Branch, MembershipBranchAccess } from '@prisma/client';
 import { verifyAccessToken, type AccessTokenClaims } from '../lib/tokens.js';
 import { prisma as defaultPrisma } from '../infrastructure/database/client.js';
 import { AppError } from '../lib/errors.js';
 
+export type MembershipWithBranches = Membership & {
+  organization?: Organization | null;
+  branch_accesses?: (MembershipBranchAccess & { branch: Branch })[];
+};
+
 export interface AuthContext {
   claims: AccessTokenClaims;
   user: User;
-  membership?: Membership | null;
+  membership?: MembershipWithBranches | null;
   organization?: Organization | null;
 }
 
@@ -44,14 +49,22 @@ export async function requireAuth(request: FastifyRequest): Promise<void> {
         where: claims.org_id ? { org_id: claims.org_id, status: 'active' } : { status: 'active' },
         include: {
           organization: true,
+          branch_accesses: {
+            include: {
+              branch: true,
+            },
+          },
         },
         take: 1,
       },
     },
   });
 
-  if (!user || user.status === 'deleted' || user.status === 'suspended') {
-    throw new AppError('UNAUTHORIZED', 'User account not found or suspended', 401);
+  if (!user) {
+    throw new AppError('UNAUTHORIZED', 'User account not found', 401);
+  }
+  if (user.status === 'deleted' || user.status === 'suspended') {
+    throw new AppError('ACCOUNT_SUSPENDED', 'Your account has been deactivated or suspended.', 401);
   }
 
   // Check if session has been revoked (instant JWT access token revocation on logout/session revoke)
@@ -71,7 +84,7 @@ export async function requireAuth(request: FastifyRequest): Promise<void> {
     }
   }
 
-  const primaryMembership = user.memberships[0] ?? null;
+  const primaryMembership = (user.memberships[0] as MembershipWithBranches) ?? null;
   if (!primaryMembership) {
     if (claims.membership_id) {
       await db.refreshToken.updateMany({
@@ -79,11 +92,13 @@ export async function requireAuth(request: FastifyRequest): Promise<void> {
         data: { revoked_at: new Date() },
       });
     }
-    throw new AppError('FORBIDDEN', 'Your membership is no longer active', 403);
+    throw new AppError('MEMBERSHIP_DEACTIVATED', 'Your access to this organization has been revoked or deactivated.', 403);
   }
   if (
     claims.membership_id &&
-    (claims.membership_id !== primaryMembership.id || claims.role !== primaryMembership.role)
+    (claims.membership_id !== primaryMembership.id ||
+      claims.role !== primaryMembership.role ||
+      (claims.org_role && claims.org_role !== primaryMembership.org_role))
   ) {
     await db.refreshToken.updateMany({
       where: { membership_id: primaryMembership.id, revoked_at: null },
@@ -96,7 +111,7 @@ export async function requireAuth(request: FastifyRequest): Promise<void> {
     primaryMembership.organization &&
     (primaryMembership.organization.status === 'suspended' || primaryMembership.organization.status === 'deleted')
   ) {
-    throw new AppError('ORGANIZATION_ACCESS_DENIED', 'This workspace is not active', 403);
+    throw new AppError('ORGANIZATION_SUSPENDED', 'Organization workspace is suspended or deactivated.', 403);
   }
 
   request.auth = {

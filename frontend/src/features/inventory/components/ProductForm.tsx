@@ -15,9 +15,12 @@ import {
   Tag,
   ImageIcon,
   Plus,
+  SlidersHorizontal,
 } from 'lucide-react';
 import { brandApi, type Brand } from '../brands-api';
+import { branchApi, type Branch } from '../branches-api';
 import { BrandForm } from './BrandForm';
+import { AdjustStockModal } from './AdjustStockModal';
 import { Button } from '../../../components/ui/button';
 import { Input } from '../../../components/ui/input';
 import { Badge } from '../../../components/ui/badge';
@@ -33,6 +36,7 @@ import {
   type MeasurementUnit,
   type CreateProductPayload,
   type UpdateProductPayload,
+  type BranchStockItem,
 } from '../products-api';
 import { ImageUploader, type UploadedImage } from '../../../components/ui/ImageUploader';
 
@@ -205,6 +209,15 @@ export function ProductForm({
   const [unitOfMeasure, setUnitOfMeasure] = React.useState<MeasurementUnit>('pcs');
   const [trackQuantity, setTrackQuantity] = React.useState(true);
   const [initialStock, setInitialStock] = React.useState<number | ''>(0);
+  const [selectedBranchId, setSelectedBranchId] = React.useState<string>('');
+  const [branches, setBranches] = React.useState<Branch[]>([]);
+  const [isAdjustModalOpen, setIsAdjustModalOpen] = React.useState(false);
+  const [currentStock, setCurrentStock] = React.useState<{
+    total: number;
+    reserved: number;
+    available: number;
+    levels: BranchStockItem[];
+  } | null>(null);
   const [lowStockThreshold, setLowStockThreshold] = React.useState<number | ''>(5);
   const [hasVariants, setHasVariants] = React.useState(false);
   const [description, setDescription] = React.useState('');
@@ -240,15 +253,27 @@ export function ProductForm({
     return () => clearTimeout(timer);
   }, [isOpen]);
 
-  // Load brands on open
-  React.useEffect(() => {
-    if (isOpen) {
-      brandApi
-        .getBrands({ activeOnly: true, limit: 100 })
-        .then((res) => setBrands(res.brands || []))
-        .catch(() => {});
-    }
-  }, [isOpen]);
+    // Load brands and branches on open
+    React.useEffect(() => {
+      if (isOpen) {
+        brandApi
+          .getBrands({ activeOnly: true, limit: 100 })
+          .then((res) => setBrands(res.brands || []))
+          .catch(() => {});
+
+        branchApi
+          .getBranches({ activeOnly: true })
+          .then((res) => {
+            const list = res.branches || [];
+            setBranches(list);
+            const primary = list.find((b) => b.is_primary) || list[0];
+            if (primary) {
+              setSelectedBranchId(primary.id);
+            }
+          })
+          .catch(() => {});
+      }
+    }, [isOpen]);
 
   // Sync state on edit / open
   React.useEffect(() => {
@@ -274,6 +299,14 @@ export function ProductForm({
       setUnitOfMeasure(editingProduct.unit_of_measure);
       setTrackQuantity(editingProduct.track_quantity);
       setInitialStock(''); // Not editable after creation
+      setCurrentStock({
+        total: editingProduct.total_stock ?? 0,
+        reserved: editingProduct.reserved_stock ?? 0,
+        available:
+          editingProduct.available_stock ??
+          Math.max(0, (editingProduct.total_stock ?? 0) - (editingProduct.reserved_stock ?? 0)),
+        levels: editingProduct.stock_levels || [],
+      });
       setLowStockThreshold(editingProduct.low_stock_threshold);
       setHasVariants(editingProduct.has_variants);
       setDescription(editingProduct.description || '');
@@ -494,7 +527,8 @@ export function ProductForm({
         compareAtPrice: compareNum,
         unitOfMeasure,
         trackQuantity,
-        initialStock: initialStock === '' ? 0 : Number(initialStock),
+        initialStock: hasVariants ? 0 : (initialStock === '' ? 0 : Number(initialStock)),
+        branchId: hasVariants ? undefined : (selectedBranchId || undefined),
         lowStockThreshold: lowStockThreshold === '' ? 5 : Number(lowStockThreshold),
         hasVariants,
         description: description.trim() || undefined,
@@ -921,7 +955,7 @@ export function ProductForm({
 
               {/* Initial Stock & Low Stock Threshold */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {!editingProduct && (
+                {!editingProduct ? (
                   <div>
                     <label className="block text-xs font-semibold text-slate-300 mb-1.5">
                       Initial Stock Level
@@ -929,17 +963,115 @@ export function ProductForm({
                     <Input
                       type="number"
                       min="0"
-                      value={initialStock}
+                      value={hasVariants ? 0 : initialStock}
                       onChange={(e) =>
                         setInitialStock(e.target.value === '' ? '' : Number(e.target.value))
                       }
                       placeholder="0"
-                      disabled={!trackQuantity}
+                      disabled={!trackQuantity || hasVariants}
                       className="bg-[#121316] border-[#2d3139] text-white text-sm focus:border-[#985184] disabled:opacity-50"
                     />
                     <span className="text-[10px] text-slate-500 mt-1 block">
-                      Assigned to primary branch
+                      {hasVariants
+                        ? 'Stock is tracked per variant below'
+                        : branches.length > 1
+                          ? 'Select target branch for opening stock below'
+                          : 'Assigned to primary branch'}
                     </span>
+                    {!hasVariants && trackQuantity && branches.length > 1 && (
+                      <div className="mt-2.5">
+                        <label className="block text-[11px] font-medium text-slate-400 mb-1">
+                          Assign to Branch:
+                        </label>
+                        <select
+                          value={selectedBranchId}
+                          onChange={(e) => setSelectedBranchId(e.target.value)}
+                          className="w-full text-xs bg-[#121316] border border-[#2d3139] rounded px-2.5 py-1.5 text-white focus:outline-none focus:border-[#985184]"
+                        >
+                          {branches.map((b) => (
+                            <option key={b.id} value={b.id}>
+                              {b.name} {b.is_primary ? '(Primary)' : ''}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="sm:col-span-2 p-3.5 bg-[#121316] border border-[#2d3139] rounded-lg space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Package className="w-4 h-4 text-[#985184]" />
+                        <span className="text-xs font-semibold text-slate-200">Current Stock Level</span>
+                        <Badge variant="outline" className="text-[10px] py-0 px-1.5 border-[#2d3139] text-slate-400">
+                          Read-Only
+                        </Badge>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setIsAdjustModalOpen(true)}
+                        className="text-xs h-7 px-2.5 border-[#2d3139] hover:bg-[#202227] text-slate-200"
+                      >
+                        <SlidersHorizontal className="w-3.5 h-3.5 mr-1.5 text-[#985184]" />
+                        Adjust Stock
+                      </Button>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2 py-1">
+                      <div className="bg-[#18191e] p-2.5 rounded border border-[#2d3139]/60">
+                        <div className="text-[10px] text-slate-500 uppercase tracking-wider">On Hand</div>
+                        <div className="text-sm font-bold text-white mt-0.5">
+                          {currentStock?.total ?? editingProduct.total_stock ?? 0}
+                        </div>
+                      </div>
+                      <div className="bg-[#18191e] p-2.5 rounded border border-[#2d3139]/60">
+                        <div className="text-[10px] text-slate-500 uppercase tracking-wider">Reserved</div>
+                        <div className="text-sm font-bold text-amber-400 mt-0.5">
+                          {currentStock?.reserved ?? editingProduct.reserved_stock ?? 0}
+                        </div>
+                      </div>
+                      <div className="bg-[#18191e] p-2.5 rounded border border-[#2d3139]/60">
+                        <div className="text-[10px] text-slate-500 uppercase tracking-wider">Available</div>
+                        <div className="text-sm font-bold text-emerald-400 mt-0.5">
+                          {currentStock?.available ??
+                            editingProduct.available_stock ??
+                            Math.max(
+                              0,
+                              (editingProduct.total_stock ?? 0) - (editingProduct.reserved_stock ?? 0)
+                            )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {((currentStock?.levels && currentStock.levels.length > 0) ||
+                      (editingProduct.stock_levels && editingProduct.stock_levels.length > 0)) && (
+                      <div className="pt-2 border-t border-[#2d3139]/50">
+                        <div className="text-[11px] font-medium text-slate-400 mb-1.5">Branch Breakdown:</div>
+                        <div className="space-y-1 max-h-32 overflow-y-auto">
+                          {(currentStock?.levels || editingProduct.stock_levels || []).map((lvl) => (
+                            <div
+                              key={lvl.branch_id}
+                              className="flex items-center justify-between text-xs py-1 px-2.5 rounded bg-[#18191e]/50 border border-[#2d3139]/30"
+                            >
+                              <span className="text-slate-300 font-medium">{lvl.branch_name}</span>
+                              <div className="flex items-center gap-3">
+                                <span className="text-slate-400 text-[11px]">
+                                  On Hand: <strong className="text-white">{lvl.quantity_on_hand}</strong>
+                                </span>
+                                <span className="text-slate-400 text-[11px]">
+                                  Available: <strong className="text-emerald-400">{lvl.available}</strong>
+                                </span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    <p className="text-[10px] text-slate-500 italic">
+                      Direct stock editing is disabled to preserve audit integrity. Use "Adjust Stock" to log audited changes with reason codes.
+                    </p>
                   </div>
                 )}
 
@@ -1273,6 +1405,37 @@ export function ProductForm({
           setBrandId(createdBrand.id);
         }}
       />
+
+      {/* Adjust Stock Modal from Product Form */}
+      {editingProduct && isAdjustModalOpen && (
+        <AdjustStockModal
+          isOpen={isAdjustModalOpen}
+          onClose={() => setIsAdjustModalOpen(false)}
+          initialProductId={editingProduct.id}
+          branches={branches.map((b) => ({ id: b.id, name: b.name }))}
+          branchId={selectedBranchId || undefined}
+          onSuccess={async () => {
+            setIsAdjustModalOpen(false);
+            if (editingProduct?.id) {
+              try {
+                const res = await productApi.getProduct(editingProduct.id);
+                if (res?.product) {
+                  setCurrentStock({
+                    total: res.product.total_stock ?? 0,
+                    reserved: res.product.reserved_stock ?? 0,
+                    available:
+                      res.product.available_stock ??
+                      Math.max(0, (res.product.total_stock ?? 0) - (res.product.reserved_stock ?? 0)),
+                    levels: res.product.stock_levels || [],
+                  });
+                }
+              } catch {
+                // Ignore fallback
+              }
+            }
+          }}
+        />
+      )}
     </>
   );
 }

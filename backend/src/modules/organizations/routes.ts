@@ -4,6 +4,7 @@ import { OrgService } from './service.js';
 import { prisma as defaultPrisma } from '../../infrastructure/database/client.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { requireActiveOrg } from '../../middleware/tenant-guard.js';
+import { requireRole } from '../../middleware/rbac.js';
 import { sendData } from '../../lib/envelope.js';
 import { AppError } from '../../lib/errors.js';
 import { AUTH_RATE_LIMITS } from '../auth/rate-limiter.js';
@@ -152,7 +153,7 @@ export async function orgRoutes(app: FastifyInstance) {
   app.post(
     '/products',
     {
-      preHandler: [requireAuth, requireActiveOrg],
+      preHandler: [requireAuth, requireActiveOrg, requireRole('owner')],
       schema: {
         tags: ['Organizations'],
         summary: 'Install an application module in the workspace',
@@ -177,7 +178,7 @@ export async function orgRoutes(app: FastifyInstance) {
   app.delete(
     '/products/:productKey',
     {
-      preHandler: [requireAuth, requireActiveOrg],
+      preHandler: [requireAuth, requireActiveOrg, requireRole('owner')],
       schema: {
         tags: ['Organizations'],
         summary: 'Uninstall an application module from the workspace',
@@ -202,7 +203,7 @@ export async function orgRoutes(app: FastifyInstance) {
   app.patch(
     '/products/:productKey/primary',
     {
-      preHandler: [requireAuth, requireActiveOrg],
+      preHandler: [requireAuth, requireActiveOrg, requireRole('owner')],
       schema: {
         tags: ['Organizations'],
         summary: 'Set an application as the primary default for the workspace',
@@ -227,7 +228,7 @@ export async function orgRoutes(app: FastifyInstance) {
   app.patch(
     '/products/:productKey/settings',
     {
-      preHandler: [requireAuth, requireActiveOrg],
+      preHandler: [requireAuth, requireActiveOrg, requireRole('owner')],
       schema: {
         tags: ['Organizations'],
         summary: 'Update application-specific configuration settings',

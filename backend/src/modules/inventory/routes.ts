@@ -56,7 +56,7 @@ export async function inventoryRoutes(app: FastifyInstance) {
 
       const db = (request.server as { prisma?: typeof defaultPrisma }).prisma ?? defaultPrisma;
       const service = new InventoryOnboardingService(db);
-      const status = await service.getStatus(orgId);
+      const status = await service.getStatus(orgId, request.auth?.user?.id, request.auth?.membership);
 
       return sendData(reply, status, 200);
     }

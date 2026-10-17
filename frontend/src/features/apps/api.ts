@@ -31,6 +31,9 @@ export interface WorkspaceDetailsResponse {
   membership: {
     id: string;
     role: string;
+    org_role?: string;
+    scope_all_branches?: boolean;
+    app_access?: string[];
     status: string;
   } | null;
   branch: {

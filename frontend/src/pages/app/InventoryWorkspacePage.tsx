@@ -31,6 +31,7 @@ import {
   Layers,
   PanelLeftClose,
   PanelLeftOpen,
+  UserCheck,
 } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { SeoHead } from '../../components/seo/SeoHead';
@@ -40,6 +41,7 @@ import { BrandsPage } from '../../features/inventory/components/BrandsPage';
 import { ProductsPage } from '../../features/inventory/components/ProductsPage';
 import { StockManagementPage } from '../../features/inventory/components/StockManagementPage';
 import { SuppliersPage } from '../../features/inventory/components/SuppliersPage';
+import { StaffListPage } from '../../features/staff/components/StaffListPage';
 import { OperationalSectionView, type OperationalSection } from '../../features/inventory/components/OperationalSectionView';
 import { BranchManagementModal } from '../../features/inventory/components/BranchManagementModal';
 import { AddBranchWizardModal } from '../../features/inventory/components/AddBranchWizardModal';
@@ -88,7 +90,32 @@ export function InventoryWorkspacePage({
   const user = useAuthStore((s) => s.user);
   const { status: wsStatus } = useOrgWebSocket(organization.id, accessToken);
 
-  const [branchList, setBranchList] = React.useState(branches || []);
+  // Compute authenticated user role & branch permissions from JWT claims
+  const jwtClaims = React.useMemo(() => {
+    if (!accessToken) return null;
+    return getJwtPayload<{
+      role?: string;
+      org_role?: string;
+      scope_all_branches?: boolean;
+      branch_scope?: string[];
+    }>(accessToken);
+  }, [accessToken]);
+
+  const rawRole = (jwtClaims?.org_role || jwtClaims?.role || 'owner').toLowerCase();
+  const isOwner = rawRole === 'owner';
+  const isManager = rawRole === 'manager';
+  const isElevated = isOwner || isManager;
+  const hasGlobalBranchScope = isElevated || Boolean(jwtClaims?.scope_all_branches);
+  const permittedBranchScope = jwtClaims?.branch_scope || [];
+
+  // Scoped branches for non-elevated staff
+  const scopedInitialBranches = React.useMemo(() => {
+    const base = branches || [];
+    if (hasGlobalBranchScope || permittedBranchScope.length === 0) return base;
+    return base.filter((b) => permittedBranchScope.includes(b.id));
+  }, [branches, hasGlobalBranchScope, permittedBranchScope]);
+
+  const [branchList, setBranchList] = React.useState(scopedInitialBranches);
   const [isBranchModalOpen, setIsBranchModalOpen] = React.useState(false);
   const [isAddBranchWizardOpen, setIsAddBranchWizardOpen] = React.useState(false);
   const [isSwitchingBranch, setIsSwitchingBranch] = React.useState(false);
@@ -109,15 +136,13 @@ export function InventoryWorkspacePage({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // Compute authenticated user role from JWT token or fallback
+  // Compute authenticated user role label
   const userRole = React.useMemo(() => {
-    if (!accessToken) return 'Owner';
-    const payload = getJwtPayload<{ role?: string }>(accessToken);
-    if (payload?.role) {
-      return payload.role.charAt(0).toUpperCase() + payload.role.slice(1).toLowerCase();
+    if (rawRole) {
+      return rawRole.charAt(0).toUpperCase() + rawRole.slice(1);
     }
     return 'Owner';
-  }, [accessToken]);
+  }, [rawRole]);
 
   // Compute authenticated user initials
   const userInitials = React.useMemo(() => {
@@ -204,16 +229,22 @@ export function InventoryWorkspacePage({
   const [selectedBranchId, setSelectedBranchId] = React.useState<string>(() => {
     const params = new URLSearchParams(window.location.search);
     const paramBranch = params.get('branch');
-    if (paramBranch) {
+    const available = scopedInitialBranches.length > 0 ? scopedInitialBranches : (branches || []);
+
+    if (hasGlobalBranchScope) {
       if (paramBranch === 'all') return 'all';
-      if (branches.some((b) => b.id === paramBranch)) return paramBranch;
-    }
-    const sessionBranch = sessionStorage.getItem(`orvio.selectedBranch.${orgKey}`);
-    if (sessionBranch) {
+      if (paramBranch && available.some((b) => b.id === paramBranch)) return paramBranch;
+      const sessionBranch = sessionStorage.getItem(`orvio.selectedBranch.${orgKey}`);
       if (sessionBranch === 'all') return 'all';
-      if (branches.some((b) => b.id === sessionBranch)) return sessionBranch;
+      if (sessionBranch && available.some((b) => b.id === sessionBranch)) return sessionBranch;
+      return branch?.id || available[0]?.id || 'all';
+    } else {
+      // Subordinate role: MUST be a specific authorized branch
+      if (paramBranch && available.some((b) => b.id === paramBranch)) return paramBranch;
+      const sessionBranch = sessionStorage.getItem(`orvio.selectedBranch.${orgKey}`);
+      if (sessionBranch && available.some((b) => b.id === sessionBranch)) return sessionBranch;
+      return branch?.id || available[0]?.id || '';
     }
-    return branch?.id || branches[0]?.id || 'all';
   });
 
   const selectedBranch = React.useMemo(() => {
@@ -224,6 +255,11 @@ export function InventoryWorkspacePage({
   const handleSelectBranchId = React.useCallback(
     (id: string) => {
       if (id === selectedBranchId) return;
+
+      // Prevent non-authorized staff from selecting "all" or branches outside their permitted scope
+      if (!hasGlobalBranchScope && (id === 'all' || !branchList.some((b) => b.id === id))) {
+        return;
+      }
 
       const fromName = selectedBranchId === 'all' ? 'All Branches (Overview)' : (branchList.find((b) => b.id === selectedBranchId)?.name || 'Previous Location');
       const toName = id === 'all' ? 'All Branches (Overview)' : (branchList.find((b) => b.id === id)?.name || 'Selected Location');
@@ -249,23 +285,47 @@ export function InventoryWorkspacePage({
         }, 350);
       }, 550);
     },
-    [selectedBranchId, branchList, orgKey, location.pathname, location.search, navigate]
+    [selectedBranchId, branchList, orgKey, location.pathname, location.search, navigate, hasGlobalBranchScope]
   );
 
   const handleRefreshBranches = React.useCallback(async () => {
     try {
       const res = await branchApi.getBranches({ activeOnly: true });
       if (res.branches) {
-        setBranchList(res.branches);
-        if (selectedBranchId !== 'all' && !res.branches.some((b) => b.id === selectedBranchId)) {
-          const primary = res.branches.find((b) => b.is_primary) || res.branches[0];
-          handleSelectBranchId(primary?.id || 'all');
+        const filtered = !hasGlobalBranchScope && permittedBranchScope.length > 0
+          ? res.branches.filter((b) => permittedBranchScope.includes(b.id))
+          : res.branches;
+        setBranchList(filtered);
+        if (selectedBranchId !== 'all' && !filtered.some((b) => b.id === selectedBranchId)) {
+          const primary = filtered.find((b) => b.is_primary) || filtered[0];
+          handleSelectBranchId(primary?.id || (hasGlobalBranchScope ? 'all' : ''));
         }
       }
     } catch (err) {
       console.error('Failed to refresh branches:', err);
     }
-  }, [selectedBranchId, handleSelectBranchId]);
+  }, [selectedBranchId, handleSelectBranchId, hasGlobalBranchScope, permittedBranchScope]);
+
+  // URL Protection & Tampering Prevention: sanitize URL if non-owner is requesting unauthorized branch
+  React.useEffect(() => {
+    if (!hasGlobalBranchScope && branchList.length > 0) {
+      const searchParams = new URLSearchParams(location.search);
+      const urlBranch = searchParams.get('branch');
+      if (urlBranch === 'all' || (urlBranch && !branchList.some((b) => b.id === urlBranch))) {
+        const fallbackBranchObj = (branch?.id && branchList.find((b) => b.id === branch.id))
+          ? branchList.find((b) => b.id === branch.id)
+          : branchList[0];
+        const fallbackBranch = fallbackBranchObj?.id;
+        if (fallbackBranch && fallbackBranch !== selectedBranchId) {
+          toast.warning('Access Restricted', {
+            description: `You don't have access to that branch; switched to your assigned branch: ${fallbackBranchObj?.name || 'Assigned Branch'}`,
+            id: 'unauthorized-branch-warning',
+          });
+          handleSelectBranchId(fallbackBranch);
+        }
+      }
+    }
+  }, [hasGlobalBranchScope, branchList, location.search, branch?.id, selectedBranchId, handleSelectBranchId]);
 
   const [currentCurrency] = React.useState('NGN');
 
@@ -305,6 +365,7 @@ export function InventoryWorkspacePage({
     if (currentPath === '/inventory/purchase-orders' || currentPath === '/inventory/purchase-order') return 'Purchase Orders';
     if (currentPath === '/inventory/returns' || currentPath === '/inventory/return') return 'Returns';
     if (currentPath === '/inventory/reports' || currentPath === '/inventory/report') return 'Reports';
+    if (currentPath === '/inventory/settings/staff' || currentPath === '/inventory/staff') return 'Staff & Access';
     if (currentPath === '/inventory/settings' || currentPath === '/inventory/setting') return 'Settings';
     return 'Dashboard';
   }, [currentPath]);
@@ -388,15 +449,23 @@ export function InventoryWorkspacePage({
   ];
 
   // Secondary Navigation Items following CATALOG
-  const secondaryNavItems = [
-    { name: 'Inventory', icon: Boxes, path: '/inventory/stock' },
-    { name: 'Orders', icon: ShoppingCart, path: '/inventory/orders' },
-    { name: 'Suppliers', icon: Users, path: '/inventory/suppliers' },
-    { name: 'Purchase Orders', icon: FileText, path: '/inventory/purchase-orders' },
-    { name: 'Returns', icon: RotateCcw, path: '/inventory/returns' },
-    { name: 'Reports', icon: BarChart3, path: '/inventory/reports' },
-    { name: 'Settings', icon: Settings, path: '/inventory/settings' },
-  ];
+  const secondaryNavItems = React.useMemo(() => {
+    const items = [
+      { name: 'Inventory', icon: Boxes, path: '/inventory/stock' },
+      { name: 'Orders', icon: ShoppingCart, path: '/inventory/orders' },
+      { name: 'Suppliers', icon: Users, path: '/inventory/suppliers' },
+      { name: 'Purchase Orders', icon: FileText, path: '/inventory/purchase-orders' },
+      { name: 'Returns', icon: RotateCcw, path: '/inventory/returns' },
+      { name: 'Reports', icon: BarChart3, path: '/inventory/reports' },
+    ];
+    if (isElevated) {
+      items.push(
+        { name: 'Staff & Access', icon: UserCheck, path: '/inventory/settings/staff' },
+        { name: 'Settings', icon: Settings, path: '/inventory/settings' }
+      );
+    }
+    return items;
+  }, [isElevated]);
 
   // Daily Orders & Profit Data (May 1 - May 15)
   const dailyOrdersData = [
@@ -843,18 +912,20 @@ export function InventoryWorkspacePage({
                   : 'Stock synced in real-time across checkout counters and registers.'}
               </p>
 
-              <Button
-                type="button"
-                size="sm"
-                onClick={() => {
-                  openAction('manage-branches');
-                  setIsBranchModalOpen(true);
-                }}
-                className="w-full bg-[#985184] hover:bg-[#854372] text-white font-semibold text-xs h-8 rounded-sm shadow-sm flex items-center justify-center gap-1.5 cursor-pointer"
-              >
-                <Settings className="w-3.5 h-3.5" />
-                <span>Branch Settings</span>
-              </Button>
+              {isElevated && (
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => {
+                    openAction('manage-branches');
+                    setIsBranchModalOpen(true);
+                  }}
+                  className="w-full bg-[#985184] hover:bg-[#854372] text-white font-semibold text-xs h-8 rounded-sm shadow-sm flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <Settings className="w-3.5 h-3.5" />
+                  <span>Branch Settings</span>
+                </Button>
+              )}
 
               {/* Authenticated User Profile */}
               <div
@@ -884,21 +955,23 @@ export function InventoryWorkspacePage({
           ) : (
             /* Icon Only Bottom Store Button & User Avatar */
             <div className="flex flex-col items-center gap-3 pt-3 border-t border-[#2d3139]/40 w-full">
-              <button
-                type="button"
-                onClick={() => {
-                  openAction('manage-branches');
-                  setIsBranchModalOpen(true);
-                }}
-                title={`Branch Settings (${selectedBranchId === 'all' ? 'All Branches' : selectedBranch?.name || 'Primary Store'})`}
-                aria-label="Branch Settings"
-                className="w-10 h-10 rounded-sm bg-[#181a20] hover:bg-[#985184]/20 border border-[#2d3139] text-[#fbb945] flex items-center justify-center transition-colors cursor-pointer relative group"
-              >
-                <Store className="w-4 h-4" />
-                <span className="absolute left-full ml-3 px-2 py-1 bg-[#1e2026] text-white text-[11px] font-medium rounded-xs shadow-lg border border-[#2d3139] whitespace-nowrap opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity z-50">
-                  {selectedBranchId === 'all' ? 'All Branches' : selectedBranch?.name || 'Branch Settings'}
-                </span>
-              </button>
+              {isElevated && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    openAction('manage-branches');
+                    setIsBranchModalOpen(true);
+                  }}
+                  title={`Branch Settings (${selectedBranchId === 'all' ? 'All Branches' : selectedBranch?.name || 'Primary Store'})`}
+                  aria-label="Branch Settings"
+                  className="w-10 h-10 rounded-sm bg-[#181a20] hover:bg-[#985184]/20 border border-[#2d3139] text-[#fbb945] flex items-center justify-center transition-colors cursor-pointer relative group"
+                >
+                  <Store className="w-4 h-4" />
+                  <span className="absolute left-full ml-3 px-2 py-1 bg-[#1e2026] text-white text-[11px] font-medium rounded-xs shadow-lg border border-[#2d3139] whitespace-nowrap opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity z-50">
+                    {selectedBranchId === 'all' ? 'All Branches' : selectedBranch?.name || 'Branch Settings'}
+                  </span>
+                </button>
+              )}
 
               {/* Authenticated User Avatar (Icon Only) */}
               <div
@@ -967,10 +1040,13 @@ export function InventoryWorkspacePage({
             <div className="flex items-center gap-2 sm:gap-4">
               {/* Branch Selector Dropdown */}
               <div className="relative">
-                <div className="flex items-center gap-1.5 bg-[#181a20] border border-[#2d3139] hover:border-[#3d424e] px-2.5 py-1.5 rounded-sm">
+                <div className={`flex items-center gap-1.5 bg-[#181a20] border border-[#2d3139] px-2.5 py-1.5 rounded-sm ${
+                  !hasGlobalBranchScope && branchList.length <= 1 ? 'opacity-90' : 'hover:border-[#3d424e]'
+                }`}>
                   <Store className="w-3.5 h-3.5 text-[#fbb945] shrink-0" />
                   <select
                     value={selectedBranchId}
+                    disabled={!hasGlobalBranchScope && branchList.length <= 1}
                     onChange={(e) => {
                       if (e.target.value === '__add_branch__') {
                         openAction('add-branch');
@@ -982,27 +1058,37 @@ export function InventoryWorkspacePage({
                         handleSelectBranchId(e.target.value);
                       }
                     }}
-                    className="bg-transparent text-xs font-semibold text-slate-200 pr-5 appearance-none cursor-pointer focus:outline-hidden"
+                    className={`bg-transparent text-xs font-semibold text-slate-200 pr-5 appearance-none focus:outline-hidden ${
+                      !hasGlobalBranchScope && branchList.length <= 1 ? 'cursor-default' : 'cursor-pointer'
+                    }`}
                   >
-                    <option value="all" className="bg-[#181a20] text-white">
-                      All Branches (Org-wide)
-                    </option>
+                    {hasGlobalBranchScope && (
+                      <option value="all" className="bg-[#181a20] text-white">
+                        All Branches (Org-wide)
+                      </option>
+                    )}
                     {branchList.map((b) => (
                       <option key={b.id} value={b.id} className="bg-[#181a20] text-white">
                         {b.is_primary ? '★ ' : ''}{b.name} ({b.type})
                       </option>
                     ))}
-                    <option disabled className="bg-[#181a20] text-slate-500">
-                      ──────────
-                    </option>
-                    <option value="__add_branch__" className="bg-[#181a20] text-[#fbb945] font-semibold">
-                      ＋ Add New Branch...
-                    </option>
-                    <option value="__manage__" className="bg-[#181a20] text-slate-300">
-                      ⚙ Manage Branches Hub...
-                    </option>
+                    {isElevated && (
+                      <>
+                        <option disabled className="bg-[#181a20] text-slate-500">
+                          ──────────
+                        </option>
+                        <option value="__add_branch__" className="bg-[#181a20] text-[#fbb945] font-semibold">
+                          ＋ Add New Branch...
+                        </option>
+                        <option value="__manage__" className="bg-[#181a20] text-slate-300">
+                          ⚙ Manage Branches Hub...
+                        </option>
+                      </>
+                    )}
                   </select>
-                  <ChevronDown className="w-3.5 h-3.5 absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                  {(hasGlobalBranchScope || branchList.length > 1) && (
+                    <ChevronDown className="w-3.5 h-3.5 absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                  )}
                 </div>
               </div>
 
@@ -1150,6 +1236,13 @@ export function InventoryWorkspacePage({
                     search: `?${params.toString()}`,
                   });
                 }}
+              />
+            ) : activeTab === 'Staff & Access' ? (
+              <StaffListPage
+                organization={organization && organization.id ? { id: organization.id, name: organization.name, subdomain: organization.subdomain } : null}
+                branches={branchList}
+                activeBranchId={selectedBranchId === 'all' ? undefined : selectedBranchId}
+                contextApp="inventory"
               />
             ) : activeTab === 'Dashboard' ? (
               <>
