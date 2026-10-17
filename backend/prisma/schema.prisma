@@ -98,6 +98,9 @@ model User {
   branch_products_added BranchProduct[] @relation("BranchProductAddedBy")
   catalog_imports_imported CatalogImport[] @relation("CatalogImportImportedBy")
   stock_movements_authored StockMovement[] @relation("StockMovementActor")
+  suppliers_created        Supplier[]      @relation("SupplierCreatedBy")
+  stock_receipts_created   StockReceipt[]  @relation("ReceiptCreatedBy")
+  stock_receipts_received  StockReceipt[]  @relation("ReceiptReceivedBy")
 
   @@index([phone])
   @@map("users")
@@ -140,6 +143,8 @@ model Organization {
   price_histories      ProductPriceHistory[]
   audit_logs           AuditLog[]
   product_images       ProductImage[]
+  suppliers            Supplier[]
+  stock_receipts       StockReceipt[]
 
   @@map("organizations")
 }
@@ -191,6 +196,7 @@ model Branch {
   imports_sourced       CatalogImport[]       @relation("ImportSource")
   categories            Category[]            @relation("BranchCategories")
   brands                Brand[]               @relation("BranchBrands")
+  stock_receipts        StockReceipt[]
 
   @@index([org_id])
   @@index([org_id, is_deleted])
@@ -418,6 +424,7 @@ model Product {
   stock_movements     StockMovement[]
   price_history       ProductPriceHistory[]
   branch_assignments  BranchProduct[]
+  stock_receipt_items StockReceiptItem[]
 
   @@unique([org_id, sku])
   @@index([org_id])
@@ -451,6 +458,7 @@ model ProductVariant {
   stock_levels        StockLevel[]
   stock_movements     StockMovement[]
   price_history       ProductPriceHistory[]
+  stock_receipt_items StockReceiptItem[]
 
   @@unique([org_id, sku])
   @@index([org_id, barcode])
@@ -546,6 +554,7 @@ model StockMovement {
   reason           stock_adjustment_reason?
   reference_id     String?
   actor_id         String?
+  stock_receipt_id String?
   notes            String?                  @db.Text
   metadata         Json?
   created_at       DateTime                 @default(now())
@@ -555,12 +564,14 @@ model StockMovement {
   product          Product                  @relation(fields: [product_id], references: [id], onDelete: Cascade)
   variant          ProductVariant?          @relation(fields: [variant_id], references: [id], onDelete: Cascade)
   actor            User?                    @relation("StockMovementActor", fields: [actor_id], references: [id], onDelete: SetNull)
+  stock_receipt    StockReceipt?            @relation(fields: [stock_receipt_id], references: [id], onDelete: SetNull)
 
   @@index([org_id, branch_id])
   @@index([org_id, product_id])
   @@index([org_id, movement_type])
   @@index([org_id, created_at])
   @@index([reference_id])
+  @@index([stock_receipt_id])
   @@map("stock_movements")
 }
 
@@ -649,6 +660,82 @@ model CatalogImport {
   @@index([source_branch_id])
   @@index([target_branch_id])
   @@map("catalog_imports")
+}
+
+model Supplier {
+  id                 String         @id @default(cuid())
+  org_id             String
+  name               String
+  phone              String?
+  email              String?
+  address            String?        @db.Text
+  contact_person     String?
+  tax_id             String?
+  notes              String?        @db.Text
+  is_active          Boolean        @default(true)
+  created_by_user_id String?
+  created_at         DateTime       @default(now())
+  updated_at         DateTime       @updatedAt
+  deleted_at         DateTime?
+
+  organization       Organization   @relation(fields: [org_id], references: [id], onDelete: Cascade)
+  created_by         User?          @relation("SupplierCreatedBy", fields: [created_by_user_id], references: [id], onDelete: SetNull)
+  stock_receipts     StockReceipt[]
+
+  @@index([org_id])
+  @@index([org_id, is_active])
+  @@index([org_id, name])
+  @@map("suppliers")
+}
+
+model StockReceipt {
+  id                      String              @id @default(cuid())
+  org_id                  String
+  branch_id               String
+  supplier_id             String
+  reference               String
+  receipt_date            DateTime            @default(now())
+  supplier_invoice_number String?
+  notes                   String?             @db.Text
+  status                  String              @default("completed")
+  created_by_user_id      String?
+  received_by_user_id     String?
+  created_at              DateTime            @default(now())
+  updated_at              DateTime            @updatedAt
+
+  organization            Organization        @relation(fields: [org_id], references: [id], onDelete: Cascade)
+  branch                  Branch              @relation(fields: [branch_id], references: [id], onDelete: Cascade)
+  supplier                Supplier            @relation(fields: [supplier_id], references: [id], onDelete: Restrict)
+  created_by              User?               @relation("ReceiptCreatedBy", fields: [created_by_user_id], references: [id], onDelete: SetNull)
+  received_by             User?               @relation("ReceiptReceivedBy", fields: [received_by_user_id], references: [id], onDelete: SetNull)
+  items                   StockReceiptItem[]
+  stock_movements         StockMovement[]
+
+  @@unique([org_id, reference])
+  @@index([org_id, branch_id])
+  @@index([org_id, supplier_id])
+  @@index([org_id, receipt_date])
+  @@map("stock_receipts")
+}
+
+model StockReceiptItem {
+  id                String          @id @default(cuid())
+  stock_receipt_id  String
+  product_id        String
+  variant_id        String?
+  quantity_received Decimal         @db.Decimal(14, 3)
+  unit_cost         Decimal?        @db.Decimal(14, 2)
+  notes             String?         @db.Text
+  created_at        DateTime        @default(now())
+
+  stock_receipt     StockReceipt    @relation(fields: [stock_receipt_id], references: [id], onDelete: Cascade)
+  product           Product         @relation(fields: [product_id], references: [id], onDelete: Cascade)
+  variant           ProductVariant? @relation(fields: [variant_id], references: [id], onDelete: Cascade)
+
+  @@index([stock_receipt_id])
+  @@index([product_id])
+  @@index([variant_id])
+  @@map("stock_receipt_items")
 }
 
 

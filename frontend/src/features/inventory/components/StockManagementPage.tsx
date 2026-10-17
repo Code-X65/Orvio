@@ -20,7 +20,12 @@ import {
   Store,
   History,
   Info,
+  Receipt,
+  Eye,
+  Building2,
+  Calendar,
 } from 'lucide-react';
+import { useLocation } from 'react-router-dom';
 import { Button } from '../../../components/ui/button';
 import { Input } from '../../../components/ui/input';
 import { Badge } from '../../../components/ui/badge';
@@ -35,6 +40,9 @@ import { ReceiveStockModal } from './ReceiveStockModal';
 import { AdjustStockModal } from './AdjustStockModal';
 import { BranchTransferModal } from './BranchTransferModal';
 import { OpeningStockModal } from './OpeningStockModal';
+import { ReceiptDetailsDrawer } from './ReceiptDetailsDrawer';
+import { stockReceiptsApi, type StockReceipt } from '../stock-receipts-api';
+import { supplierApi, type Supplier } from '../suppliers-api';
 import type { StockItem } from '../stock-api';
 
 export interface StockManagementPageProps {
@@ -58,10 +66,26 @@ export function StockManagementPage({
   onOpenBranchModal,
 }: StockManagementPageProps) {
   const currencySymbol = organization.currency === 'USD' ? '$' : '₦';
-  const effectiveBranchId = branchId && branchId !== 'all' ? branchId : undefined;
+  const effectiveBranchId = (branchId && branchId !== 'all' ? branchId : undefined) || branches[0]?.id;
 
-  // Sub-tabs: 'overview' | 'list' | 'ledger'
-  const [activeSubTab, setActiveSubTab] = React.useState<'overview' | 'list' | 'ledger'>('overview');
+  const location = useLocation();
+  const searchParams = React.useMemo(() => new URLSearchParams(location.search), [location.search]);
+  const paramSubTab = searchParams.get('subTab');
+
+  // Sub-tabs: 'overview' | 'list' | 'receipts' | 'ledger'
+  const [activeSubTab, setActiveSubTab] = React.useState<'overview' | 'list' | 'receipts' | 'ledger'>(() => {
+    if (paramSubTab === 'receipts' || paramSubTab === 'list' || paramSubTab === 'ledger') {
+      return paramSubTab;
+    }
+    return 'overview';
+  });
+
+  React.useEffect(() => {
+    const pSub = searchParams.get('subTab');
+    if (pSub === 'receipts' || pSub === 'list' || pSub === 'ledger' || pSub === 'overview') {
+      setActiveSubTab(pSub as any);
+    }
+  }, [searchParams]);
 
   // Filters for Stock List
   const [searchQuery, setSearchQuery] = React.useState('');
@@ -71,6 +95,17 @@ export function StockManagementPage({
   // Filters for Movement Ledger
   const [movementTypeFilter, setMovementTypeFilter] = React.useState<string>('all');
   const [movementPage, setMovementPage] = React.useState(1);
+
+  // Filters & State for Stock Receipts
+  const [receiptSearch, setReceiptSearch] = React.useState('');
+  const [receiptSupplierFilter, setReceiptSupplierFilter] = React.useState<string>('all');
+  const [receiptPage, setReceiptPage] = React.useState(1);
+  const [receiptsList, setReceiptsList] = React.useState<StockReceipt[]>([]);
+  const [receiptTotalPages, setReceiptTotalPages] = React.useState(1);
+  const [receiptTotalCount, setReceiptTotalCount] = React.useState(0);
+  const [isLoadingReceipts, setIsLoadingReceipts] = React.useState(false);
+  const [inspectReceiptId, setInspectReceiptId] = React.useState<string | null>(null);
+  const [suppliersList, setSuppliersList] = React.useState<Supplier[]>([]);
 
   // URL Action State for deep-linking & session resumption
   const {
@@ -122,28 +157,80 @@ export function StockManagementPage({
     limit: 20,
   });
 
+  const fetchReceipts = React.useCallback(async () => {
+    setIsLoadingReceipts(true);
+    try {
+      const res = await stockReceiptsApi.listReceipts({
+        branchId: effectiveBranchId,
+        supplierId: receiptSupplierFilter !== 'all' ? receiptSupplierFilter : undefined,
+        search: receiptSearch.trim() || undefined,
+        page: receiptPage,
+        limit: 20,
+      });
+      setReceiptsList(res.receipts);
+      setReceiptTotalPages(res.pagination.totalPages);
+      setReceiptTotalCount(res.pagination.total);
+    } catch {
+      // ignore
+    } finally {
+      setIsLoadingReceipts(false);
+    }
+  }, [effectiveBranchId, receiptSupplierFilter, receiptSearch, receiptPage]);
+
+  // Load suppliers list for receipt filtering
+  React.useEffect(() => {
+    supplierApi.listSuppliers?.({ limit: 100 })?.then((res) => {
+      setSuppliersList(res?.suppliers || []);
+    })?.catch(() => {});
+  }, []);
+
+  React.useEffect(() => {
+    if (activeSubTab === 'receipts') {
+      fetchReceipts();
+    }
+  }, [activeSubTab, fetchReceipts]);
+
   const handleRefreshAll = () => {
     refetchSummary();
     refetchStock();
     refetchMovements();
+    if (activeSubTab === 'receipts') {
+      fetchReceipts();
+    }
+  };
+
+  const effectiveBranchName = React.useMemo(() => {
+    if (branchName) return branchName;
+    if (effectiveBranchId) {
+      return branches.find((b) => b.id === effectiveBranchId)?.name || 'Selected Branch';
+    }
+    return '';
+  }, [branchName, effectiveBranchId, branches]);
+
+  const requireActiveBranch = (_actionName: string): boolean => {
+    return true;
   };
 
   const handleOpenReceive = (item?: StockItem) => {
+    if (!requireActiveBranch('receive stock')) return;
     setSelectedStockItem(item || null);
     openAction('receive', item?.productId);
   };
 
   const handleOpenAdjust = (item?: StockItem) => {
+    if (!requireActiveBranch('adjust stock')) return;
     setSelectedStockItem(item || null);
     openAction('adjust', item?.productId);
   };
 
   const handleOpenTransfer = (item?: StockItem) => {
+    if (!requireActiveBranch('transfer stock')) return;
     setSelectedStockItem(item || null);
     openAction('transfer', item?.productId);
   };
 
   const handleOpenOpening = (item?: StockItem) => {
+    if (!requireActiveBranch('record opening stock')) return;
     setSelectedStockItem(item || null);
     openAction('opening', item?.productId);
   };
@@ -183,22 +270,14 @@ export function StockManagementPage({
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h1 className="text-base font-bold text-white tracking-tight">Stock Management & Ledger</h1>
-              <Badge variant="outline" className="text-[10px] bg-[#1a1b22] border-[#2d3139] text-[#fbb945] font-mono">
+              <h1 className="text-xl font-bold tracking-tight text-white">Stock Management & Ledger</h1>
+              <Badge variant="outline" className="text-xs bg-[#252830] border-[#363a45] text-slate-300 font-normal">
                 Perpetual Control
               </Badge>
             </div>
-            <div className="flex items-center gap-2 text-xs text-slate-400">
-              <Store className="w-3.5 h-3.5 text-slate-400" />
-              <span>Location:</span>
-              <button
-                type="button"
-                onClick={onOpenBranchModal}
-                className="font-medium text-slate-200 hover:text-[#fbb945] hover:underline transition-colors"
-              >
-                {effectiveBranchId ? (branchName || 'Selected Branch') : 'All Branches (Consolidated Overview)'}
-              </button>
-            </div>
+            <p className="text-xs text-slate-400 mt-1">
+              Real-time inventory levels, stock adjustments, receipt logging, and audit ledger
+            </p>
           </div>
         </div>
 
@@ -280,6 +359,23 @@ export function StockManagementPage({
             {summary && (
               <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-[#1e2028] text-slate-400 font-mono">
                 {summary.totalTracked}
+              </span>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveSubTab('receipts')}
+            className={`py-3 text-xs font-semibold border-b-2 transition-all cursor-pointer flex items-center gap-1.5 ${
+              activeSubTab === 'receipts'
+                ? 'border-[#fbb945] text-white'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Receipt className="w-3.5 h-3.5" />
+            <span>Stock Receipts</span>
+            {receiptTotalCount > 0 && (
+              <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-[#1e2028] text-emerald-400 font-mono">
+                {receiptTotalCount}
               </span>
             )}
           </button>
@@ -847,6 +943,219 @@ export function StockManagementPage({
             </div>
           </div>
         )}
+        {/* ==================== SUB-TAB 4: STOCK RECEIPTS ==================== */}
+        {activeSubTab === 'receipts' && (
+          <div className="space-y-4">
+            {/* Filter Bar */}
+            <div className="p-4 rounded-xl bg-[#14151a] border border-[#2d3139] flex flex-wrap items-center justify-between gap-4">
+              <div className="flex flex-wrap items-center gap-3 flex-1 min-w-[280px]">
+                {/* Search input */}
+                <div className="relative flex-1 min-w-[200px] max-w-sm">
+                  <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <Input
+                    type="text"
+                    placeholder="Search receipt #, invoice #..."
+                    value={receiptSearch}
+                    onChange={(e) => {
+                      setReceiptSearch(e.target.value);
+                      setReceiptPage(1);
+                    }}
+                    className="h-8 pl-8 text-xs bg-[#181a20] border-[#2d3139] text-slate-200"
+                  />
+                </div>
+
+                {/* Supplier Filter */}
+                <select
+                  value={receiptSupplierFilter}
+                  onChange={(e) => {
+                    setReceiptSupplierFilter(e.target.value);
+                    setReceiptPage(1);
+                  }}
+                  className="h-8 bg-[#181a20] border border-[#2d3139] rounded-md px-2.5 text-xs text-slate-200 focus:outline-hidden focus:border-[#fbb945]"
+                >
+                  <option value="all">All Suppliers</option>
+                  {suppliersList.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={fetchReceipts}
+                  className="h-8 text-xs border-[#2d3139] text-slate-300 hover:bg-white/5"
+                  title="Refresh receipts"
+                >
+                  <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
+                  Refresh
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={() => handleOpenReceive()}
+                  className="h-8 text-xs bg-emerald-600 hover:bg-emerald-500 text-white shadow-sm flex items-center gap-1.5"
+                >
+                  <PackagePlus className="w-3.5 h-3.5" />
+                  <span>Receive Stock</span>
+                </Button>
+              </div>
+            </div>
+
+            {/* Receipts Table */}
+            <div className="rounded-xl border border-[#2d3139] bg-[#14151a] overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="bg-[#181a20] border-b border-[#2d3139] text-slate-400 font-mono text-[11px]">
+                      <th className="py-3 px-4 font-medium">Reference</th>
+                      <th className="py-3 px-4 font-medium">Receipt Date</th>
+                      <th className="py-3 px-4 font-medium">Branch</th>
+                      <th className="py-3 px-4 font-medium">Supplier</th>
+                      <th className="py-3 px-4 font-medium text-center">Items</th>
+                      <th className="py-3 px-4 font-medium text-right">Total Units</th>
+                      <th className="py-3 px-4 font-medium text-right">Total Value</th>
+                      <th className="py-3 px-4 font-medium">Received By</th>
+                      <th className="py-3 px-4 font-medium text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#2d3139]/40">
+                    {isLoadingReceipts ? (
+                      <tr>
+                        <td colSpan={9} className="py-12 text-center text-slate-400 text-xs">
+                          <RefreshCw className="w-4 h-4 animate-spin mx-auto mb-2 text-[#fbb945]" />
+                          Loading stock receipts...
+                        </td>
+                      </tr>
+                    ) : receiptsList.length === 0 ? (
+                      <tr>
+                        <td colSpan={9} className="py-12 text-center text-slate-400 text-xs">
+                          <Receipt className="w-8 h-8 mx-auto mb-2 text-slate-600" />
+                          <p className="font-semibold text-slate-300">No stock receipts found</p>
+                          <p className="text-[11px] text-slate-500 mt-1">
+                            Receive stock from suppliers to generate official intake receipts.
+                          </p>
+                          <Button
+                            size="sm"
+                            onClick={() => handleOpenReceive()}
+                            className="mt-3 h-8 text-xs bg-emerald-600 hover:bg-emerald-500 text-white"
+                          >
+                            <PackagePlus className="w-3.5 h-3.5 mr-1.5" />
+                            Receive Stock Now
+                          </Button>
+                        </td>
+                      </tr>
+                    ) : (
+                      receiptsList.map((rcpt) => (
+                        <tr
+                          key={rcpt.id}
+                          className="hover:bg-[#181a20]/80 transition-colors cursor-pointer group"
+                          onClick={() => setInspectReceiptId(rcpt.id)}
+                        >
+                          <td className="py-3 px-4">
+                            <span className="font-mono text-emerald-400 font-semibold group-hover:underline">
+                              {rcpt.reference}
+                            </span>
+                            {rcpt.supplierInvoiceNumber && (
+                              <div className="text-[10px] text-slate-500 font-mono">
+                                Inv: {rcpt.supplierInvoiceNumber}
+                              </div>
+                            )}
+                          </td>
+                          <td className="py-3 px-4 text-slate-300 font-mono text-[11px]">
+                            {new Date(rcpt.receiptDate).toLocaleDateString(undefined, {
+                              year: 'numeric',
+                              month: 'short',
+                              day: 'numeric',
+                            })}
+                          </td>
+                          <td className="py-3 px-4">
+                            <span className="text-slate-300 text-xs flex items-center gap-1.5">
+                              <Store className="w-3 h-3 text-[#fbb945] shrink-0" />
+                              {rcpt.branchName}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4">
+                            <span className="text-white font-medium flex items-center gap-1.5">
+                              <Building2 className="w-3 h-3 text-slate-400 shrink-0" />
+                              {rcpt.supplierName}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-center">
+                            <Badge variant="outline" className="text-[10px] font-mono bg-white/5 border-[#2d3139] text-slate-300">
+                              {rcpt.lineCount} {rcpt.lineCount === 1 ? 'item' : 'items'}
+                            </Badge>
+                          </td>
+                          <td className="py-3 px-4 text-right font-mono font-semibold text-slate-200">
+                            {rcpt.totalQuantity.toLocaleString()}
+                          </td>
+                          <td className="py-3 px-4 text-right font-mono">
+                            {rcpt.totalCost !== null ? (
+                              <span className="text-emerald-400 font-semibold">
+                                {currencySymbol}
+                                {rcpt.totalCost.toLocaleString(undefined, {
+                                  minimumFractionDigits: 2,
+                                  maximumFractionDigits: 2,
+                                })}
+                              </span>
+                            ) : (
+                              <span className="text-slate-500">—</span>
+                            )}
+                          </td>
+                          <td className="py-3 px-4 text-slate-400 text-xs">
+                            {rcpt.receivedByName || '—'}
+                          </td>
+                          <td className="py-3 px-4 text-right" onClick={(e) => e.stopPropagation()}>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setInspectReceiptId(rcpt.id)}
+                              className="h-7 px-2 text-xs text-slate-300 hover:text-white hover:bg-white/10"
+                            >
+                              <Eye className="w-3.5 h-3.5 mr-1 text-[#fbb945]" />
+                              Inspect
+                            </Button>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Pagination */}
+              {receiptTotalPages > 1 && (
+                <div className="p-3 bg-[#181a20] border-t border-[#2d3139] flex items-center justify-between text-xs text-slate-400">
+                  <span>
+                    Page {receiptPage} of {receiptTotalPages} ({receiptTotalCount} receipts total)
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={receiptPage <= 1}
+                      onClick={() => setReceiptPage((p) => p - 1)}
+                      className="h-7 text-xs border-[#2d3139]"
+                    >
+                      Previous
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={receiptPage >= receiptTotalPages}
+                      onClick={() => setReceiptPage((p) => p + 1)}
+                      className="h-7 text-xs border-[#2d3139]"
+                    >
+                      Next
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Action Modals */}
@@ -858,8 +1167,17 @@ export function StockManagementPage({
         initialVariantId={effectiveSelectedItem?.variantId || undefined}
         stockItems={items}
         branchId={effectiveBranchId}
+        activeBranchName={effectiveBranchName}
         branches={branches}
         onSuccess={handleRefreshAll}
+        onViewReceiptDetails={(id) => setInspectReceiptId(id)}
+      />
+
+      {/* Receipt Details Inspection Drawer */}
+      <ReceiptDetailsDrawer
+        isOpen={Boolean(inspectReceiptId)}
+        onClose={() => setInspectReceiptId(null)}
+        receiptId={inspectReceiptId}
       />
 
       <AdjustStockModal
@@ -870,6 +1188,7 @@ export function StockManagementPage({
         initialVariantId={effectiveSelectedItem?.variantId || undefined}
         stockItems={items}
         branchId={effectiveBranchId}
+        activeBranchName={effectiveBranchName}
         branches={branches}
         onSuccess={handleRefreshAll}
       />
@@ -882,6 +1201,7 @@ export function StockManagementPage({
         initialVariantId={effectiveSelectedItem?.variantId || undefined}
         stockItems={items}
         branchId={effectiveBranchId}
+        activeBranchName={effectiveBranchName}
         branches={branches}
         onSuccess={handleRefreshAll}
       />
@@ -894,6 +1214,7 @@ export function StockManagementPage({
         initialVariantId={effectiveSelectedItem?.variantId || undefined}
         stockItems={items}
         branchId={effectiveBranchId}
+        activeBranchName={effectiveBranchName}
         branches={branches}
         onSuccess={handleRefreshAll}
       />

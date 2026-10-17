@@ -39,6 +39,7 @@ import { CategoriesPage } from '../../features/inventory/components/CategoriesPa
 import { BrandsPage } from '../../features/inventory/components/BrandsPage';
 import { ProductsPage } from '../../features/inventory/components/ProductsPage';
 import { StockManagementPage } from '../../features/inventory/components/StockManagementPage';
+import { SuppliersPage } from '../../features/inventory/components/SuppliersPage';
 import { OperationalSectionView, type OperationalSection } from '../../features/inventory/components/OperationalSectionView';
 import { BranchManagementModal } from '../../features/inventory/components/BranchManagementModal';
 import { AddBranchWizardModal } from '../../features/inventory/components/AddBranchWizardModal';
@@ -48,6 +49,8 @@ import { useOrgWebSocket } from '../../hooks/useOrgWebSocket';
 import { useAuthStore } from '../../stores/auth-store';
 import { toast } from 'sonner';
 import { useUrlActionState } from '../../hooks/useUrlActionState';
+import { CatalogSearchModal } from '../../features/inventory/components/CatalogSearchModal';
+import { getJwtPayload } from '../../lib/api/token-utils';
 
 interface InventoryWorkspacePageProps {
   organization: {
@@ -82,6 +85,7 @@ export function InventoryWorkspacePage({
   const navigate = useNavigate();
 
   const accessToken = useAuthStore((s) => s.accessToken);
+  const user = useAuthStore((s) => s.user);
   const { status: wsStatus } = useOrgWebSocket(organization.id, accessToken);
 
   const [branchList, setBranchList] = React.useState(branches || []);
@@ -90,7 +94,80 @@ export function InventoryWorkspacePage({
   const [isSwitchingBranch, setIsSwitchingBranch] = React.useState(false);
   const [switchingTargetName, setSwitchingTargetName] = React.useState('');
   const [switchingSourceName, setSwitchingSourceName] = React.useState<string | null>(null);
+  const [isSearchModalOpen, setIsSearchModalOpen] = React.useState(false);
   const orgKey = organization.id || organization.subdomain;
+
+  // Global Ctrl+K / Cmd+K keyboard shortcut to toggle catalog search modal
+  React.useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setIsSearchModalOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  // Compute authenticated user role from JWT token or fallback
+  const userRole = React.useMemo(() => {
+    if (!accessToken) return 'Owner';
+    const payload = getJwtPayload<{ role?: string }>(accessToken);
+    if (payload?.role) {
+      return payload.role.charAt(0).toUpperCase() + payload.role.slice(1).toLowerCase();
+    }
+    return 'Owner';
+  }, [accessToken]);
+
+  // Compute authenticated user initials
+  const userInitials = React.useMemo(() => {
+    if (!user?.fullName) return 'U';
+    const parts = user.fullName.trim().split(/\s+/);
+    if (parts.length >= 2) {
+      return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+    }
+    return parts[0].slice(0, 2).toUpperCase();
+  }, [user?.fullName]);
+
+  // Navigation handlers for search palette results
+  const handleSelectCatalogProduct = React.useCallback(
+    (productId: string) => {
+      setIsSearchModalOpen(false);
+      const params = new URLSearchParams(location.search);
+      params.set('productId', productId);
+      navigate({
+        pathname: '/inventory/products',
+        search: `?${params.toString()}`,
+      });
+    },
+    [location.search, navigate]
+  );
+
+  const handleSelectCatalogCategory = React.useCallback(
+    (categoryId: string) => {
+      setIsSearchModalOpen(false);
+      const params = new URLSearchParams(location.search);
+      params.set('categoryId', categoryId);
+      navigate({
+        pathname: '/inventory/categories',
+        search: `?${params.toString()}`,
+      });
+    },
+    [location.search, navigate]
+  );
+
+  const handleSelectCatalogBrand = React.useCallback(
+    (brandId: string) => {
+      setIsSearchModalOpen(false);
+      const params = new URLSearchParams(location.search);
+      params.set('brandId', brandId);
+      navigate({
+        pathname: '/inventory/brands',
+        search: `?${params.toString()}`,
+      });
+    },
+    [location.search, navigate]
+  );
 
   // URL Action State for deep-linking & session resumption
   const {
@@ -190,7 +267,7 @@ export function InventoryWorkspacePage({
     }
   }, [selectedBranchId, handleSelectBranchId]);
 
-  const [currentCurrency, setCurrentCurrency] = React.useState(organization.currency || 'USD');
+  const [currentCurrency] = React.useState('NGN');
 
   // Normalize pathname (strip trailing slash)
   const currentPath = React.useMemo(() => {
@@ -741,7 +818,7 @@ export function InventoryWorkspacePage({
             </nav>
           </div>
 
-          {/* Bottom Active Branch & POS Card */}
+          {/* Bottom Active Branch & POS Card + User Profile */}
           {sidebarMode === 'icon-and-name' ? (
             <div className="bg-[#181a20] p-4 rounded-sm space-y-3 mt-6 border border-[#2d3139]/40 w-full">
               <div className="flex items-center gap-2">
@@ -778,10 +855,35 @@ export function InventoryWorkspacePage({
                 <Settings className="w-3.5 h-3.5" />
                 <span>Branch Settings</span>
               </Button>
+
+              {/* Authenticated User Profile */}
+              <div
+                data-testid="sidebar-user-profile"
+                className="mt-3 pt-3 border-t border-[#2d3139]/60 flex items-center gap-3 w-full"
+              >
+                <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-[#985184] to-[#fbb945] text-white font-bold text-xs flex items-center justify-center shadow-md ring-1 ring-white/10 shrink-0 select-none">
+                  {userInitials}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs font-bold text-slate-100 truncate" title={user?.fullName || 'Authenticated User'}>
+                    {user?.fullName || 'Authenticated User'}
+                  </div>
+                  <div className="flex items-center gap-1.5 mt-0.5">
+                    <span className="text-[9px] uppercase tracking-wider font-extrabold px-1.5 py-0.2 rounded-xs bg-[#fbb945]/15 text-[#fbb945] border border-[#fbb945]/30">
+                      {userRole}
+                    </span>
+                    {user?.email && (
+                      <span className="text-[10px] text-slate-400 truncate font-mono">
+                        {user.email}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
             </div>
           ) : (
-            /* Icon Only Bottom Store Button */
-            <div className="flex flex-col items-center gap-2 pt-3 border-t border-[#2d3139]/40 w-full">
+            /* Icon Only Bottom Store Button & User Avatar */
+            <div className="flex flex-col items-center gap-3 pt-3 border-t border-[#2d3139]/40 w-full">
               <button
                 type="button"
                 onClick={() => {
@@ -797,6 +899,19 @@ export function InventoryWorkspacePage({
                   {selectedBranchId === 'all' ? 'All Branches' : selectedBranch?.name || 'Branch Settings'}
                 </span>
               </button>
+
+              {/* Authenticated User Avatar (Icon Only) */}
+              <div
+                data-testid="sidebar-user-avatar-collapsed"
+                title={`${user?.fullName || 'Authenticated User'} (${userRole})`}
+                aria-label={`${user?.fullName || 'Authenticated User'} (${userRole})`}
+                className="w-9 h-9 rounded-full bg-gradient-to-tr from-[#985184] to-[#fbb945] text-white font-bold text-xs flex items-center justify-center shadow-md ring-1 ring-white/10 shrink-0 cursor-default relative group select-none"
+              >
+                {userInitials}
+                <span className="absolute left-full ml-3 px-2 py-1 bg-[#1e2026] text-white text-[11px] font-medium rounded-xs shadow-lg border border-[#2d3139] whitespace-nowrap opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity z-50">
+                  {user?.fullName || 'Authenticated User'} • {userRole}
+                </span>
+              </div>
             </div>
           )}
         </aside>
@@ -830,20 +945,25 @@ export function InventoryWorkspacePage({
                 )}
               </button>
 
-              <div className="relative w-full">
-                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
-                <input
-                  type="text"
-                  placeholder="Search anything..."
-                  className="w-full bg-[#181a20] text-xs text-slate-200 placeholder:text-slate-500 pl-9 pr-12 py-2 rounded-sm focus:outline-none focus:ring-1 focus:ring-[#985184]"
-                />
-                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-mono text-slate-500 bg-white/5 px-1 py-0.5 rounded-sm">
-                  ⌘K
+              {/* Catalog Search Bar Trigger (Ctrl + K) */}
+              <button
+                type="button"
+                data-testid="catalog-search-trigger"
+                onClick={() => setIsSearchModalOpen(true)}
+                title="Search catalog (Ctrl + K)"
+                className="relative w-full flex items-center justify-between bg-[#181a20] hover:bg-[#1f222a] border border-[#2d3139]/60 hover:border-[#985184]/50 text-xs text-slate-400 pl-9 pr-2.5 py-2 rounded-sm transition-all text-left cursor-pointer group shadow-inner"
+              >
+                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 group-hover:text-slate-200 transition-colors pointer-events-none" />
+                <span className="truncate group-hover:text-slate-200 transition-colors">
+                  Search catalog (products, categories, brands)...
                 </span>
-              </div>
+                <span className="shrink-0 text-[10px] font-mono text-slate-400 bg-white/5 border border-white/10 px-1.5 py-0.5 rounded-xs flex items-center gap-0.5 ml-2">
+                  <span className="text-[9px]">Ctrl</span> K
+                </span>
+              </button>
             </div>
 
-            {/* Right: Branch Selector, Currency Toggle, Alerts, Launchpad, Avatar */}
+            {/* Right: Branch Selector, Locked Currency, Sync Status, Alerts */}
             <div className="flex items-center gap-2 sm:gap-4">
               {/* Branch Selector Dropdown */}
               <div className="relative">
@@ -886,19 +1006,14 @@ export function InventoryWorkspacePage({
                 </div>
               </div>
 
-              {/* Currency Selector */}
-              <div className="relative">
-                <select
-                  value={currentCurrency}
-                  onChange={(e) => setCurrentCurrency(e.target.value)}
-                  className="bg-[#181a20] text-xs font-semibold text-slate-200 pl-3 pr-7 py-1.5 rounded-sm appearance-none cursor-pointer focus:outline-none focus:ring-1 focus:ring-[#985184]"
-                >
-                  <option value="USD">USD</option>
-                  <option value="NGN">NGN</option>
-                  <option value="EUR">EUR</option>
-                  <option value="GBP">GBP</option>
-                </select>
-                <ChevronDown className="w-3.5 h-3.5 absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+              {/* Fixed Currency Badge (Locked to NGN) */}
+              <div
+                data-testid="currency-badge"
+                title="Currency is locked to Nigerian Naira (NGN)"
+                className="flex items-center gap-1.5 bg-[#181a20]/90 border border-[#2d3139] px-2.5 py-1.5 rounded-sm text-xs font-semibold text-slate-300 cursor-not-allowed select-none transition-colors hover:border-[#2d3139]"
+              >
+                <span className="font-mono text-[#fbb945] font-bold">₦</span>
+                <span>NGN</span>
               </div>
 
               {/* Realtime Live Sync Status */}
@@ -948,21 +1063,6 @@ export function InventoryWorkspacePage({
               >
                 <Mail className="w-4 h-4" />
               </button>
-
-              {/* Return to Launchpad */}
-              <Link
-                to="/dashboard"
-                className="hidden sm:flex items-center gap-1.5 text-xs font-semibold text-slate-300 hover:text-white px-2.5 py-1.5 rounded-sm hover:bg-white/5 transition-colors"
-                title="Return to Launchpad"
-              >
-                <LayoutGrid className="w-3.5 h-3.5 text-[#fbb945]" />
-                <span className="hidden md:inline">Launchpad</span>
-              </Link>
-
-              {/* User Avatar */}
-              <div className="w-8 h-8 rounded-sm bg-[#985184] text-white font-bold text-xs flex items-center justify-center shadow-sm cursor-pointer">
-                {organization.name.slice(0, 2).toUpperCase()}
-              </div>
             </div>
           </header>
 
@@ -1032,6 +1132,23 @@ export function InventoryWorkspacePage({
                 onOpenBranchModal={() => {
                   openAction('manage-branches');
                   setIsBranchModalOpen(true);
+                }}
+              />
+            ) : activeTab === 'Suppliers' ? (
+              <SuppliersPage
+                organization={organization}
+                branches={branchList}
+                activeBranchId={selectedBranchId === 'all' ? undefined : selectedBranchId}
+                onNavigateToStockReceipts={(supplierId) => {
+                  const params = new URLSearchParams(location.search);
+                  params.set('subTab', 'receipts');
+                  if (supplierId) {
+                    params.set('supplierId', supplierId);
+                  }
+                  navigate({
+                    pathname: '/inventory/stock',
+                    search: `?${params.toString()}`,
+                  });
                 }}
               />
             ) : activeTab === 'Dashboard' ? (
@@ -1640,6 +1757,16 @@ export function InventoryWorkspacePage({
         isVisible={isSwitchingBranch}
         fromBranchName={switchingSourceName}
         toBranchName={switchingTargetName}
+      />
+
+      {/* ================= CATALOG SEARCH PALETTE MODAL (Ctrl + K) ================= */}
+      <CatalogSearchModal
+        isOpen={isSearchModalOpen}
+        onClose={() => setIsSearchModalOpen(false)}
+        branchId={selectedBranchId === 'all' ? undefined : selectedBranchId}
+        onSelectProduct={handleSelectCatalogProduct}
+        onSelectCategory={handleSelectCatalogCategory}
+        onSelectBrand={handleSelectCatalogBrand}
       />
     </div>
   );

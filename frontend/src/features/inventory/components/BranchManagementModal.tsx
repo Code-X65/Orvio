@@ -49,6 +49,9 @@ export function BranchManagementModal({
   onBranchesUpdated,
   onOpenAddWizard,
 }: BranchManagementModalProps) {
+  const [mounted, setMounted] = React.useState(isOpen);
+  const [animating, setAnimating] = React.useState(false);
+
   const [branches, setBranches] = React.useState<Branch[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [submitting, setSubmitting] = React.useState(false);
@@ -89,6 +92,30 @@ export function BranchManagementModal({
       setLoading(false);
     }
   }, []);
+
+  // Manage enter/exit animation states
+  React.useEffect(() => {
+    let timer: NodeJS.Timeout;
+    if (isOpen) {
+      setMounted(true);
+      timer = setTimeout(() => {
+        setAnimating(true);
+      }, 20);
+    } else {
+      setAnimating(false);
+      timer = setTimeout(() => {
+        setMounted(false);
+      }, 300);
+    }
+    return () => clearTimeout(timer);
+  }, [isOpen]);
+
+  const triggerClose = React.useCallback(() => {
+    setAnimating(false);
+    setTimeout(() => {
+      onClose();
+    }, 300);
+  }, [onClose]);
 
   React.useEffect(() => {
     if (isOpen) {
@@ -261,13 +288,27 @@ export function BranchManagementModal({
     }
   };
 
-  if (!isOpen) return null;
+  if (!mounted) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-xs animate-in fade-in duration-150">
-      <div className="bg-[#181a20] border border-[#2d3139] rounded-lg max-w-2xl w-full max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
+    <div className="fixed inset-0 z-50 overflow-hidden" data-testid="branch-management-drawer">
+      {/* Backdrop with fade in/out animation */}
+      <div
+        onClick={triggerClose}
+        className={`fixed inset-0 bg-black/75 backdrop-blur-xs transition-opacity duration-300 ease-in-out cursor-pointer ${
+          animating ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
+        }`}
+        aria-hidden="true"
+      />
+
+      {/* Slide-over Right Hand Panel (h-screen with slide animation) */}
+      <aside
+        className={`fixed inset-y-0 right-0 w-full max-w-xl h-screen bg-[#181a20] border-l border-[#2d3139] text-slate-100 shadow-2xl flex flex-col z-50 transform transition-transform duration-300 ease-out ${
+          animating ? 'translate-x-0' : 'translate-x-full'
+        }`}
+      >
         {/* Header */}
-        <div className="px-6 py-4 border-b border-[#2d3139] flex items-center justify-between bg-[#141519]">
+        <div className="px-6 py-4 border-b border-[#2d3139] flex items-center justify-between bg-[#181a20] shrink-0">
           <div className="flex items-center gap-3">
             {view !== 'list' && (
               <button
@@ -298,15 +339,16 @@ export function BranchManagementModal({
           </div>
           <button
             type="button"
-            onClick={onClose}
+            onClick={triggerClose}
             className="p-1.5 text-slate-400 hover:text-white rounded hover:bg-white/5 cursor-pointer"
+            data-testid="branch-drawer-close"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
         {/* Modal Body */}
-        <div className="p-6 overflow-y-auto flex-1 text-slate-200">
+        <div className="p-6 overflow-y-auto flex-1 text-slate-200 bg-[#141519]">
           {/* ================= VIEW: LIST ================= */}
           {view === 'list' && (
             <div className="space-y-4">
@@ -429,7 +471,7 @@ export function BranchManagementModal({
                                 variant="outline"
                                 onClick={() => {
                                   onSelectBranch(b);
-                                  onClose();
+                                  triggerClose();
                                 }}
                                 className="h-7 px-2 text-[11px] border-[#985184]/40 bg-[#985184]/10 text-white hover:bg-[#985184]/20"
                               >
@@ -734,7 +776,7 @@ export function BranchManagementModal({
             </div>
           )}
         </div>
-      </div>
+      </aside>
 
       {catalogBranch && (
         <BranchCatalogModal

@@ -4,6 +4,28 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { StockManagementPage } from './StockManagementPage';
 import { stockApi, type StockSummary, type StockItem, type StockMovement } from '../stock-api';
+import { stockReceiptsApi } from '../stock-receipts-api';
+import { toast } from 'sonner';
+
+vi.mock('sonner', () => ({
+  toast: {
+    error: vi.fn(),
+    info: vi.fn(),
+    success: vi.fn(),
+    warning: vi.fn(),
+  },
+}));
+
+vi.mock('../branches-api', () => ({
+  branchApi: {
+    getBranches: vi.fn().mockResolvedValue({
+      branches: [
+        { id: 'b-1', name: 'Main Store', type: 'store', status: 'active', is_primary: true },
+        { id: 'b-2', name: 'Warehouse North', type: 'warehouse', status: 'active', is_primary: false },
+      ],
+    }),
+  },
+}));
 
 vi.mock('../stock-api', () => ({
   stockApi: {
@@ -14,6 +36,58 @@ vi.mock('../stock-api', () => ({
     receiveStock: vi.fn(),
     adjustStock: vi.fn(),
     transferStock: vi.fn(),
+  },
+}));
+
+vi.mock('../stock-receipts-api', () => ({
+  stockReceiptsApi: {
+    listReceipts: vi.fn().mockResolvedValue({
+      receipts: [
+        {
+          id: 'rcpt-1',
+          reference: 'RCPT-000001',
+          receiptDate: '2026-10-14',
+          supplierId: 'supp-1',
+          supplierName: 'Global Fabrics Ltd',
+          branchId: 'b-1',
+          branchName: 'Main Store',
+          supplierInvoiceNumber: 'INV-1001',
+          notes: 'Delivered in good condition',
+          status: 'COMPLETED',
+          lineCount: 2,
+          totalQuantity: 50,
+          totalCost: 150000,
+          receivedById: 'user-1',
+          receivedByName: 'John Storekeeper',
+          createdAt: new Date().toISOString(),
+        },
+      ],
+      pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
+    }),
+    getReceipt: vi.fn(),
+    createReceipt: vi.fn(),
+  },
+}));
+
+vi.mock('../suppliers-api', () => ({
+  supplierApi: {
+    listSuppliers: vi.fn().mockResolvedValue({
+      suppliers: [
+        {
+          id: 'supp-1',
+          name: 'Global Fabrics Ltd',
+          phone: '+2348011122233',
+          email: 'sales@globalfabrics.com',
+          contact_person: 'Adeola',
+          address: 'Lagos',
+          is_active: true,
+          receipts_count: 5,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        },
+      ],
+      pagination: { page: 1, limit: 100, total: 1, totalPages: 1 },
+    }),
   },
 }));
 
@@ -181,6 +255,29 @@ describe('StockManagementPage Component', () => {
         totalPages: 1,
       },
     });
+    vi.mocked(stockReceiptsApi.listReceipts).mockResolvedValue({
+      receipts: [
+        {
+          id: 'rcpt-1',
+          reference: 'RCPT-000001',
+          receiptDate: '2026-10-14',
+          supplierId: 'supp-1',
+          supplierName: 'Global Fabrics Ltd',
+          branchId: 'b-1',
+          branchName: 'Main Store',
+          supplierInvoiceNumber: 'INV-1001',
+          notes: 'Delivered in good condition',
+          status: 'COMPLETED',
+          lineCount: 2,
+          totalQuantity: 50,
+          totalCost: 150000,
+          receivedById: 'user-1',
+          receivedByName: 'John Storekeeper',
+          createdAt: new Date().toISOString(),
+        },
+      ],
+      pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
+    });
   });
 
   it('renders stock overview metrics correctly', async () => {
@@ -193,9 +290,9 @@ describe('StockManagementPage Component', () => {
       />
     );
 
-    // Header title and branch
+    // Header title and subtitle
     expect(screen.getByText('Stock Management & Ledger')).toBeInTheDocument();
-    expect(screen.getByText('Main Store')).toBeInTheDocument();
+    expect(screen.getByText(/Real-time inventory levels, stock adjustments/i)).toBeInTheDocument();
 
     // Summary KPIs
     await waitFor(() => {
@@ -274,8 +371,8 @@ describe('StockManagementPage Component', () => {
     fireEvent.click(receiveBtn);
 
     // Modal should be open
-    expect(screen.getByText('Receive Stock Replenishment')).toBeInTheDocument();
-    expect(screen.getByText('Resulting On Hand')).toBeInTheDocument();
+    expect(screen.getByText('Stock Receipt Intake')).toBeInTheDocument();
+    expect(screen.getByText('Line Total')).toBeInTheDocument();
   });
 
   it('opens Adjust Stock modal and allows dual-mode delta vs counted adjustments', async () => {
@@ -329,6 +426,96 @@ describe('StockManagementPage Component', () => {
     fireEvent.click(transferBtn);
 
     expect(screen.getByText('Transfer Stock Between Branches')).toBeInTheDocument();
-    expect(screen.getByText('Destination Branch (To) *')).toBeInTheDocument();
+    expect(screen.getByText('Destination Branch *')).toBeInTheDocument();
+  });
+
+  it('opens stock action modals cleanly without redundant branch badges', async () => {
+    renderWithProviders(
+      <StockManagementPage
+        organization={mockOrg}
+        branchId="b-1"
+        branchName="Main Store"
+        branches={mockBranches}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('38')).toBeInTheDocument();
+    });
+
+    // 1. Receive Stock Modal opens cleanly without locked branch badge
+    const receiveBtn = screen.getByRole('button', { name: /Receive Stock/i });
+    fireEvent.click(receiveBtn);
+
+    expect(screen.queryByTestId('locked-branch-badge')).not.toBeInTheDocument();
+    expect(screen.getByText('Stock Receipt Intake')).toBeInTheDocument();
+
+    // Close modal
+    const closeBtn = screen.getAllByRole('button', { name: /Cancel/i })[0];
+    fireEvent.click(closeBtn);
+
+    // 2. Adjust Stock Modal opens cleanly without locked branch badge
+    const adjustBtn = screen.getByRole('button', { name: /Adjust Stock/i });
+    fireEvent.click(adjustBtn);
+
+    expect(screen.queryByTestId('locked-branch-badge')).not.toBeInTheDocument();
+    expect(screen.getByText('Adjust Product Stock')).toBeInTheDocument();
+
+    // Close modal
+    fireEvent.click(screen.getAllByRole('button', { name: /Cancel/i })[0]);
+
+    // 3. Transfer Stock Modal opens cleanly without locked source branch badge
+    const transferBtn = screen.getByRole('button', { name: /Transfer/i });
+    fireEvent.click(transferBtn);
+
+    expect(screen.queryByTestId('locked-source-branch-badge')).not.toBeInTheDocument();
+    expect(screen.getByText('Transfer Stock Between Branches')).toBeInTheDocument();
+    expect(screen.getByText('Destination Branch *')).toBeInTheDocument();
+  });
+
+  it('seamlessly defaults stock actions to the active branch without blocking modals', async () => {
+    renderWithProviders(
+      <StockManagementPage
+        organization={mockOrg}
+        branchId="all"
+        branchName="All Branches"
+        branches={mockBranches}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('38')).toBeInTheDocument();
+    });
+
+    // Click Receive Stock while in "all" branch view
+    const receiveBtn = screen.getByRole('button', { name: /Receive Stock/i });
+    fireEvent.click(receiveBtn);
+
+    // Modal opens directly without requiring manual branch prompts
+    expect(screen.getByText('Stock Receipt Intake')).toBeInTheDocument();
+  });
+
+  it('renders and switches to the Stock Receipts tab, listing receipt records', async () => {
+    renderWithProviders(
+      <StockManagementPage
+        organization={mockOrg}
+        branchId="b-1"
+        branchName="Main Store"
+        branches={mockBranches}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Stock Receipts')).toBeInTheDocument();
+    });
+
+    const receiptsTabBtn = screen.getByText('Stock Receipts');
+    fireEvent.click(receiptsTabBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText('RCPT-000001')).toBeInTheDocument();
+      expect(screen.getByText('Global Fabrics Ltd')).toBeInTheDocument();
+      expect(screen.getByText('50')).toBeInTheDocument();
+    });
   });
 });

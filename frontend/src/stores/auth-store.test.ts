@@ -260,7 +260,7 @@ describe('useAuthStore', () => {
     expect(sessionStorage.getItem('orvio_session_state')).toBeNull();
   });
 
-  it('checkIdleTimeout expires session and dispatches event when inactive for >60min', () => {
+  it('checkIdleTimeout expires session and dispatches event when inactive for >3h', () => {
     const eventSpy = vi.fn();
     window.addEventListener('orvio:auth:session-expired', eventSpy);
 
@@ -270,10 +270,10 @@ describe('useAuthStore', () => {
       { id: 'org_1', name: 'Test Org', subdomain: 'testorg', status: 'active' }
     );
 
-    // Set last activity to 70 minutes ago
-    useAuthStore.setState({ lastActivityAt: Date.now() - 70 * 60 * 1000 });
+    // Set last activity to 3 hours and 10 minutes ago
+    useAuthStore.setState({ lastActivityAt: Date.now() - (3 * 60 + 10) * 60 * 1000 });
 
-    const timedOut = useAuthStore.getState().checkIdleTimeout(60 * 60 * 1000);
+    const timedOut = useAuthStore.getState().checkIdleTimeout();
 
     expect(timedOut).toBe(true);
     expect(useAuthStore.getState().status).toBe('anonymous');

@@ -99,10 +99,118 @@ export class StockService {
   }
 
   /**
+   * Ensure stock levels exist for all trackable products assigned to the branch(es).
+   * This guarantees that every product with track_quantity=true appears in the stock list
+   * (even with 0 on-hand units) and can have stock received/adjusted.
+   */
+  async ensureStockLevels(orgId: string, branchId?: string): Promise<void> {
+    try {
+      const branchProducts = await this.db.branchProduct.findMany({
+        where: {
+          org_id: orgId,
+          is_excluded: false,
+          ...(branchId ? { branch_id: branchId } : {}),
+          product: {
+            is_deleted: false,
+            track_quantity: true,
+          },
+        },
+        select: {
+          branch_id: true,
+          product_id: true,
+          product: {
+            select: {
+              id: true,
+              has_variants: true,
+              low_stock_threshold: true,
+              variants: {
+                where: { is_deleted: false },
+                select: { id: true, low_stock_threshold: true },
+              },
+            },
+          },
+        },
+      });
+
+      if (branchProducts.length === 0) return;
+
+      const existingStockLevels = await this.db.stockLevel.findMany({
+        where: {
+          org_id: orgId,
+          ...(branchId ? { branch_id: branchId } : {}),
+        },
+        select: {
+          branch_id: true,
+          product_id: true,
+          variant_id: true,
+        },
+      });
+
+      const existingSet = new Set(
+        existingStockLevels.map((sl) => `${sl.branch_id}:${sl.product_id ?? ''}:${sl.variant_id ?? ''}`)
+      );
+
+      const toCreate: Array<{
+        branchId: string;
+        productId: string;
+        variantId: string | null;
+        threshold: number | null;
+      }> = [];
+
+      for (const bp of branchProducts) {
+        if (bp.product.has_variants && bp.product.variants.length > 0) {
+          for (const v of bp.product.variants) {
+            const key = `${bp.branch_id}:${bp.product_id}:${v.id}`;
+            if (!existingSet.has(key)) {
+              existingSet.add(key);
+              toCreate.push({
+                branchId: bp.branch_id,
+                productId: bp.product_id,
+                variantId: v.id,
+                threshold: v.low_stock_threshold ?? bp.product.low_stock_threshold,
+              });
+            }
+          }
+        } else {
+          const key = `${bp.branch_id}:${bp.product_id}:`;
+          if (!existingSet.has(key)) {
+            existingSet.add(key);
+            toCreate.push({
+              branchId: bp.branch_id,
+              productId: bp.product_id,
+              variantId: null,
+              threshold: bp.product.low_stock_threshold,
+            });
+          }
+        }
+      }
+
+      if (toCreate.length > 0) {
+        await this.db.stockLevel.createMany({
+          data: toCreate.map((item) => ({
+            org_id: orgId,
+            branch_id: item.branchId,
+            product_id: item.productId,
+            variant_id: item.variantId,
+            quantity_on_hand: new Prisma.Decimal(0),
+            reserved: new Prisma.Decimal(0),
+            low_stock_threshold: item.threshold,
+          })),
+          skipDuplicates: true,
+        });
+        this.invalidateStockCache(orgId, branchId);
+      }
+    } catch (err) {
+      console.warn('ensureStockLevels non-fatal error:', err);
+    }
+  }
+
+  /**
    * Get KPI aggregate statistics for a branch or all branches
    */
   async getStockSummary(orgId: string, query: StockSummaryQuery): Promise<StockSummaryView> {
     const branchId = query.branchId && query.branchId !== 'all' ? query.branchId : undefined;
+    await this.ensureStockLevels(orgId, branchId);
     const cacheKey = `stock:summary:${orgId}:${branchId ?? 'all'}`;
 
     return inventoryCache.fetchOrCompute(
@@ -172,6 +280,7 @@ export class StockService {
    */
   async listStockItems(orgId: string, query: StockListQuery) {
     const branchId = query.branchId && query.branchId !== 'all' ? query.branchId : undefined;
+    await this.ensureStockLevels(orgId, branchId);
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
     const skip = (page - 1) * limit;

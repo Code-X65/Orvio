@@ -22,6 +22,7 @@ import { Button } from '../../../components/ui/button';
 import { Input } from '../../../components/ui/input';
 import { Badge } from '../../../components/ui/badge';
 import { Textarea } from '../../../components/ui/textarea';
+import { SearchableSelect } from '../../../components/ui/SearchableSelect';
 import { useAuthStore } from '../../../stores/auth-store';
 import type { CategoryTreeNode } from '../categories-api';
 import { flattenCategoriesForSelection } from './CategoryForm';
@@ -664,21 +665,17 @@ export function ProductForm({
                   </label>
                   <span className="text-[10px] text-slate-500 font-medium">Mandatory</span>
                 </div>
-                <select
+                <SearchableSelect
                   value={categoryId || ''}
-                  onChange={(e) => setCategoryId(e.target.value ? e.target.value : null)}
-                  className={`w-full bg-[#121316] border rounded-md px-3 py-2 text-sm text-white focus:outline-none transition-colors ${
-                    !categoryId ? 'border-amber-500/50 text-slate-400' : 'border-[#2d3139] text-white focus:border-[#985184]'
-                  }`}
+                  onChange={(val) => setCategoryId(val ? val : null)}
+                  options={categoryOptions.map((opt) => ({
+                    value: opt.id,
+                    label: opt.label,
+                  }))}
+                  placeholder="-- Select a Category or Subcategory * --"
+                  searchPlaceholder="Search category or subcategory..."
                   required
-                >
-                  <option value="" disabled>-- Select a Category or Subcategory * --</option>
-                  {categoryOptions.map((opt) => (
-                    <option key={opt.id} value={opt.id} className="text-white bg-[#181a20]">
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
+                />
                 {categoryOptions.length === 0 ? (
                   <p className="text-[11px] text-amber-400 mt-1.5 flex items-center gap-1.5">
                     <AlertCircle className="w-3.5 h-3.5 shrink-0" />
@@ -705,18 +702,20 @@ export function ProductForm({
                     <Plus className="w-3 h-3" /> New Brand
                   </button>
                 </div>
-                <select
+                <SearchableSelect
                   value={brandId || ''}
-                  onChange={(e) => setBrandId(e.target.value ? e.target.value : null)}
-                  className="w-full bg-[#121316] border border-[#2d3139] rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-[#985184] transition-colors"
-                >
-                  <option value="">No Brand (Generic / Store Brand)</option>
-                  {brands.map((b) => (
-                    <option key={b.id} value={b.id}>
-                      {b.name}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(val) => setBrandId(val ? val : null)}
+                  options={[
+                    { value: '', label: 'No Brand (Generic / Store Brand)' },
+                    ...brands.map((b) => ({
+                      value: b.id,
+                      label: b.name,
+                    })),
+                  ]}
+                  placeholder="No Brand (Generic / Store Brand)"
+                  searchPlaceholder="Search brands / manufacturers..."
+                  allowClear
+                />
                 <span className="text-[10px] text-slate-500 mt-1 block">
                   Optional manufacturer or publisher (shared across all branch catalogs)
                 </span>
@@ -885,17 +884,16 @@ export function ProductForm({
                 <label className="block text-xs font-semibold text-slate-300 mb-1.5">
                   Unit of Measure
                 </label>
-                <select
+                <SearchableSelect
                   value={unitOfMeasure}
-                  onChange={(e) => setUnitOfMeasure(e.target.value as MeasurementUnit)}
-                  className="w-full bg-[#121316] border border-[#2d3139] rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-[#985184] transition-colors"
-                >
-                  {MEASUREMENT_UNITS.map((u) => (
-                    <option key={u.value} value={u.value}>
-                      {u.label}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(val) => setUnitOfMeasure(val as MeasurementUnit)}
+                  options={MEASUREMENT_UNITS.map((u) => ({
+                    value: u.value,
+                    label: u.label,
+                  }))}
+                  placeholder="Select unit of measure..."
+                  searchPlaceholder="Search units (pcs, kg, etc.)..."
+                />
               </div>
             </div>
 
@@ -1058,20 +1056,19 @@ export function ProductForm({
                           <label className="block text-xs font-semibold text-slate-300 mb-1.5">
                             {field.label}
                           </label>
-                          <select
+                          <SearchableSelect
                             value={metadata[field.key] || ''}
-                            onChange={(e) =>
-                              setMetadata((prev) => ({ ...prev, [field.key]: e.target.value }))
+                            onChange={(val) =>
+                              setMetadata((prev) => ({ ...prev, [field.key]: val }))
                             }
-                            className="w-full bg-[#121316] border border-[#2d3139] rounded-md px-3 py-2 text-xs text-white focus:outline-none focus:border-[#985184] transition-colors"
-                          >
-                            <option value="">Select option...</option>
-                            {field.options?.map((opt) => (
-                              <option key={opt} value={opt}>
-                                {opt}
-                              </option>
-                            ))}
-                          </select>
+                            options={(field.options || []).map((opt) => ({
+                              value: opt,
+                              label: opt,
+                            }))}
+                            placeholder="Select option..."
+                            searchPlaceholder={`Search ${field.label}...`}
+                            allowClear
+                          />
                         </div>
                       ) : field.type === 'date' ? (
                         <div>

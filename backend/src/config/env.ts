@@ -25,7 +25,7 @@ const envSchema = z
       .string()
       .min(32, 'JWT_SECRET must be at least 32 characters')
       .default('dev-jwt-secret-min-32-chars-for-safety!!'),
-    JWT_ACCESS_EXPIRY: z.string().default('15m'),
+    JWT_ACCESS_EXPIRY: z.string().default('2h'),
     JWT_AUDIENCE: z.string().default('orvio-web'),
     JWT_KEY_ID: z.string().min(1).default('primary'),
     JWT_ROTATION_KEYS: z.string().optional(),

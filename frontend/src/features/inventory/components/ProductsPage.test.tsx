@@ -111,6 +111,7 @@ describe('ProductsPage Component', () => {
     vi.clearAllMocks();
     (productApi.listProducts as any).mockResolvedValue(mockProductsResponse);
     (categoryApi.getCategories as any).mockResolvedValue(mockCategoriesResponse);
+    (brandApi.getBrands as any).mockResolvedValue({ brands: [], pagination: { total: 0, page: 1, limit: 100, totalPages: 1 } });
   });
 
   it('renders products table with item details, prices, and stock', async () => {

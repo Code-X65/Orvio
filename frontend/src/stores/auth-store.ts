@@ -161,7 +161,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ lastActivityAt: Date.now() });
   },
 
-  checkIdleTimeout: (maxIdleMs = 60 * 60 * 1000) => {
+  checkIdleTimeout: (maxIdleMs = 3 * 60 * 60 * 1000) => {
     const last = get().lastActivityAt;
     const currentStatus = get().status;
     if (!last || (currentStatus !== 'authenticated' && currentStatus !== 'pending-verification')) return false;

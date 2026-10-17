@@ -1,8 +1,9 @@
 import * as React from 'react';
-import { X, SlidersHorizontal, AlertCircle, AlertTriangle, Loader2 } from 'lucide-react';
+import { X, SlidersHorizontal, AlertCircle, AlertTriangle, Loader2, Store } from 'lucide-react';
 import { Button } from '../../../components/ui/button';
 import { Input } from '../../../components/ui/input';
 import { Badge } from '../../../components/ui/badge';
+import { SearchableSelect } from '../../../components/ui/SearchableSelect';
 import { useFormDraft } from '../../../hooks/useFormDraft';
 import { useStockMutations } from '../hooks/useStock';
 import { productApi } from '../products-api';
@@ -14,6 +15,7 @@ export interface AdjustStockModalProps {
   selectedItem?: StockItem | null;
   stockItems?: StockItem[];
   branchId?: string;
+  activeBranchName?: string;
   branches: Array<{ id: string; name: string }>;
   onSuccess?: () => void;
   initialProductId?: string;
@@ -26,6 +28,7 @@ export function AdjustStockModal({
   selectedItem,
   stockItems = [],
   branchId,
+  activeBranchName,
   branches,
   onSuccess,
   initialProductId,
@@ -33,12 +36,21 @@ export function AdjustStockModal({
 }: AdjustStockModalProps) {
   const effectiveProductId = selectedItem?.productId || initialProductId || stockItems[0]?.productId || '';
 
+  const effectiveBranchId =
+    branchId && branchId !== 'all'
+      ? branchId
+      : selectedItem?.branchId || branches[0]?.id || '';
+
+  const effectiveBranchName =
+    activeBranchName ||
+    branches.find((b) => b.id === effectiveBranchId)?.name ||
+    'Current Branch';
+
   const { draft, saveDraft, clearDraft, hasDraft } = useFormDraft<{
     mode?: 'delta' | 'counted';
     inputValue?: string;
     reason?: 'damage' | 'loss' | 'found' | 'correction' | 'count_reconciliation' | 'other';
     notes?: string;
-    targetBranchId?: string;
   }>(effectiveProductId ? `adjust_${effectiveProductId}` : 'adjust_new', {
     mode: 'delta',
     inputValue: '0',
@@ -46,12 +58,29 @@ export function AdjustStockModal({
     notes: '',
   });
 
-  const [targetBranchId, setTargetBranchId] = React.useState<string>(() => {
-    if (draft?.targetBranchId) return draft.targetBranchId;
-    if (selectedItem?.branchId) return selectedItem.branchId;
-    if (branchId && branchId !== 'all') return branchId;
-    return branches[0]?.id || '';
-  });
+  const [mounted, setMounted] = React.useState(isOpen);
+  const [animating, setAnimating] = React.useState(false);
+
+  React.useEffect(() => {
+    let timer: NodeJS.Timeout;
+    if (isOpen) {
+      setMounted(true);
+      timer = setTimeout(() => setAnimating(true), 20);
+    } else {
+      setAnimating(false);
+      timer = setTimeout(() => setMounted(false), 300);
+    }
+    return () => clearTimeout(timer);
+  }, [isOpen]);
+
+  const triggerClose = React.useCallback(() => {
+    setAnimating(false);
+    setTimeout(() => {
+      onClose();
+    }, 300);
+  }, [onClose]);
+
+  const targetBranchId = effectiveBranchId;
 
   const [productId, setProductId] = React.useState<string>(() => {
     return selectedItem?.productId || initialProductId || stockItems[0]?.productId || '';
@@ -80,7 +109,6 @@ export function AdjustStockModal({
   React.useEffect(() => {
     if (selectedItem) {
       setProductId(selectedItem.productId);
-      setTargetBranchId(selectedItem.branchId);
       if (selectedItem.variantId) {
         setVariantId(selectedItem.variantId);
       }
@@ -209,17 +237,33 @@ export function AdjustStockModal({
 
       clearDraft();
       onSuccess?.();
-      onClose();
+      triggerClose();
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to apply stock adjustment.');
     }
   };
 
+  if (!mounted) return null;
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs animate-in fade-in duration-200">
-      <div className="bg-[#121316] border border-[#2d3139] rounded-xl w-full max-w-lg shadow-2xl overflow-hidden flex flex-col">
+    <div className="fixed inset-0 z-50 overflow-hidden" data-testid="adjust-stock-drawer">
+      {/* Backdrop */}
+      <div
+        className={`fixed inset-0 bg-black/75 backdrop-blur-xs transition-opacity duration-300 ease-in-out cursor-pointer ${
+          animating ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
+        }`}
+        onClick={triggerClose}
+        aria-hidden="true"
+      />
+
+      {/* Slide-over Right Hand Panel */}
+      <aside
+        className={`fixed inset-y-0 right-0 w-full max-w-lg sm:max-w-xl h-screen bg-[#181a20] border-l border-[#2d3139] text-slate-100 shadow-2xl flex flex-col z-50 transform transition-transform duration-300 ease-out ${
+          animating ? 'translate-x-0' : 'translate-x-full'
+        }`}
+      >
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-[#2d3139]">
+        <div className="px-6 py-4 border-b border-[#2d3139] bg-[#181a20] flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400">
               <SlidersHorizontal className="w-4 h-4" />
@@ -238,15 +282,18 @@ export function AdjustStockModal({
           </div>
           <button
             type="button"
-            onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-white rounded-md hover:bg-white/5 transition-colors"
+            onClick={triggerClose}
+            className="p-1.5 text-slate-400 hover:text-white rounded-md hover:bg-white/5 cursor-pointer transition-colors"
+            data-testid="adjust-drawer-close"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        {/* Form Body */}
-        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+        {/* Form Container */}
+        <form onSubmit={handleSubmit} className="flex-1 flex flex-col justify-between overflow-hidden">
+          {/* Scrollable Form Body */}
+          <div className="p-6 space-y-4 flex-1 overflow-y-auto bg-[#141519]">
           {errorMsg && (
             <div className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs flex items-center gap-2">
               <AlertCircle className="w-4 h-4 shrink-0" />
@@ -289,66 +336,45 @@ export function AdjustStockModal({
             </button>
           </div>
 
-          {/* Branch & Product Selection */}
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-slate-300 mb-1.5">Branch *</label>
-              <select
-                value={targetBranchId}
-                onChange={(e) => {
-                  setTargetBranchId(e.target.value);
-                  saveDraft({ targetBranchId: e.target.value });
-                }}
-                className="w-full h-9 bg-[#1a1b20] border border-[#2d3139] rounded-md px-3 text-xs text-slate-200 focus:outline-hidden focus:border-[#985184]"
+          {/* Product Selection */}
+          <div>
+            <label className="block text-xs font-medium text-slate-300 mb-1.5">Product *</label>
+            {selectedItem ? (
+              <div className="h-10 px-3 bg-[#141519]/90 border-0 border-b-2 border-[#2d3139] flex items-center text-xs text-slate-200 truncate">
+                {selectedItem.productName}
+              </div>
+            ) : (
+              <SearchableSelect
+                value={productId}
+                onChange={(val) => setProductId(val)}
+                placeholder="Select product to adjust..."
+                searchPlaceholder="Search by product name or SKU..."
+                options={stockItems.map((item) => ({
+                  value: item.productId,
+                  label: item.productName,
+                  sublabel: item.sku,
+                }))}
                 required
-              >
-                {branches.map((b) => (
-                  <option key={b.id} value={b.id}>
-                    {b.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-300 mb-1.5">Product *</label>
-              {selectedItem ? (
-                <div className="h-9 px-3 bg-[#1a1b20] border border-[#2d3139] rounded-md flex items-center text-xs text-slate-200 truncate">
-                  {selectedItem.productName}
-                </div>
-              ) : (
-                <select
-                  value={productId}
-                  onChange={(e) => setProductId(e.target.value)}
-                  className="w-full h-9 bg-[#1a1b20] border border-[#2d3139] rounded-md px-3 text-xs text-slate-200 focus:outline-hidden focus:border-[#985184]"
-                  required
-                >
-                  {stockItems.map((item) => (
-                    <option key={item.productId} value={item.productId}>
-                      {item.productName} ({item.sku})
-                    </option>
-                  ))}
-                </select>
-              )}
-            </div>
+              />
+            )}
           </div>
 
           {/* Variant Selection if product has variants */}
           {hasVariants && (
             <div>
               <label className="block text-xs font-medium text-slate-300 mb-1.5">Product Variant *</label>
-              <select
+              <SearchableSelect
                 value={variantId}
-                onChange={(e) => setVariantId(e.target.value)}
-                className="w-full h-9 bg-[#1a1b20] border border-[#2d3139] rounded-md px-3 text-xs text-slate-200 focus:outline-hidden focus:border-[#985184]"
+                onChange={(val) => setVariantId(val)}
+                placeholder="Select product variant..."
+                searchPlaceholder="Search variant by name, attribute, or SKU..."
+                options={productVariants.map((v) => ({
+                  value: v.id,
+                  label: v.name || (v.attributes ? Object.entries(v.attributes).map(([k, val]) => `${k}: ${val}`).join(', ') : v.sku),
+                  sublabel: v.sku,
+                }))}
                 required
-              >
-                <option value="" disabled>Select Variant...</option>
-                {productVariants.map((v) => (
-                  <option key={v.id} value={v.id}>
-                    {v.name || (v.attributes ? Object.entries(v.attributes).map(([k, val]) => `${k}: ${val}`).join(', ') : v.sku)} ({v.sku})
-                  </option>
-                ))}
-              </select>
+              />
             </div>
           )}
 
@@ -412,22 +438,23 @@ export function AdjustStockModal({
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-medium text-slate-300 mb-1.5">Adjustment Reason *</label>
-              <select
+              <SearchableSelect
                 value={reason}
-                onChange={(e) => {
-                  const val = e.target.value as any;
-                  setReason(val);
-                  saveDraft({ reason: val });
+                onChange={(val) => {
+                  setReason(val as any);
+                  saveDraft({ reason: val as any });
                 }}
-                className="w-full h-9 bg-[#1a1b20] border border-[#2d3139] rounded-md px-3 text-xs text-slate-200 focus:outline-hidden focus:border-[#985184]"
-              >
-                <option value="damage">Damage / Breakage</option>
-                <option value="loss">Loss / Theft</option>
-                <option value="found">Found / Discovered</option>
-                <option value="correction">Data Correction</option>
-                <option value="count_reconciliation">Physical Count Reconciliation</option>
-                <option value="other">Other (Requires Note)</option>
-              </select>
+                options={[
+                  { value: 'damage', label: 'Damage / Breakage' },
+                  { value: 'loss', label: 'Loss / Theft' },
+                  { value: 'found', label: 'Found / Discovered' },
+                  { value: 'correction', label: 'Data Correction' },
+                  { value: 'count_reconciliation', label: 'Physical Count Reconciliation' },
+                  { value: 'other', label: 'Other (Requires Note)' },
+                ]}
+                searchPlaceholder="Filter reasons..."
+                required
+              />
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-300 mb-1.5">
@@ -447,15 +474,17 @@ export function AdjustStockModal({
             </div>
           </div>
 
-          {/* Footer Actions */}
-          <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-[#2d3139]">
+          </div>
+
+          {/* Sticky Footer Actions */}
+          <div className="px-6 py-4 border-t border-[#2d3139] bg-[#181a20] flex items-center justify-end gap-3 shrink-0">
             <Button
               type="button"
               variant="outline"
               size="sm"
-              onClick={onClose}
+              onClick={triggerClose}
               disabled={adjustStock.isPending}
-              className="border-[#2d3139] text-slate-300 hover:bg-white/5"
+              className="border-[#2d3139] bg-transparent text-xs text-slate-300 hover:bg-[#252830] hover:text-white"
             >
               Cancel
             </Button>
@@ -463,7 +492,7 @@ export function AdjustStockModal({
               type="submit"
               size="sm"
               disabled={adjustStock.isPending || isInvalidNegative || isInvalidReserved}
-              className="bg-[#985184] hover:bg-[#854573] text-white"
+              className="bg-[#985184] hover:bg-[#854573] text-white text-xs font-medium"
             >
               {adjustStock.isPending ? (
                 <>
@@ -476,7 +505,7 @@ export function AdjustStockModal({
             </Button>
           </div>
         </form>
-      </div>
+      </aside>
     </div>
   );
 }

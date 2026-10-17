@@ -4,6 +4,8 @@ import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { InventoryWorkspacePage } from './InventoryWorkspacePage';
 
+import { useAuthStore } from '../../stores/auth-store';
+
 // Mock branchApi
 vi.mock('../../features/inventory/branches-api', () => ({
   branchApi: {
@@ -13,6 +15,25 @@ vi.mock('../../features/inventory/branches-api', () => ({
         { id: 'b-2', name: 'Downtown Annex', type: 'warehouse', is_primary: false },
       ],
     }),
+  },
+}));
+
+// Mock catalog APIs for CatalogSearchModal
+vi.mock('../../features/inventory/products-api', () => ({
+  productApi: {
+    searchProducts: vi.fn().mockResolvedValue({ products: [], total: 0 }),
+  },
+}));
+
+vi.mock('../../features/inventory/categories-api', () => ({
+  categoryApi: {
+    getCategories: vi.fn().mockResolvedValue({ categories: [] }),
+  },
+}));
+
+vi.mock('../../features/inventory/brands-api', () => ({
+  brandApi: {
+    getBrands: vi.fn().mockResolvedValue({ brands: [] }),
   },
 }));
 
@@ -233,5 +254,77 @@ describe('InventoryWorkspacePage Routing & Navigation', () => {
     expect(screen.getByRole('link', { name: /products/i })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /categories/i })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /brands/i })).toBeInTheDocument();
+  });
+
+  it('renders search bar trigger and opens Catalog Search palette on click and on Ctrl+K', async () => {
+    renderWorkspaceAt('/inventory?branch=b-1');
+
+    const searchTrigger = screen.getByTestId('catalog-search-trigger');
+    expect(searchTrigger).toBeInTheDocument();
+    expect(searchTrigger).toHaveTextContent(/Search catalog/i);
+    expect(searchTrigger).toHaveTextContent(/Ctrl.*K/i);
+
+    // Click opens modal
+    fireEvent.click(searchTrigger);
+    expect(screen.getByTestId('catalog-search-modal')).toBeInTheDocument();
+
+    // Close modal via escape key
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => {
+      expect(screen.queryByTestId('catalog-search-modal')).not.toBeInTheDocument();
+    });
+
+    // Ctrl+K opens modal
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
+    expect(screen.getByTestId('catalog-search-modal')).toBeInTheDocument();
+  });
+
+  it('renders locked NGN currency badge with cursor-not-allowed', () => {
+    renderWorkspaceAt('/inventory?branch=b-1');
+
+    const badge = screen.getByTestId('currency-badge');
+    expect(badge).toBeInTheDocument();
+    expect(badge).toHaveTextContent('₦');
+    expect(badge).toHaveTextContent('NGN');
+    expect(badge).toHaveClass('cursor-not-allowed');
+    expect(badge).toHaveAttribute('title', 'Currency is locked to Nigerian Naira (NGN)');
+  });
+
+  it('removes launchpad link and organization initials block from top header', () => {
+    renderWorkspaceAt('/inventory?branch=b-1');
+
+    expect(screen.queryByRole('link', { name: /launchpad/i })).not.toBeInTheDocument();
+    expect(screen.queryByText('Launchpad')).not.toBeInTheDocument();
+    // Org name is 'Apex Stores', 'AS' should not be rendered in an avatar in header
+    expect(screen.queryByText('AS')).not.toBeInTheDocument();
+  });
+
+  it('renders authenticated user profile with full name, role badge, and initials in the sidebar', () => {
+    const dummyToken = 'header.' + btoa(JSON.stringify({ role: 'admin', sub: 'u-123' })) + '.sig';
+    useAuthStore.setState({
+      accessToken: dummyToken,
+      user: {
+        id: 'u-123',
+        fullName: 'Amina Bello',
+        email: 'amina@example.com',
+        status: 'active',
+      },
+    });
+
+    renderWorkspaceAt('/inventory?branch=b-1');
+
+    const userProfile = screen.getByTestId('sidebar-user-profile');
+    expect(userProfile).toBeInTheDocument();
+    expect(userProfile).toHaveTextContent('Amina Bello');
+    expect(userProfile).toHaveTextContent('Admin');
+    expect(userProfile).toHaveTextContent('amina@example.com');
+    // Initials: Amina Bello -> AB
+    expect(userProfile).toHaveTextContent('AB');
+
+    // In collapsed icon-only mode:
+    fireEvent.click(screen.getByTestId('sidebar-collapse-btn'));
+    const collapsedAvatar = screen.getByTestId('sidebar-user-avatar-collapsed');
+    expect(collapsedAvatar).toBeInTheDocument();
+    expect(collapsedAvatar).toHaveTextContent('AB');
   });
 });

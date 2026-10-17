@@ -293,7 +293,8 @@ export class ProductService {
         },
       });
 
-      if (input.trackQuantity && input.initialStock && input.initialStock > 0) {
+      if (input.trackQuantity !== false) {
+        const initialQty = input.initialStock && input.initialStock > 0 ? input.initialStock : 0;
         const existingStockLevel = await this.db.stockLevel.findFirst({
           where: {
             org_id: orgId,
@@ -303,20 +304,24 @@ export class ProductService {
           },
         });
         if (existingStockLevel) {
-          await this.db.stockLevel.update({
-            where: { id: existingStockLevel.id },
-            data: {
-              quantity_on_hand: new Decimal(input.initialStock),
-            },
-          });
+          if (initialQty > 0) {
+            await this.db.stockLevel.update({
+              where: { id: existingStockLevel.id },
+              data: {
+                quantity_on_hand: new Decimal(initialQty),
+                low_stock_threshold: input.lowStockThreshold ?? existingStockLevel.low_stock_threshold,
+              },
+            });
+          }
         } else {
           await this.db.stockLevel.create({
             data: {
               org_id: orgId,
               product_id: product.id,
               branch_id: targetBranchId,
-              quantity_on_hand: new Decimal(input.initialStock),
+              quantity_on_hand: new Decimal(initialQty),
               reserved: new Decimal(0),
+              low_stock_threshold: input.lowStockThreshold ?? null,
             },
           });
         }

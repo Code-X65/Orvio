@@ -40,21 +40,25 @@ interface CategoriesPageProps {
   branchId?: string;
 }
 
-// Recursively filter tree nodes based on search query
-function filterTreeNodes(nodes: CategoryTreeNode[], query: string): CategoryTreeNode[] {
-  if (!query) return nodes;
-
-  const normalized = query.toLowerCase().trim();
+// Recursively filter tree nodes based on search query and activeOnly filter
+function filterTreeNodes(nodes: CategoryTreeNode[], query: string, activeOnly: boolean): CategoryTreeNode[] {
+  const normalized = query ? query.toLowerCase().trim() : '';
 
   return nodes.reduce<CategoryTreeNode[]>((acc, node) => {
-    const matchesSelf =
+    // If activeOnly is true and node is inactive, filter it out
+    if (activeOnly && !node.is_active) {
+      return acc;
+    }
+
+    const filteredChildren = node.children ? filterTreeNodes(node.children, query, activeOnly) : [];
+
+    const matchesQuery =
+      !normalized ||
       node.name.toLowerCase().includes(normalized) ||
       (node.description && node.description.toLowerCase().includes(normalized)) ||
       node.slug.toLowerCase().includes(normalized);
 
-    const filteredChildren = node.children ? filterTreeNodes(node.children, query) : [];
-
-    if (matchesSelf || filteredChildren.length > 0) {
+    if (matchesQuery || filteredChildren.length > 0) {
       acc.push({
         ...node,
         children: filteredChildren,
@@ -160,7 +164,10 @@ function CategoryUsageSkeleton() {
 }
 
 export function CategoriesPage({ organization, onNavigateToProducts, branchId }: CategoriesPageProps) {
-  const { data: categoriesData, isLoading, error: queryError, refetch } = useCategories({ branchId });
+  const { data: categoriesData, isLoading, error: queryError, refetch } = useCategories({
+    branchId,
+    includeInactive: true,
+  });
   const [categories, setCategories] = React.useState<CategoryTreeNode[]>([]);
   const loading = isLoading;
   const error = queryError ? queryError.message : null;
@@ -178,7 +185,7 @@ export function CategoriesPage({ organization, onNavigateToProducts, branchId }:
 
   // Filters & State
   const [searchQuery, setSearchQuery] = React.useState('');
-  const [activeOnly, setActiveOnly] = React.useState(true);
+  const [activeOnly, setActiveOnly] = React.useState(false);
   const [expandedIds, setExpandedIds] = React.useState<Set<string>>(new Set());
 
   // Modal State
@@ -497,7 +504,7 @@ export function CategoriesPage({ organization, onNavigateToProducts, branchId }:
   };
 
   const totalCategoriesCount = countTotalCategories(categories);
-  const filteredNodes = filterTreeNodes(categories, searchQuery);
+  const filteredNodes = filterTreeNodes(categories, searchQuery, activeOnly);
 
   return (
     <div className="space-y-5" data-testid="categories-page">

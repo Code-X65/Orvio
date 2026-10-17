@@ -4,6 +4,7 @@ import { Button } from '../../../components/ui/button';
 import { Input } from '../../../components/ui/input';
 import { Badge } from '../../../components/ui/badge';
 import { Textarea } from '../../../components/ui/textarea';
+import { SearchableSelect } from '../../../components/ui/SearchableSelect';
 import type { Category, CategoryTreeNode } from '../categories-api';
 
 export interface CategoryFormData {
@@ -270,23 +271,23 @@ export function CategoryForm({
 
             {/* Parent Category Field */}
             <div>
-              <label htmlFor="category-parent" className="block text-xs font-semibold text-slate-300 mb-1.5">
-                Parent Category (Optional)
-              </label>
-              <select
+              <SearchableSelect
                 id="category-parent"
-                data-testid="category-parent-select"
+                testId="category-parent-select"
+                label="Parent Category (Optional)"
                 value={parentId || ''}
-                onChange={(e) => setParentId(e.target.value ? e.target.value : null)}
-                className="w-full bg-[#181a20] border border-[#2d3139] rounded-sm text-xs text-white px-3 h-9 focus:outline-none focus:border-[#985184]"
-              >
-                <option value="">None (Top-level Category)</option>
-                {parentOptions.map((opt) => (
-                  <option key={opt.id} value={opt.id}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
+                onChange={(val) => setParentId(val ? val : null)}
+                options={[
+                  { value: '', label: 'None (Top-level Category)' },
+                  ...parentOptions.map((opt) => ({
+                    value: opt.id,
+                    label: opt.label,
+                  })),
+                ]}
+                placeholder="None (Top-level Category)"
+                searchPlaceholder="Search categories to nest under..."
+                allowClear
+              />
               <p className="text-[11px] text-slate-400 mt-1.5 leading-relaxed">
                 Leave blank to keep this as a root category, or nest it up to 5 levels deep in your catalog tree.
               </p>

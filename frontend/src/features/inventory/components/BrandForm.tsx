@@ -54,13 +54,20 @@ export function BrandForm({
     let timer: NodeJS.Timeout;
     if (isOpen) {
       setMounted(true);
-      timer = setTimeout(() => setAnimating(true), 10);
+      timer = setTimeout(() => setAnimating(true), 20);
     } else {
       setAnimating(false);
-      timer = setTimeout(() => setMounted(false), 200);
+      timer = setTimeout(() => setMounted(false), 300);
     }
     return () => clearTimeout(timer);
   }, [isOpen]);
+
+  const triggerClose = React.useCallback(() => {
+    setAnimating(false);
+    setTimeout(() => {
+      onClose();
+    }, 300);
+  }, [onClose]);
 
   React.useEffect(() => {
     if (editingBrand) {
@@ -131,7 +138,7 @@ export function BrandForm({
         onSuccess?.(resultBrand);
       }
 
-      onClose();
+      triggerClose();
     } catch (err: any) {
       const msg = err?.message || 'Failed to save brand. Please try again.';
       setError(msg);
@@ -143,29 +150,31 @@ export function BrandForm({
   if (!mounted) return null;
 
   return (
-    <div
-      className={`fixed inset-0 z-50 flex items-center justify-center p-4 transition-opacity duration-200 ${
-        animating ? 'opacity-100' : 'opacity-0'
-      }`}
-    >
+    <div className="fixed inset-0 z-[60] overflow-hidden" data-testid="brand-form-drawer">
       {/* Backdrop */}
-      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
-
-      {/* Modal Dialog */}
       <div
-        className={`relative w-full max-w-lg rounded-xl border border-[#2d3139] bg-[#141519] p-6 shadow-2xl transition-all duration-200 ${
-          animating ? 'scale-100 opacity-100' : 'scale-95 opacity-0'
+        className={`fixed inset-0 bg-black/75 backdrop-blur-xs transition-opacity duration-300 ease-in-out cursor-pointer ${
+          animating ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
+        }`}
+        onClick={triggerClose}
+        aria-hidden="true"
+      />
+
+      {/* Slide-over Right Hand Panel */}
+      <aside
+        className={`fixed inset-y-0 right-0 w-full max-w-md sm:max-w-lg h-screen bg-[#181a20] border-l border-[#2d3139] text-slate-100 shadow-2xl flex flex-col z-[60] transform transition-transform duration-300 ease-out ${
+          animating ? 'translate-x-0' : 'translate-x-full'
         }`}
       >
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-[#2d3139] pb-4">
+        <div className="p-5 border-b border-[#2d3139] bg-[#181a20] flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[#985184]/10 text-[#985184]">
-              <Award className="h-5 w-5" />
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[#985184]/15 text-[#985184]">
+              <Award className="h-5 w-5 text-[#fbb945]" />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h2 className="text-base font-semibold text-white">
+                <h2 className="text-base font-bold text-white tracking-tight">
                   {editingBrand ? 'Edit Brand' : isQuickCreate ? 'Quick Create Brand' : 'Add New Brand'}
                 </h2>
               </div>
@@ -177,27 +186,31 @@ export function BrandForm({
             </div>
           </div>
           <button
-            onClick={onClose}
-            className="rounded-lg p-1 text-slate-400 hover:bg-[#252830] hover:text-white transition-colors"
+            type="button"
+            onClick={triggerClose}
+            className="p-1.5 text-slate-400 hover:text-white rounded-md hover:bg-white/5 cursor-pointer transition-colors"
+            data-testid="brand-drawer-close"
           >
             <X className="h-5 w-5" />
           </button>
         </div>
 
-        {/* Error Alert */}
-        {error && (
-          <div className="mt-4 flex items-center gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-400">
-            <AlertCircle className="h-4 w-4 shrink-0" />
-            <span>{error}</span>
-          </div>
-        )}
+        {/* Form Container */}
+        <form onSubmit={handleSubmit} className="flex-1 flex flex-col justify-between overflow-hidden">
+          {/* Scrollable Form Body */}
+          <div className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-4 bg-[#141519]">
+            {/* Error Alert */}
+            {error && (
+              <div className="flex items-center gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-400">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                <span>{error}</span>
+              </div>
+            )}
 
-        {/* Form Body */}
-        <form onSubmit={handleSubmit} className="mt-5 space-y-4">
-          {/* Brand Name */}
-          <div>
-            <label className="block text-xs font-medium text-slate-300">
-              Brand Name <span className="text-rose-400">*</span>
+            {/* Brand Name */}
+            <div>
+              <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                Brand Name <span className="text-rose-400">*</span>
             </label>
             <Input
               type="text"
@@ -299,14 +312,15 @@ export function BrandForm({
               Active in catalog (visible when assigning products)
             </label>
           </div>
+        </div>
 
-          {/* Footer Actions */}
-          <div className="flex items-center justify-end gap-3 border-t border-[#2d3139] pt-4 mt-6">
+        {/* Sticky Footer Actions */}
+          <div className="p-4 border-t border-[#2d3139] bg-[#181a20] flex items-center justify-end gap-3 shrink-0">
             <Button
               type="button"
               variant="outline"
               size="sm"
-              onClick={onClose}
+              onClick={triggerClose}
               disabled={isSubmitting}
               className="border-[#2d3139] bg-transparent text-xs text-slate-300 hover:bg-[#252830] hover:text-white"
             >
@@ -316,7 +330,7 @@ export function BrandForm({
               type="submit"
               size="sm"
               disabled={isSubmitting}
-              className="bg-[#985184] text-xs font-medium text-white hover:bg-[#985184]/90"
+              className="bg-[#985184] text-xs font-medium text-white hover:bg-[#854372]"
             >
               {isSubmitting ? (
                 <>
@@ -331,7 +345,7 @@ export function BrandForm({
             </Button>
           </div>
         </form>
-      </div>
+      </aside>
     </div>
   );
 }
