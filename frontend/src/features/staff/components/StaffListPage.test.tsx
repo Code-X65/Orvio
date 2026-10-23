@@ -12,6 +12,7 @@ vi.mock('../api/staff-api', () => ({
     reactivateMember: vi.fn(),
     revokeInvitation: vi.fn(),
     resendInvitation: vi.fn(),
+    removeMember: vi.fn(),
   },
 }));
 
@@ -141,4 +142,73 @@ describe('StaffListPage Component', () => {
     expect(screen.getByText('Invite Team Member')).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/employee@company.com/i)).toBeInTheDocument();
   });
+
+  it('allows owner to open remove confirmation modal and permanently remove a staff member', async () => {
+    (staffApi.removeMember as any).mockResolvedValue({ success: true, message: 'Member removed' });
+
+    render(
+      <StaffListPage
+        organization={mockOrg}
+        branches={mockBranches}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Bob Storekeeper')).toBeInTheDocument();
+    });
+
+    // Bob has a kebab menu button
+    const memberRows = screen.getAllByRole('row');
+    // Row 0 is header, Row 1 is Alice Owner (no action menu for owner), Row 2 is Bob Storekeeper
+    const bobRow = memberRows.find((row) => row.textContent?.includes('Bob Storekeeper'));
+    expect(bobRow).toBeDefined();
+
+    // Click kebab menu button in Bob's row
+    const actionButtons = bobRow!.querySelectorAll('button');
+    expect(actionButtons.length).toBeGreaterThan(0);
+    fireEvent.click(actionButtons[0]);
+
+    // Check menu options
+    expect(screen.getByText('Edit Permissions')).toBeInTheDocument();
+    expect(screen.getByText('Suspend Access')).toBeInTheDocument();
+    const removeBtn = screen.getByText('Remove from Org');
+    expect(removeBtn).toBeInTheDocument();
+
+    // Click "Remove from Org" to open confirmation modal
+    fireEvent.click(removeBtn);
+
+    // Modal dialog is displayed
+    expect(screen.getByText('Remove Staff Member')).toBeInTheDocument();
+    expect(screen.getByText(/Are you sure you want to remove/i)).toBeInTheDocument();
+    expect(screen.getByText(/Notice: Immediate Realtime Ejection/i)).toBeInTheDocument();
+
+    // Click Confirm Remove
+    const confirmBtn = screen.getByRole('button', { name: /Confirm Remove/i });
+    fireEvent.click(confirmBtn);
+
+    await waitFor(() => {
+      expect(staffApi.removeMember).toHaveBeenCalledWith('org-1', 'mem-2');
+    });
+  });
+
+  it('reloads staff directory when receiving orvio:staff-updated real-time event', async () => {
+    render(
+      <StaffListPage
+        organization={mockOrg}
+        branches={mockBranches}
+      />
+    );
+
+    await waitFor(() => {
+      expect(staffApi.listStaff).toHaveBeenCalledTimes(1);
+    });
+
+    // Simulate cross-tab or WebSocket staff:updated broadcast
+    window.dispatchEvent(new CustomEvent('orvio:staff-updated'));
+
+    await waitFor(() => {
+      expect(staffApi.listStaff).toHaveBeenCalledTimes(2);
+    });
+  });
 });
+

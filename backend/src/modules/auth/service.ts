@@ -43,10 +43,19 @@ function normalizeNigerianPhone(raw: string): string {
   if (digits.length === 10) {
     return `+234${digits}`;
   }
-  if (trimmed.startsWith('+')) {
-    return trimmed.replace(/\s+/g, '');
-  }
   return `+234${digits}`;
+}
+
+function extractBranchRoles(membership: any): Record<string, string> {
+  const roles: Record<string, string> = {};
+  if (membership?.branch_accesses && Array.isArray(membership.branch_accesses)) {
+    membership.branch_accesses.forEach((ba: any) => {
+      if (ba.branch_id) {
+        roles[ba.branch_id] = ba.role || membership.org_role || membership.role;
+      }
+    });
+  }
+  return roles;
 }
 
 export class AuthService {
@@ -340,6 +349,7 @@ export class AuthService {
       org_role: 'owner',
       scope_all_branches: true,
       branch_scope: [],
+      branch_roles: {},
       membership_id: result.membership.id,
       session_id: familyId,
     });
@@ -453,6 +463,7 @@ export class AuthService {
     const familyId = generateOpaqueToken().rawToken;
     const branchScope = primaryMembership?.branch_accesses?.map((ba) => ba.branch_id) || [];
     const scopeAll = primaryMembership?.scope_all_branches ?? (primaryMembership?.role === 'owner');
+    const branchRoles = extractBranchRoles(primaryMembership);
     const accessToken = await signAccessToken({
       sub: updatedUser.id,
       email: updatedUser.email,
@@ -461,6 +472,7 @@ export class AuthService {
       org_role: primaryMembership?.org_role ?? primaryMembership?.role,
       scope_all_branches: scopeAll,
       branch_scope: branchScope,
+      branch_roles: branchRoles,
       membership_id: primaryMembership?.id,
       session_id: familyId,
     });
@@ -584,6 +596,7 @@ export class AuthService {
     const familyId = generateOpaqueToken().rawToken;
     const branchScope = primaryMembership?.branch_accesses?.map((ba) => ba.branch_id) || [];
     const scopeAll = primaryMembership?.scope_all_branches ?? (primaryMembership?.role === 'owner');
+    const branchRoles = extractBranchRoles(primaryMembership);
     const accessToken = await signAccessToken({
       sub: tokenRecord.user.id,
       email: tokenRecord.user.email,
@@ -592,6 +605,7 @@ export class AuthService {
       org_role: primaryMembership?.org_role ?? primaryMembership?.role,
       scope_all_branches: scopeAll,
       branch_scope: branchScope,
+      branch_roles: branchRoles,
       membership_id: primaryMembership?.id,
       session_id: familyId,
     });
@@ -797,6 +811,7 @@ export class AuthService {
     const familyId = generateOpaqueToken().rawToken;
     const branchScope = activeMembership?.branch_accesses?.map((ba) => ba.branch_id) || [];
     const scopeAll = activeMembership?.scope_all_branches ?? (activeMembership?.role === 'owner');
+    const branchRoles = extractBranchRoles(activeMembership);
     const accessToken = await signAccessToken({
       sub: user.id,
       email: user.email,
@@ -805,6 +820,7 @@ export class AuthService {
       org_role: activeMembership?.org_role ?? activeMembership?.role,
       scope_all_branches: scopeAll,
       branch_scope: branchScope,
+      branch_roles: branchRoles,
       membership_id: activeMembership?.id,
       session_id: familyId,
     });
@@ -967,6 +983,7 @@ export class AuthService {
             const currentSessionId = activeSibling.session_id ?? activeSibling.family_id ?? generateOpaqueToken().rawToken;
             const siblingBranchScope = primaryMembership.branch_accesses?.map((ba) => ba.branch_id) || [];
             const siblingScopeAll = primaryMembership.scope_all_branches ?? (primaryMembership.role === 'owner');
+            const siblingBranchRoles = extractBranchRoles(primaryMembership);
             const accessToken = await signAccessToken({
               sub: user.id,
               email: user.email,
@@ -975,6 +992,7 @@ export class AuthService {
               org_role: primaryMembership.org_role ?? primaryMembership.role,
               scope_all_branches: siblingScopeAll,
               branch_scope: siblingBranchScope,
+              branch_roles: siblingBranchRoles,
               membership_id: primaryMembership.id,
               session_id: currentSessionId,
             });
@@ -1043,6 +1061,7 @@ export class AuthService {
     const currentSessionId = tokenRecord.session_id ?? tokenRecord.family_id ?? generateOpaqueToken().rawToken;
     const refreshBranchScope = primaryMembership?.branch_accesses?.map((ba) => ba.branch_id) || [];
     const refreshScopeAll = primaryMembership?.scope_all_branches ?? (primaryMembership?.role === 'owner');
+    const refreshBranchRoles = extractBranchRoles(primaryMembership);
     const accessToken = await signAccessToken({
       sub: user.id,
       email: user.email,
@@ -1051,6 +1070,7 @@ export class AuthService {
       org_role: primaryMembership?.org_role ?? primaryMembership?.role,
       scope_all_branches: refreshScopeAll,
       branch_scope: refreshBranchScope,
+      branch_roles: refreshBranchRoles,
       membership_id: primaryMembership?.id,
       session_id: currentSessionId,
     });
@@ -2000,6 +2020,7 @@ export class AuthService {
         memberships: {
           include: {
             organization: true,
+            branch_accesses: true,
           },
         },
       },
@@ -2020,11 +2041,18 @@ export class AuthService {
 
     // Issue Session Tokens
     const familyId = generateOpaqueToken().rawToken;
+    const branchScope = primaryMembership?.branch_accesses?.map((ba) => ba.branch_id) || [];
+    const scopeAll = primaryMembership?.scope_all_branches ?? (primaryMembership?.role === 'owner');
+    const branchRoles = extractBranchRoles(primaryMembership);
     const accessToken = await signAccessToken({
       sub: user.id,
       email: user.email,
       org_id: org?.id,
       role: primaryMembership?.role,
+      org_role: primaryMembership?.org_role ?? primaryMembership?.role,
+      scope_all_branches: scopeAll,
+      branch_scope: branchScope,
+      branch_roles: branchRoles,
       membership_id: primaryMembership?.id,
       session_id: familyId,
     });

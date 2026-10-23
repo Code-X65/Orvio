@@ -1,6 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { catalogApi, type BranchProductItem } from '../catalog-api';
 import { productApi, type ProductListResponse, type Product } from '../products-api';
+import { useAuthStore } from '../../../stores/auth-store';
+import { loadPersistedCatalog, savePersistedCatalog } from '../catalog-cache';
 
 export interface UseBranchCatalogOptions {
   branchId?: string;
@@ -31,7 +33,17 @@ export function useBranchCatalog(options: UseBranchCatalogOptions = {}) {
     enabled = true,
   } = options;
 
+  const organizationId = useAuthStore((state) => state.organization?.id);
   const isSpecificBranch = Boolean(branchId && branchId !== 'all');
+
+  // Identify whether this query qualifies for Page-1 instant SWR caching
+  const isDefaultPage1 =
+    page === 1 &&
+    (!search || search.trim() === '') &&
+    (!categoryId || categoryId === 'all') &&
+    (!brandId || brandId === 'all') &&
+    !lowStock &&
+    status === 'all';
 
   const queryKey = [
     'inventory',
@@ -53,6 +65,8 @@ export function useBranchCatalog(options: UseBranchCatalogOptions = {}) {
   return useQuery<ProductListResponse, Error>({
     queryKey,
     queryFn: async () => {
+      let result: ProductListResponse;
+
       if (isSpecificBranch) {
         const response = await catalogApi.getBranchCatalog(branchId!, {
           page,
@@ -104,24 +118,39 @@ export function useBranchCatalog(options: UseBranchCatalogOptions = {}) {
           };
         });
 
-        return {
+        result = {
           products: mappedProducts,
           pagination: response.pagination,
         };
+      } else {
+        // Global or All Branches view
+        result = await productApi.listProducts({
+          page,
+          limit,
+          categoryId: categoryId !== 'all' ? categoryId : undefined,
+          brandId: brandId !== 'all' ? brandId : undefined,
+          status,
+          search: search?.trim() || undefined,
+          lowStock: lowStock || undefined,
+          branchId: branchId || undefined,
+        });
       }
 
-      // Global or All Branches view
-      return await productApi.listProducts({
-        page,
-        limit,
-        categoryId: categoryId !== 'all' ? categoryId : undefined,
-        brandId: brandId !== 'all' ? brandId : undefined,
-        status,
-        search: search?.trim() || undefined,
-        lowStock: lowStock || undefined,
-        branchId: branchId || undefined,
-      });
+      // Persist Page 1 cache for instant 0ms load on next visit
+      if (isDefaultPage1 && organizationId) {
+        savePersistedCatalog(organizationId, branchId, result);
+      }
+
+      return result;
     },
+    initialData: () => {
+      if (isDefaultPage1 && organizationId) {
+        const cached = loadPersistedCatalog(organizationId, branchId);
+        if (cached) return cached;
+      }
+      return undefined;
+    },
+    initialDataUpdatedAt: 0, // Immediately triggers background revalidation while serving cached data
     enabled,
     staleTime: 30_000, // 30 seconds
     refetchOnWindowFocus: true,

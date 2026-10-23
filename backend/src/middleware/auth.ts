@@ -94,17 +94,22 @@ export async function requireAuth(request: FastifyRequest): Promise<void> {
     }
     throw new AppError('MEMBERSHIP_DEACTIVATED', 'Your access to this organization has been revoked or deactivated.', 403);
   }
-  if (
-    claims.membership_id &&
-    (claims.membership_id !== primaryMembership.id ||
-      claims.role !== primaryMembership.role ||
-      (claims.org_role && claims.org_role !== primaryMembership.org_role))
-  ) {
+  if (claims.membership_id && claims.membership_id !== primaryMembership.id) {
     await db.refreshToken.updateMany({
-      where: { membership_id: primaryMembership.id, revoked_at: null },
+      where: { membership_id: claims.membership_id, revoked_at: null },
       data: { revoked_at: new Date() },
     });
     throw new AppError('FORBIDDEN', 'Your membership permissions have changed. Please sign in again.', 403);
+  }
+
+  // Realtime role synchronization: if role was modified in DB, dynamically align claims
+  // so in-flight requests succeed seamlessly without aborting active sessions
+  if (
+    claims.role !== primaryMembership.role ||
+    (primaryMembership.org_role && claims.org_role !== primaryMembership.org_role)
+  ) {
+    claims.role = primaryMembership.role;
+    claims.org_role = primaryMembership.org_role ?? primaryMembership.role;
   }
 
   if (

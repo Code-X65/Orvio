@@ -2,6 +2,7 @@ import { Prisma, PrismaClient } from '@prisma/client';
 import { prisma as defaultPrisma } from '../../infrastructure/database/client.js';
 import { AppError } from '../../lib/errors.js';
 import { inventoryCache } from '../../infrastructure/cache/in-memory-cache.js';
+import { eventBus } from '../../infrastructure/websocket/event-bus.js';
 import type {
   StockSummaryQuery,
   StockListQuery,
@@ -594,6 +595,29 @@ export class StockService {
     });
 
     await this.invalidateStockCache(orgId, branchId);
+
+    try {
+      eventBus.broadcastToOrg(orgId, {
+        type: 'stock:opened',
+        payload: {
+          branchId,
+          productId,
+          variantId: variantId ?? null,
+          quantityOnHand: result.quantityOnHand,
+        },
+      });
+      eventBus.broadcastToOrg(orgId, {
+        type: 'stock_level:updated',
+        payload: {
+          branchId,
+          productId,
+          quantityOnHand: result.quantityOnHand,
+        },
+      });
+    } catch {
+      // Event broadcast error should not fail the operation
+    }
+
     return result;
   }
 
@@ -676,6 +700,30 @@ export class StockService {
     });
 
     await this.invalidateStockCache(orgId, branchId);
+
+    try {
+      eventBus.broadcastToOrg(orgId, {
+        type: 'stock:received',
+        payload: {
+          branchId,
+          productId,
+          variantId: variantId ?? null,
+          quantityOnHand: result.quantityOnHand,
+          addedQuantity: result.addedQuantity,
+        },
+      });
+      eventBus.broadcastToOrg(orgId, {
+        type: 'stock_level:updated',
+        payload: {
+          branchId,
+          productId,
+          quantityOnHand: result.quantityOnHand,
+        },
+      });
+    } catch {
+      // Ignore
+    }
+
     return result;
   }
 
@@ -783,6 +831,32 @@ export class StockService {
     });
 
     await this.invalidateStockCache(orgId, branchId);
+
+    try {
+      eventBus.broadcastToOrg(orgId, {
+        type: 'stock:adjusted',
+        payload: {
+          branchId,
+          productId,
+          variantId: variantId ?? null,
+          mode,
+          reason,
+          delta: result.delta,
+          quantityOnHand: result.quantityOnHand,
+        },
+      });
+      eventBus.broadcastToOrg(orgId, {
+        type: 'stock_level:updated',
+        payload: {
+          branchId,
+          productId,
+          quantityOnHand: result.quantityOnHand,
+        },
+      });
+    } catch {
+      // Ignore
+    }
+
     return result;
   }
 
@@ -916,6 +990,41 @@ export class StockService {
 
     await this.invalidateStockCache(orgId, sourceBranchId);
     await this.invalidateStockCache(orgId, destinationBranchId);
+
+    try {
+      eventBus.broadcastToOrg(orgId, {
+        type: 'stock:transferred',
+        payload: {
+          sourceBranchId,
+          destinationBranchId,
+          productId,
+          variantId: variantId ?? null,
+          quantity,
+          transferReferenceId: result.transferReferenceId,
+          sourceBalanceAfter: result.sourceBalanceAfter,
+          destinationBalanceAfter: result.destinationBalanceAfter,
+        },
+      });
+      eventBus.broadcastToOrg(orgId, {
+        type: 'stock_level:updated',
+        payload: {
+          branchId: sourceBranchId,
+          productId,
+          quantityOnHand: result.sourceBalanceAfter,
+        },
+      });
+      eventBus.broadcastToOrg(orgId, {
+        type: 'stock_level:updated',
+        payload: {
+          branchId: destinationBranchId,
+          productId,
+          quantityOnHand: result.destinationBalanceAfter,
+        },
+      });
+    } catch {
+      // Ignore
+    }
+
     return result;
   }
 }

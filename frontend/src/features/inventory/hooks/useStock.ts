@@ -9,12 +9,38 @@ import {
   type AdjustStockPayload,
   type TransferStockPayload,
 } from '../stock-api';
+import {
+  stockReceiptsApi,
+  type StockReceiptsResponse,
+} from '../stock-receipts-api';
+import { useAuthStore } from '../../../stores/auth-store';
+import {
+  loadPersistedStockSummary,
+  savePersistedStockSummary,
+  loadPersistedStockList,
+  savePersistedStockList,
+  loadPersistedReceipts,
+  savePersistedReceipts,
+  invalidatePersistedStock,
+} from '../stock-cache';
 
 export function useStockSummary(branchId?: string, options: { enabled?: boolean } = {}) {
+  const organizationId = useAuthStore((state) => state.organization?.id);
+  const cached = organizationId ? loadPersistedStockSummary(organizationId, branchId) : null;
+
   return useQuery<StockSummary, Error>({
     queryKey: ['inventory', 'stock', 'summary', branchId ?? 'all'],
-    queryFn: () => stockApi.getStockSummary(branchId),
+    queryFn: async () => {
+      const summary = await stockApi.getStockSummary(branchId);
+      if (organizationId) {
+        savePersistedStockSummary(organizationId, branchId, summary);
+      }
+      return summary;
+    },
+    ...(cached ? { initialData: cached, initialDataUpdatedAt: 0 } : {}),
     staleTime: 15_000,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
     enabled: options.enabled ?? true,
   });
 }
@@ -30,6 +56,15 @@ export interface UseStockListParams {
 }
 
 export function useStockList(params: UseStockListParams = {}, options: { enabled?: boolean } = {}) {
+  const organizationId = useAuthStore((state) => state.organization?.id);
+
+  const isDefaultPage1 =
+    (params.page === undefined || params.page === 1) &&
+    (!params.search || params.search.trim() === '') &&
+    (!params.categoryId || params.categoryId === 'all') &&
+    (!params.brandId || params.brandId === 'all') &&
+    (!params.status || params.status === 'all');
+
   const queryKey = [
     'inventory',
     'stock',
@@ -45,10 +80,77 @@ export function useStockList(params: UseStockListParams = {}, options: { enabled
     },
   ];
 
+  const cached =
+    isDefaultPage1 && organizationId ? loadPersistedStockList(organizationId, params.branchId) : null;
+
   return useQuery<StockListResponse, Error>({
     queryKey,
-    queryFn: () => stockApi.listStockItems(params),
+    queryFn: async () => {
+      const list = await stockApi.listStockItems(params);
+      if (isDefaultPage1 && organizationId) {
+        savePersistedStockList(organizationId, params.branchId, list);
+      }
+      return list;
+    },
+    ...(cached ? { initialData: cached, initialDataUpdatedAt: 0 } : {}),
     staleTime: 15_000,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
+    enabled: options.enabled ?? true,
+  });
+}
+
+export interface UseStockReceiptsParams {
+  branchId?: string;
+  supplierId?: string;
+  search?: string;
+  page?: number;
+  limit?: number;
+}
+
+export function useStockReceipts(params: UseStockReceiptsParams = {}, options: { enabled?: boolean } = {}) {
+  const organizationId = useAuthStore((state) => state.organization?.id);
+
+  const isDefaultPage1 =
+    (params.page === undefined || params.page === 1) &&
+    (!params.search || params.search.trim() === '') &&
+    (!params.supplierId || params.supplierId === 'all');
+
+  const queryKey = [
+    'inventory',
+    'stock',
+    'receipts',
+    params.branchId ?? 'all',
+    {
+      search: params.search?.trim() || undefined,
+      supplierId: params.supplierId !== 'all' ? params.supplierId : undefined,
+      page: params.page ?? 1,
+      limit: params.limit ?? 20,
+    },
+  ];
+
+  const cached =
+    isDefaultPage1 && organizationId ? loadPersistedReceipts(organizationId, params.branchId) : null;
+
+  return useQuery<StockReceiptsResponse, Error>({
+    queryKey,
+    queryFn: async () => {
+      const receipts = await stockReceiptsApi.listReceipts({
+        branchId: params.branchId,
+        supplierId: params.supplierId !== 'all' ? params.supplierId : undefined,
+        search: params.search?.trim() || undefined,
+        page: params.page ?? 1,
+        limit: params.limit ?? 20,
+      });
+      if (isDefaultPage1 && organizationId) {
+        savePersistedReceipts(organizationId, params.branchId, receipts);
+      }
+      return receipts;
+    },
+    ...(cached ? { initialData: cached, initialDataUpdatedAt: 0 } : {}),
+    staleTime: 15_000,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
     enabled: options.enabled ?? true,
   });
 }
@@ -89,8 +191,12 @@ export function useStockMovements(params: UseStockMovementsParams = {}, options:
 
 export function useStockMutations() {
   const queryClient = useQueryClient();
+  const organizationId = useAuthStore((state) => state.organization?.id);
 
-  const invalidateStockQueries = async () => {
+  const invalidateStockQueries = async (branchId?: string) => {
+    if (organizationId) {
+      invalidatePersistedStock(organizationId, branchId);
+    }
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ['inventory', 'stock'] }),
       queryClient.invalidateQueries({ queryKey: ['inventory', 'catalog'] }),
@@ -100,22 +206,25 @@ export function useStockMutations() {
 
   const recordOpening = useMutation({
     mutationFn: (payload: RecordOpeningStockPayload) => stockApi.recordOpeningStock(payload),
-    onSuccess: invalidateStockQueries,
+    onSuccess: (_, vars) => invalidateStockQueries(vars.branchId),
   });
 
   const receiveStock = useMutation({
     mutationFn: (payload: ReceiveStockPayload) => stockApi.receiveStock(payload),
-    onSuccess: invalidateStockQueries,
+    onSuccess: (_, vars) => invalidateStockQueries(vars.branchId),
   });
 
   const adjustStock = useMutation({
     mutationFn: (payload: AdjustStockPayload) => stockApi.adjustStock(payload),
-    onSuccess: invalidateStockQueries,
+    onSuccess: (_, vars) => invalidateStockQueries(vars.branchId),
   });
 
   const transferStock = useMutation({
     mutationFn: (payload: TransferStockPayload) => stockApi.transferStock(payload),
-    onSuccess: invalidateStockQueries,
+    onSuccess: (_, vars) => {
+      invalidateStockQueries(vars.sourceBranchId);
+      invalidateStockQueries(vars.destinationBranchId);
+    },
   });
 
   return {

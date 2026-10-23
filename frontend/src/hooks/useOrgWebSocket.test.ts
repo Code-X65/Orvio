@@ -3,6 +3,7 @@ import { renderHook, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import React from 'react';
 import { useOrgWebSocket } from './useOrgWebSocket';
+import { useAuthStore } from '../stores/auth-store';
 
 // Mock WebSocket
 class MockWebSocket {
@@ -178,5 +179,68 @@ describe('useOrgWebSocket Hook', () => {
 
     expect(result.current.status).toBe('connected');
     expect(MockWebSocket.instances.length).toBe(2);
+  });
+
+  it('handles staff:updated event, invalidates inventory & staff queries, and dispatches role-changed with branchRoles', async () => {
+    useAuthStore.setState({
+      user: { id: 'usr-target-42', email: 'target@example.com', fullName: 'Target User', status: 'active' },
+    });
+
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    const roleChangeHandler = vi.fn();
+    window.addEventListener('orvio:role-changed', roleChangeHandler);
+
+    const { result } = renderHook(
+      () => useOrgWebSocket('org-123', 'valid-token'),
+      { wrapper }
+    );
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    });
+
+    const socket = MockWebSocket.instances[0];
+
+    act(() => {
+      socket.triggerMessage({
+        type: 'staff:updated',
+        orgId: 'org-123',
+        payload: {
+          userId: 'usr-target-42',
+          membershipId: 'mem-42',
+          oldRole: 'storekeeper',
+          newRole: 'manager',
+          branchRoles: {
+            'branch-alpha': 'manager',
+            'branch-beta': 'storekeeper',
+          },
+          branchIds: ['branch-alpha', 'branch-beta'],
+          scopeAllBranches: false,
+        },
+      });
+    });
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['staff'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['workspace'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['inventory'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['inventory', 'branches'] });
+
+    expect(roleChangeHandler).toHaveBeenCalledTimes(1);
+    const eventDetail = (roleChangeHandler.mock.calls[0][0] as CustomEvent).detail;
+    expect(eventDetail).toEqual(
+      expect.objectContaining({
+        oldRole: 'storekeeper',
+        newRole: 'manager',
+        membershipId: 'mem-42',
+        branchRoles: {
+          'branch-alpha': 'manager',
+          'branch-beta': 'storekeeper',
+        },
+        branchIds: ['branch-alpha', 'branch-beta'],
+        scopeAllBranches: false,
+      })
+    );
+
+    window.removeEventListener('orvio:role-changed', roleChangeHandler);
   });
 });

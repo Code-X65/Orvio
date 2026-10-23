@@ -17,7 +17,17 @@ export type RealtimeEventType =
   | 'branch:deleted'
   | 'catalog:import_complete'
   | 'catalog:updated'
-  | 'stock_level:updated';
+  | 'stock_level:updated'
+  | 'stock:adjusted'
+  | 'stock:received'
+  | 'stock:transferred'
+  | 'stock:opened'
+  | 'stock_receipt:created'
+  | 'staff:branch_revoked'
+  | 'staff:suspended'
+  | 'staff:reactivated'
+  | 'staff:removed'
+  | 'staff:updated';
 
 export interface RealtimeMessage {
   type: RealtimeEventType;

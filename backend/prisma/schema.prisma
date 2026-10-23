@@ -184,6 +184,7 @@ model MembershipBranchAccess {
   id            String     @id @default(cuid())
   membership_id String
   branch_id     String
+  role          org_role?
   is_default    Boolean    @default(false)
   granted_at    DateTime   @default(now())
   created_at    DateTime   @default(now())

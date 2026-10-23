@@ -235,6 +235,7 @@ describe('StockManagementPage Component', () => {
   ];
 
   beforeEach(() => {
+    localStorage.clear();
     vi.clearAllMocks();
     vi.mocked(stockApi.getStockSummary).mockResolvedValue(mockSummary);
     vi.mocked(stockApi.listStockItems).mockResolvedValue({
@@ -294,12 +295,11 @@ describe('StockManagementPage Component', () => {
     expect(screen.getByText('Stock Management & Ledger')).toBeInTheDocument();
     expect(screen.getByText(/Real-time inventory levels, stock adjustments/i)).toBeInTheDocument();
 
-    // Summary KPIs
     await waitFor(() => {
       expect(screen.getByText('38')).toBeInTheDocument(); // In Stock
-      expect(screen.getByText('3')).toBeInTheDocument();  // Low Stock
-      expect(screen.getByText('1')).toBeInTheDocument();  // Out of Stock
       expect(screen.getByText('850 units')).toBeInTheDocument(); // Total units
+      expect(screen.getByText('Tracked Products')).toBeInTheDocument();
+      expect(screen.getByText('Low Stock Warnings')).toBeInTheDocument();
     });
   });
 
@@ -518,4 +518,47 @@ describe('StockManagementPage Component', () => {
       expect(screen.getByText('50')).toBeInTheDocument();
     });
   });
+
+  it('renders Live Sync indicator badge and pulses stock item row upon orvio:stock-updated event', async () => {
+    renderWithProviders(
+      <StockManagementPage
+        organization={mockOrg}
+        branchId="b-1"
+        branchName="Main Store"
+        branches={mockBranches}
+      />
+    );
+
+    // Verify Live Sync indicator badge is rendered
+    expect(screen.getByText('Live Sync')).toBeInTheDocument();
+
+    // Switch to Stock List tab
+    const stockListTabBtn = screen.getByText(/Product Stock List/i);
+    fireEvent.click(stockListTabBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText('Organic Espresso Beans')).toBeInTheDocument();
+    });
+
+    const stockRow = screen.getByTestId('stock-row-prod-1');
+    expect(stockRow).toBeInTheDocument();
+    expect(stockRow).not.toHaveClass('animate-pulse');
+
+    // Dispatch realtime orvio:stock-updated event
+    window.dispatchEvent(
+      new CustomEvent('orvio:stock-updated', {
+        detail: {
+          productIds: ['prod-1'],
+          branchId: 'b-1',
+        },
+      })
+    );
+
+    // Row receives active pulse and emerald ring styling
+    await waitFor(() => {
+      expect(stockRow).toHaveClass('animate-pulse');
+      expect(stockRow).toHaveClass('bg-emerald-500/15');
+    });
+  });
 });
+

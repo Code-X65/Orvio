@@ -8,6 +8,8 @@ import {
   type WorkspaceProductItem,
   type WorkspaceDetailsResponse,
 } from '../features/apps/api';
+
+export type { WorkspaceDetailsResponse, WorkspaceProductItem };
 import { getCurrentUser } from '../lib/api/auth';
 import { ApiError } from '../lib/api/client';
 import { toast } from 'sonner';
@@ -40,13 +42,72 @@ export interface WorkspaceContextValue {
 const WorkspaceContext = React.createContext<WorkspaceContextValue | null>(null);
 
 const AUTH_BROADCAST_CHANNEL = 'orvio_workspace_sync';
+export const WORKSPACE_CACHE_PREFIX = 'orvio_workspace_cache_';
+
+export function getWorkspaceCacheKey(orgId?: string, userId?: string): string | null {
+  if (!orgId || !userId) return null;
+  return `${WORKSPACE_CACHE_PREFIX}${orgId}_${userId}`;
+}
+
+export function loadPersistedWorkspace(orgId?: string, userId?: string): WorkspaceDetailsResponse | null {
+  if (typeof window === 'undefined') return null;
+  const key = getWorkspaceCacheKey(orgId, userId);
+  if (!key) return null;
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw) {
+      return JSON.parse(raw);
+    }
+  } catch {
+    // Ignore parse error
+  }
+  return null;
+}
+
+export function savePersistedWorkspace(
+  orgId?: string,
+  userId?: string,
+  data?: WorkspaceDetailsResponse | null
+) {
+  if (typeof window === 'undefined') return;
+  const key = getWorkspaceCacheKey(orgId, userId);
+  if (!key) return;
+  try {
+    if (data) {
+      localStorage.setItem(key, JSON.stringify(data));
+    } else {
+      localStorage.removeItem(key);
+    }
+  } catch {
+    // Ignore storage quota error
+  }
+}
+
+export function clearWorkspaceCache() {
+  if (typeof window === 'undefined') return;
+  try {
+    Object.keys(localStorage).forEach((k) => {
+      if (k.startsWith(WORKSPACE_CACHE_PREFIX)) {
+        localStorage.removeItem(k);
+      }
+    });
+  } catch {
+    // Ignore storage error
+  }
+}
 
 export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const { user, organization, isHydrated, setSession, accessToken } = useAuthStore();
 
-  const [workspaceData, setWorkspaceData] = React.useState<WorkspaceDetailsResponse | null>(null);
-  const [installedProducts, setInstalledProducts] = React.useState<WorkspaceProductItem[]>([]);
-  const [isLoading, setIsLoading] = React.useState(true);
+  const cachedData = React.useMemo(() => {
+    return loadPersistedWorkspace(organization?.id, user?.id);
+  }, [organization?.id, user?.id]);
+
+  const [workspaceData, setWorkspaceData] = React.useState<WorkspaceDetailsResponse | null>(() => cachedData);
+  const [installedProducts, setInstalledProducts] = React.useState<WorkspaceProductItem[]>(
+    () => (cachedData?.products && cachedData.products.length > 0 ? cachedData.products : [])
+  );
+  const [isLoading, setIsLoading] = React.useState(() => !cachedData);
 
   // Broadcast channel instance for instant real-time multi-tab synchronization
   const broadcastChannelRef = React.useRef<BroadcastChannel | null>(null);
@@ -62,6 +123,12 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
           loadWorkspace(true);
         } else if (event.data?.type === 'PRODUCTS_UPDATED' && Array.isArray(event.data.products)) {
           setInstalledProducts(event.data.products);
+          setWorkspaceData((prev) => {
+            if (!prev) return prev;
+            const updatedData = { ...prev, products: event.data.products };
+            savePersistedWorkspace(organization?.id, user?.id, updatedData);
+            return updatedData;
+          });
         }
       };
 
@@ -69,16 +136,35 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
         channel.close();
       };
     }
-  }, []);
+  }, [organization?.id, user?.id]);
+
+  // If auth store hydrates and provides user/org after mount, check cache if state is still empty
+  React.useEffect(() => {
+    if (!isHydrated) return;
+    if (!workspaceData && organization?.id && user?.id) {
+      const persisted = loadPersistedWorkspace(organization.id, user.id);
+      if (persisted) {
+        setWorkspaceData(persisted);
+        if (persisted.products && persisted.products.length > 0) {
+          setInstalledProducts(persisted.products);
+        }
+        setIsLoading(false);
+      }
+    }
+  }, [isHydrated, organization?.id, user?.id, workspaceData]);
 
   const loadWorkspace = React.useCallback(async (silent = false) => {
-    if (!silent) setIsLoading(true);
+    const hasCachedContent = Boolean(workspaceData || loadPersistedWorkspace(organization?.id, user?.id));
+    if (!silent && !hasCachedContent) {
+      setIsLoading(true);
+    }
     try {
       const res = await fetchWorkspaceDetails();
       setWorkspaceData(res);
       if (res.products && res.products.length > 0) {
         setInstalledProducts(res.products);
       }
+      savePersistedWorkspace(organization?.id, user?.id, res);
 
       // Sync user verification if updated on backend
       if (res.user && res.user.emailVerifiedAt && user && !user.emailVerifiedAt) {
@@ -93,7 +179,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
         }
       }
     } catch {
-      // Fallback to default product if initial fetch fails
+      // Fallback to default product if initial fetch fails and we have no installed products
       if (installedProducts.length === 0) {
         const defaultKey = organization?.planCode === 'gym' ? 'gym' : 'inventory';
         setInstalledProducts([
@@ -111,13 +197,14 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setIsLoading(false);
     }
-  }, [organization?.id, organization?.planCode, user]);
+  }, [organization?.id, organization?.planCode, user, workspaceData, installedProducts.length]);
 
-  // Initial load when auth store hydrates
+  // Initial load when auth store hydrates (silent if we already have cached data)
   React.useEffect(() => {
     if (!isHydrated) return;
-    loadWorkspace();
-  }, [isHydrated, loadWorkspace]);
+    const hasCached = Boolean(workspaceData || loadPersistedWorkspace(organization?.id, user?.id));
+    loadWorkspace(hasCached);
+  }, [isHydrated, loadWorkspace, organization?.id, user?.id, workspaceData]);
 
   // Focus listener as secondary fallback for cross-tab sync
   React.useEffect(() => {
@@ -187,6 +274,12 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     try {
       const updated = await installWorkspaceProduct(productKey);
       setInstalledProducts(updated);
+      setWorkspaceData((prev) => {
+        if (!prev) return prev;
+        const updatedData = { ...prev, products: updated };
+        savePersistedWorkspace(organization?.id, user?.id, updatedData);
+        return updatedData;
+      });
 
       // Broadcast update across open tabs
       broadcastChannelRef.current?.postMessage({
@@ -221,6 +314,12 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     try {
       const updated = await uninstallWorkspaceProduct(productKey);
       setInstalledProducts(updated);
+      setWorkspaceData((prev) => {
+        if (!prev) return prev;
+        const updatedData = { ...prev, products: updated };
+        savePersistedWorkspace(organization?.id, user?.id, updatedData);
+        return updatedData;
+      });
 
       // Broadcast update across open tabs
       broadcastChannelRef.current?.postMessage({
@@ -250,6 +349,12 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     try {
       const updated = await setPrimaryWorkspaceProduct(productKey);
       setInstalledProducts(updated);
+      setWorkspaceData((prev) => {
+        if (!prev) return prev;
+        const updatedData = { ...prev, products: updated };
+        savePersistedWorkspace(organization?.id, user?.id, updatedData);
+        return updatedData;
+      });
 
       broadcastChannelRef.current?.postMessage({
         type: 'PRODUCTS_UPDATED',

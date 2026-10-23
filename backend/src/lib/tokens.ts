@@ -78,6 +78,7 @@ export interface AccessTokenClaims {
   org_role?: string;
   scope_all_branches?: boolean;
   branch_scope?: string[];
+  branch_roles?: Record<string, string>;
   membership_id?: string;
   session_id?: string;
   jti?: string;

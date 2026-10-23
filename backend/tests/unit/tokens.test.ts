@@ -68,4 +68,29 @@ describe('JWT & Token Utilities', () => {
     expect(jwks.keys.some((k) => k.kid === rotatedKid)).toBe(true);
     expect(jwks.keys.some((k) => k.kid === 'primary')).toBe(true);
   });
+
+  it('preserves branch_roles mapping in access token claims', async () => {
+    const claims = {
+      sub: 'usr_staff_1',
+      email: 'staff@example.com',
+      org_id: 'org_123',
+      role: 'storekeeper',
+      org_role: 'storekeeper',
+      scope_all_branches: false,
+      branch_scope: ['br_a', 'br_b'],
+      branch_roles: {
+        br_a: 'manager',
+        br_b: 'storekeeper',
+      },
+    };
+
+    const token = await signAccessToken(claims);
+    const decoded = await verifyAccessToken(token);
+
+    expect(decoded).not.toBeNull();
+    expect(decoded?.branch_roles).toEqual({
+      br_a: 'manager',
+      br_b: 'storekeeper',
+    });
+  });
 });

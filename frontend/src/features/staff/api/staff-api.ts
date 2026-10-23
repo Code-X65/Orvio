@@ -8,6 +8,7 @@ export interface GrantedBranch {
   code?: string | null;
   isPrimary: boolean;
   isDefault: boolean;
+  role?: OrgRole;
   grantedAt: string;
 }
 
@@ -22,6 +23,7 @@ export interface StaffMember {
   status: 'active' | 'suspended';
   scopeAllBranches: boolean;
   branches: GrantedBranch[];
+  branchRoles?: Record<string, OrgRole>;
   createdAt: string;
   lastLoginAt?: string | null;
 }
@@ -54,6 +56,7 @@ export interface InviteStaffPayload {
   email: string;
   role: OrgRole;
   branchIds?: string[];
+  branchRoles?: Record<string, OrgRole>;
   defaultBranchId?: string;
   scopeAllBranches?: boolean;
   appKeys?: string[];
@@ -62,6 +65,7 @@ export interface InviteStaffPayload {
 export interface UpdateMemberPayload {
   role?: OrgRole;
   branchIds?: string[];
+  branchRoles?: Record<string, OrgRole>;
   defaultBranchId?: string;
   scopeAllBranches?: boolean;
   appKeys?: string[];
@@ -105,9 +109,45 @@ export interface InvitationMetadataResponse {
 }
 
 export const staffApi = {
-  /** List all staff members, pending invitations, and available branches */
-  listStaff: async (orgId: string): Promise<ListStaffResponse> => {
-    return api.get<ListStaffResponse>(`/organizations/${orgId}/staff`);
+  /** List all staff members, pending invitations, and available branches (optionally filtered by branchId) */
+  listStaff: async (orgId: string, branchId?: string): Promise<ListStaffResponse> => {
+    const url = branchId ? `/organizations/${orgId}/staff?branchId=${encodeURIComponent(branchId)}` : `/organizations/${orgId}/staff`;
+    return api.get<ListStaffResponse>(url);
+  },
+
+  /** Update an existing staff member's role specifically in a single branch */
+  updateBranchRole: async (
+    orgId: string,
+    membershipId: string,
+    branchId: string,
+    role: OrgRole
+  ): Promise<{ success: boolean; membershipId: string; branchId: string; role: OrgRole }> => {
+    return api.patch(`/organizations/${orgId}/staff/members/${membershipId}/branch-role`, {
+      branchId,
+      role,
+    });
+  },
+
+  /** Revoke a staff member's access from a specific branch */
+  revokeBranchAccess: async (
+    orgId: string,
+    membershipId: string,
+    branchId: string
+  ): Promise<{ success: boolean; membershipId: string; revokedBranchId: string }> => {
+    return api.delete(`/organizations/${orgId}/staff/members/${membershipId}/branch-access/${branchId}`);
+  },
+
+  /** Assign an existing staff member to a branch */
+  assignBranchAccess: async (
+    orgId: string,
+    membershipId: string,
+    branchId: string,
+    role: OrgRole
+  ): Promise<{ success: boolean; membershipId: string; branchId: string; role: OrgRole }> => {
+    return api.post(`/organizations/${orgId}/staff/members/${membershipId}/branch-access`, {
+      branchId,
+      role,
+    });
   },
 
   /** Send a new staff invitation */
@@ -118,7 +158,7 @@ export const staffApi = {
     return api.post(`/organizations/${orgId}/staff/invitations`, payload);
   },
 
-  /** Update an existing staff member's role or branches */
+  /** Update an existing staff member's role or branches (global) */
   updateMember: async (
     orgId: string,
     membershipId: string,
@@ -141,6 +181,14 @@ export const staffApi = {
     membershipId: string
   ): Promise<{ success: boolean; status: string }> => {
     return api.post(`/organizations/${orgId}/staff/members/${membershipId}/reactivate`);
+  },
+
+  /** Permanently remove a staff member from the organization */
+  removeMember: async (
+    orgId: string,
+    membershipId: string
+  ): Promise<{ success: boolean; membershipId: string }> => {
+    return api.delete(`/organizations/${orgId}/staff/members/${membershipId}`);
   },
 
   /** Revoke an open invitation */

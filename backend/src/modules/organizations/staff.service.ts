@@ -7,6 +7,7 @@ import { canManageRole } from '../../middleware/rbac.js';
 import type { EmailSender } from '../email/index.js';
 import { env } from '../../config/env.js';
 import { defaultAppCache } from '../../infrastructure/cache/in-memory-cache.js';
+import { eventBus } from '../../infrastructure/websocket/event-bus.js';
 
 export function mapOrgRoleToMembershipRole(role: org_role): membership_role {
   if (role === 'owner') return 'owner';
@@ -26,6 +27,7 @@ export interface InviteStaffDto {
   email: string;
   role: org_role;
   branchIds?: string[];
+  branchRoles?: Record<string, org_role>;
   defaultBranchId?: string;
   scopeAllBranches?: boolean;
   appKeys?: string[];
@@ -34,6 +36,7 @@ export interface InviteStaffDto {
 export interface UpdateMemberDto {
   role?: org_role;
   branchIds?: string[];
+  branchRoles?: Record<string, org_role>;
   defaultBranchId?: string;
   scopeAllBranches?: boolean;
   appKeys?: string[];
@@ -48,7 +51,7 @@ export class StaffService {
   /**
    * List all staff members and pending invitations for an organization.
    */
-  async listStaff(orgId: string, actor: ActorContext) {
+  async listStaff(orgId: string, actor: ActorContext, branchId?: string) {
     const org = await this.db.organization.findUnique({ where: { id: orgId } });
     if (!org) throw new AppError('ORGANIZATION_NOT_FOUND', 'Organization not found', 404);
 
@@ -135,16 +138,31 @@ export class StaffService {
           code: ba.branch.code,
           isPrimary: ba.branch.is_primary,
           isDefault: ba.is_default,
+          role: ba.role || m.org_role,
           grantedAt: ba.granted_at,
         })),
+        branchRoles: m.branch_accesses.reduce((acc, ba) => {
+          acc[ba.branch_id] = ba.role || m.org_role;
+          return acc;
+        }, {} as Record<string, org_role>),
         createdAt: m.created_at,
         lastLoginAt: m.user.last_login_at,
       };
     });
 
+    const filteredMembers = branchId
+      ? formattedMembers.filter((m) => m.scopeAllBranches || m.branches.some((b) => b.id === branchId))
+      : formattedMembers;
+
+    const filteredInvitations = branchId
+      ? formattedInvitations.filter(
+          (inv) => inv.branches.some((b) => b?.id === branchId) || inv.branches.length === 0
+        )
+      : formattedInvitations;
+
     return {
-      members: formattedMembers,
-      invitations: formattedInvitations,
+      members: filteredMembers,
+      invitations: filteredInvitations,
       branches,
     };
   }
@@ -394,6 +412,7 @@ export class StaffService {
           data: branchIds.map((bId) => ({
             membership_id: createdMembership.id,
             branch_id: bId,
+            role: assignedRole,
             is_default: bId === defaultBranchId,
           })),
         });
@@ -428,6 +447,11 @@ export class StaffService {
       },
     });
 
+    const branchRolesMap: Record<string, string> = {};
+    for (const bId of branchIds) {
+      branchRolesMap[bId] = assignedRole;
+    }
+
     const accessToken = await signAccessToken({
       sub: user.id,
       email: user.email,
@@ -436,6 +460,7 @@ export class StaffService {
       org_role: assignedRole,
       scope_all_branches: scopeAll,
       branch_scope: branchIds,
+      branch_roles: branchRolesMap,
       membership_id: membership.id,
       session_id: sessionId,
     });
@@ -469,7 +494,7 @@ export class StaffService {
   ) {
     const target = await this.db.membership.findFirst({
       where: { id: membershipId, org_id: orgId },
-      include: { user: true },
+      include: { user: true, branch_accesses: true },
     });
 
     if (!target) {
@@ -504,6 +529,12 @@ export class StaffService {
       }
     }
 
+    const previousBranchIds = target.branch_accesses.map((ba) => ba.branch_id);
+    let revokedBranchIds: string[] = [];
+    if (dto.branchIds) {
+      revokedBranchIds = previousBranchIds.filter((bId) => !dto.branchIds!.includes(bId));
+    }
+
     await this.db.$transaction(async (tx) => {
       const updateData: any = {};
       if (dto.role) {
@@ -531,27 +562,239 @@ export class StaffService {
         });
 
         const defaultId = dto.defaultBranchId || dto.branchIds[0];
+        const assignedRole = dto.role || target.org_role;
         if (dto.branchIds.length > 0) {
           await tx.membershipBranchAccess.createMany({
             data: dto.branchIds.map((bId) => ({
               membership_id: membershipId,
               branch_id: bId,
+              role: (dto.branchRoles && dto.branchRoles[bId]) || assignedRole,
               is_default: bId === defaultId,
             })),
           });
         }
       }
-
-      // Revoke all existing sessions for this membership to force permission drift re-auth
-      await tx.refreshToken.updateMany({
-        where: { membership_id: membershipId, revoked_at: null },
-        data: { revoked_at: new Date() },
-      });
     });
 
     defaultAppCache.clearPrefix(`org_details:${orgId}`);
 
+    // Broadcast realtime event for revoked branches if any
+    if (revokedBranchIds.length > 0) {
+      eventBus.broadcastToOrg(orgId, {
+        type: 'staff:branch_revoked',
+        payload: {
+          membershipId,
+          userId: target.user_id,
+          revokedBranchIds,
+          remainingBranchIds: dto.branchIds || [],
+          message: 'Your access to this branch has been revoked by an administrator.',
+        },
+      });
+    }
+
+    // Broadcast staff:updated event for live list refreshes and seamless role synchronization
+    const newRole = dto.role || target.org_role;
+    const mappedBranchRoles: Record<string, string> = {};
+    if (dto.branchIds) {
+      dto.branchIds.forEach((bId) => {
+        mappedBranchRoles[bId] = (dto.branchRoles && dto.branchRoles[bId]) || newRole;
+      });
+    } else {
+      target.branch_accesses.forEach((ba) => {
+        mappedBranchRoles[ba.branch_id] = ba.role || newRole;
+      });
+    }
+
+    eventBus.broadcastToOrg(orgId, {
+      type: 'staff:updated',
+      payload: {
+        membershipId,
+        userId: target.user_id,
+        role: newRole,
+        oldRole: target.org_role,
+        newRole,
+        scopeAllBranches: dto.scopeAllBranches ?? target.scope_all_branches,
+        branchIds: dto.branchIds ?? previousBranchIds,
+        branchRoles: mappedBranchRoles,
+      },
+    });
+
     return { success: true, membershipId };
+  }
+
+  /**
+   * Update a staff member's designated role specifically in a single branch without affecting other branches.
+   */
+  async updateBranchRole(
+    orgId: string,
+    membershipId: string,
+    branchId: string,
+    role: org_role,
+    actor: ActorContext
+  ) {
+    const target = await this.db.membership.findFirst({
+      where: { id: membershipId, org_id: orgId },
+      include: { user: true, branch_accesses: true },
+    });
+
+    if (!target) throw new AppError('NOT_FOUND', 'Staff membership not found', 404);
+    if (target.org_role === 'owner') {
+      throw new AppError('FORBIDDEN', 'Owner role cannot be modified', 403);
+    }
+    if (!canManageRole(actor.org_role, target.org_role)) {
+      throw new AppError(
+        'FORBIDDEN',
+        `Role '${actor.org_role}' cannot modify a peer or higher tier '${target.org_role}'`,
+        403
+      );
+    }
+    if (role === 'owner') {
+      throw new AppError('VALIDATION_ERROR', 'Cannot promote user to Owner at branch level', 422);
+    }
+    if (!canManageRole(actor.org_role, role)) {
+      throw new AppError(
+        'FORBIDDEN',
+        `Role '${actor.org_role}' cannot assign the role '${role}'`,
+        403
+      );
+    }
+
+    // Enforce branch boundary: actor must have access to the target branch unless global
+    if (!actor.scope_all_branches && actor.org_role !== 'owner') {
+      if (!actor.branch_ids.includes(branchId)) {
+        throw new AppError('FORBIDDEN', 'You do not have permission to manage this branch', 403);
+      }
+    }
+
+    await this.db.membershipBranchAccess.upsert({
+      where: {
+        membership_id_branch_id: {
+          membership_id: membershipId,
+          branch_id: branchId,
+        },
+      },
+      update: { role },
+      create: {
+        membership_id: membershipId,
+        branch_id: branchId,
+        role,
+        is_default: target.branch_accesses.length === 0,
+      },
+    });
+
+    const updatedBA = await this.db.membershipBranchAccess.findMany({
+      where: { membership_id: membershipId },
+    });
+
+    const mappedBranchRoles: Record<string, string> = {};
+    updatedBA.forEach((ba) => {
+      mappedBranchRoles[ba.branch_id] = ba.role || target.org_role;
+    });
+
+    // Broadcast staff:updated with refreshed branchRoles
+    eventBus.broadcastToOrg(orgId, {
+      type: 'staff:updated',
+      payload: {
+        membershipId,
+        userId: target.user_id,
+        role: target.org_role,
+        oldRole: target.org_role,
+        newRole: target.org_role,
+        scopeAllBranches: target.scope_all_branches,
+        branchIds: updatedBA.map((ba) => ba.branch_id),
+        branchRoles: mappedBranchRoles,
+      },
+    });
+
+    return { success: true, membershipId, branchId, role };
+  }
+
+  /**
+   * Revoke a staff member's access to a specific branch.
+   */
+  async revokeBranchAccess(
+    orgId: string,
+    membershipId: string,
+    branchId: string,
+    actor: ActorContext
+  ) {
+    const target = await this.db.membership.findFirst({
+      where: { id: membershipId, org_id: orgId },
+      include: { user: true, branch_accesses: true },
+    });
+
+    if (!target) throw new AppError('NOT_FOUND', 'Staff membership not found', 404);
+    if (target.org_role === 'owner') {
+      throw new AppError('FORBIDDEN', 'Owner branch access cannot be revoked', 403);
+    }
+    if (!canManageRole(actor.org_role, target.org_role)) {
+      throw new AppError('FORBIDDEN', 'Cannot modify a peer or higher tier member', 403);
+    }
+
+    // Actor branch authorization
+    if (!actor.scope_all_branches && actor.org_role !== 'owner') {
+      if (!actor.branch_ids.includes(branchId)) {
+        throw new AppError('FORBIDDEN', 'You do not have permission to manage this branch', 403);
+      }
+    }
+
+    await this.db.membershipBranchAccess.deleteMany({
+      where: {
+        membership_id: membershipId,
+        branch_id: branchId,
+      },
+    });
+
+    const remaining = await this.db.membershipBranchAccess.findMany({
+      where: { membership_id: membershipId },
+    });
+    const remainingBranchIds = remaining.map((ba) => ba.branch_id);
+
+    // Broadcast realtime event for revoked branch
+    eventBus.broadcastToOrg(orgId, {
+      type: 'staff:branch_revoked',
+      payload: {
+        membershipId,
+        userId: target.user_id,
+        revokedBranchIds: [branchId],
+        remainingBranchIds,
+        message: 'Your access to this branch has been revoked by an administrator.',
+      },
+    });
+
+    const mappedBranchRoles: Record<string, string> = {};
+    remaining.forEach((ba) => {
+      mappedBranchRoles[ba.branch_id] = ba.role || target.org_role;
+    });
+
+    eventBus.broadcastToOrg(orgId, {
+      type: 'staff:updated',
+      payload: {
+        membershipId,
+        userId: target.user_id,
+        role: target.org_role,
+        oldRole: target.org_role,
+        newRole: target.org_role,
+        scopeAllBranches: target.scope_all_branches,
+        branchIds: remainingBranchIds,
+        branchRoles: mappedBranchRoles,
+      },
+    });
+
+    return { success: true, membershipId, revokedBranchId: branchId };
+  }
+
+  /**
+   * Assign an existing organization member to a branch.
+   */
+  async assignBranchAccess(
+    orgId: string,
+    membershipId: string,
+    branchId: string,
+    role: org_role,
+    actor: ActorContext
+  ) {
+    return this.updateBranchRole(orgId, membershipId, branchId, role, actor);
   }
 
   /**
@@ -583,6 +826,18 @@ export class StaffService {
       });
     });
 
+    defaultAppCache.clearPrefix(`org_details:${orgId}`);
+
+    // Broadcast realtime suspension event to eject active sessions
+    eventBus.broadcastToOrg(orgId, {
+      type: 'staff:suspended',
+      payload: {
+        membershipId,
+        userId: target.user_id,
+        message: 'Your access to this organization has been suspended by an administrator.',
+      },
+    });
+
     return { success: true, status: 'suspended' };
   }
 
@@ -604,7 +859,64 @@ export class StaffService {
       data: { status: 'active' },
     });
 
+    defaultAppCache.clearPrefix(`org_details:${orgId}`);
+
+    eventBus.broadcastToOrg(orgId, {
+      type: 'staff:reactivated',
+      payload: {
+        membershipId,
+        userId: target.user_id,
+      },
+    });
+
     return { success: true, status: 'active' };
+  }
+
+  /**
+   * Permanently remove a staff member from the organization.
+   * Cascade-deletes the Membership record and revokes all active sessions for this membership.
+   * Preserves the underlying User profile record.
+   */
+  async removeMember(orgId: string, membershipId: string, actor: ActorContext) {
+    const target = await this.db.membership.findFirst({
+      where: { id: membershipId, org_id: orgId },
+      include: { user: true },
+    });
+
+    if (!target) throw new AppError('NOT_FOUND', 'Staff membership not found', 404);
+    if (target.org_role === 'owner') {
+      throw new AppError('FORBIDDEN', 'Organization Owner cannot be removed', 403);
+    }
+    if (!canManageRole(actor.org_role, target.org_role)) {
+      throw new AppError('FORBIDDEN', 'Cannot remove a peer or superior tier', 403);
+    }
+
+    await this.db.$transaction(async (tx) => {
+      // 1. Delete membership (Prisma cascades to MembershipBranchAccess)
+      await tx.membership.delete({
+        where: { id: membershipId },
+      });
+
+      // 2. Revoke all active refresh tokens for this user in this organization
+      await tx.refreshToken.updateMany({
+        where: { user_id: target.user_id, revoked_at: null },
+        data: { revoked_at: new Date() },
+      });
+    });
+
+    defaultAppCache.clearPrefix(`org_details:${orgId}`);
+
+    // Broadcast realtime removal event to immediately eject all active sessions
+    eventBus.broadcastToOrg(orgId, {
+      type: 'staff:removed',
+      payload: {
+        membershipId,
+        userId: target.user_id,
+        message: 'Your access to this organization has been removed by an administrator.',
+      },
+    });
+
+    return { success: true, membershipId };
   }
 
   /**

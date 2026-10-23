@@ -11,6 +11,7 @@ const inviteStaffSchema = z.object({
   email: z.string().email('Valid email is required'),
   role: z.enum(['manager', 'storekeeper', 'cashier', 'accountant']),
   branchIds: z.array(z.string()).optional(),
+  branchRoles: z.record(z.enum(['manager', 'storekeeper', 'cashier', 'accountant'])).optional(),
   defaultBranchId: z.string().optional(),
   scopeAllBranches: z.boolean().optional(),
   appKeys: z.array(z.string()).optional(),
@@ -19,9 +20,15 @@ const inviteStaffSchema = z.object({
 const updateMemberSchema = z.object({
   role: z.enum(['manager', 'storekeeper', 'cashier', 'accountant']).optional(),
   branchIds: z.array(z.string()).optional(),
+  branchRoles: z.record(z.enum(['manager', 'storekeeper', 'cashier', 'accountant'])).optional(),
   defaultBranchId: z.string().optional(),
   scopeAllBranches: z.boolean().optional(),
   appKeys: z.array(z.string()).optional(),
+});
+
+const branchRoleSchema = z.object({
+  branchId: z.string().min(1, 'Branch ID is required'),
+  role: z.enum(['manager', 'storekeeper', 'cashier', 'accountant']),
 });
 
 const acceptInviteSchema = z.object({
@@ -59,13 +66,14 @@ export async function staffProtectedRoutes(app: FastifyInstance) {
   app.addHook('preHandler', requireRole('owner', 'manager'));
 
   // 1. List staff and pending invitations
-  app.get('/', async (request: FastifyRequest<{ Params: { orgId: string } }>, reply: FastifyReply) => {
+  app.get('/', async (request: FastifyRequest<{ Params: { orgId: string }; Querystring: { branchId?: string } }>, reply: FastifyReply) => {
     const db = (request.server as { prisma?: typeof defaultPrisma }).prisma ?? defaultPrisma;
     const emailSender = (request.server as any).emailSender;
     const service = new StaffService(db, emailSender);
 
     const actor = getActorContext(request);
-    const data = await service.listStaff(request.params.orgId, actor);
+    const branchId = (request.query as any)?.branchId as string | undefined;
+    const data = await service.listStaff(request.params.orgId, actor, branchId);
     return sendData(reply, data, 200);
   });
 
@@ -106,6 +114,73 @@ export async function staffProtectedRoutes(app: FastifyInstance) {
     }
   );
 
+  // 3b. Update member's role specifically in a single branch
+  app.patch(
+    '/members/:membershipId/branch-role',
+    async (
+      request: FastifyRequest<{ Params: { orgId: string; membershipId: string } }>,
+      reply: FastifyReply
+    ) => {
+      const db = (request.server as { prisma?: typeof defaultPrisma }).prisma ?? defaultPrisma;
+      const service = new StaffService(db);
+
+      const dto = branchRoleSchema.parse(request.body);
+      const actor = getActorContext(request);
+      const result = await service.updateBranchRole(
+        request.params.orgId,
+        request.params.membershipId,
+        dto.branchId,
+        dto.role,
+        actor
+      );
+      return sendData(reply, result, 200);
+    }
+  );
+
+  // 3c. Revoke member's access to a single branch
+  app.delete(
+    '/members/:membershipId/branch-access/:branchId',
+    async (
+      request: FastifyRequest<{ Params: { orgId: string; membershipId: string; branchId: string } }>,
+      reply: FastifyReply
+    ) => {
+      const db = (request.server as { prisma?: typeof defaultPrisma }).prisma ?? defaultPrisma;
+      const service = new StaffService(db);
+
+      const actor = getActorContext(request);
+      const result = await service.revokeBranchAccess(
+        request.params.orgId,
+        request.params.membershipId,
+        request.params.branchId,
+        actor
+      );
+      return sendData(reply, result, 200);
+    }
+  );
+
+  // 3d. Assign member to a branch
+  app.post(
+    '/members/:membershipId/branch-access',
+    async (
+      request: FastifyRequest<{ Params: { orgId: string; membershipId: string } }>,
+      reply: FastifyReply
+    ) => {
+      const db = (request.server as { prisma?: typeof defaultPrisma }).prisma ?? defaultPrisma;
+      const service = new StaffService(db);
+
+      const dto = branchRoleSchema.parse(request.body);
+      const actor = getActorContext(request);
+      const result = await service.assignBranchAccess(
+        request.params.orgId,
+        request.params.membershipId,
+        dto.branchId,
+        dto.role,
+        actor
+      );
+      return sendData(reply, result, 201);
+    }
+  );
+
   // 4. Suspend a staff member
   app.post(
     '/members/:membershipId/suspend',
@@ -138,6 +213,26 @@ export async function staffProtectedRoutes(app: FastifyInstance) {
 
       const actor = getActorContext(request);
       const result = await service.reactivateMember(
+        request.params.orgId,
+        request.params.membershipId,
+        actor
+      );
+      return sendData(reply, result, 200);
+    }
+  );
+
+  // 5b. Permanently remove a staff member from the organization
+  app.delete(
+    '/members/:membershipId',
+    async (
+      request: FastifyRequest<{ Params: { orgId: string; membershipId: string } }>,
+      reply: FastifyReply
+    ) => {
+      const db = (request.server as { prisma?: typeof defaultPrisma }).prisma ?? defaultPrisma;
+      const service = new StaffService(db);
+
+      const actor = getActorContext(request);
+      const result = await service.removeMember(
         request.params.orgId,
         request.params.membershipId,
         actor

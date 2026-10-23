@@ -2,6 +2,7 @@ import { Prisma, PrismaClient } from '@prisma/client';
 import { prisma as defaultPrisma } from '../../infrastructure/database/client.js';
 import { AppError } from '../../lib/errors.js';
 import { inventoryCache } from '../../infrastructure/cache/in-memory-cache.js';
+import { eventBus } from '../../infrastructure/websocket/event-bus.js';
 import type {
   CreateStockReceiptInput,
   ListStockReceiptsQueryInput,
@@ -327,6 +328,39 @@ export class StockReceiptService {
     );
 
     this.invalidateStockCache(orgId, branchId);
+
+    try {
+      eventBus.broadcastToOrg(orgId, {
+        type: 'stock_receipt:created',
+        payload: {
+          branchId,
+          receiptId: result.id,
+          reference: result.reference,
+          lineCount: result.lineCount,
+          totalQuantity: result.totalQuantity,
+        },
+      });
+      eventBus.broadcastToOrg(orgId, {
+        type: 'stock:received',
+        payload: {
+          branchId,
+          receiptId: result.id,
+          items: result.items.map((i) => ({ productId: i.productId, quantity: i.quantityReceived })),
+        },
+      });
+      for (const item of result.items) {
+        eventBus.broadcastToOrg(orgId, {
+          type: 'stock_level:updated',
+          payload: {
+            branchId,
+            productId: item.productId,
+          },
+        });
+      }
+    } catch {
+      // Ignore
+    }
+
     return result;
   }
 

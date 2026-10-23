@@ -25,6 +25,7 @@ import { logout } from '../../lib/api/auth';
 import { ApiError } from '../../lib/api/client';
 import { useAuthStore } from '../../stores/auth-store';
 import { useNavigate } from 'react-router-dom';
+import { AccessRevocationModal } from '../../components/auth/AccessRevocationModal';
 
 function getErrorMessage(err: unknown, fallback: string): string {
   if (err instanceof ApiError) {
@@ -51,13 +52,14 @@ function TenantDashboardInner() {
     organization,
     membership,
     installedProducts,
+    isLoading,
     isEmailUnverified,
     installApp,
     uninstallApp,
     setPrimaryApp,
   } = useWorkspace();
 
-  const userRole = membership?.org_role || membership?.role || 'owner';
+  const userRole = membership?.org_role || membership?.role || (isLoading ? null : 'owner');
   const isOwner = userRole === 'owner';
   const isManager = userRole === 'manager';
   const isAdministrative = isOwner || isManager;
@@ -71,6 +73,68 @@ function TenantDashboardInner() {
   const [activeAppModal, setActiveAppModal] = React.useState<{ title: string; desc: string } | null>(null);
   const [isProfileMenuOpen, setIsProfileMenuOpen] = React.useState(false);
   const [selectedAppId, setSelectedAppId] = React.useState<string>('employees');
+  const [revocationModalOpen, setRevocationModalOpen] = React.useState(false);
+  const [isRolePulsing, setIsRolePulsing] = React.useState(false);
+
+  // Listen for real-time role changes
+  React.useEffect(() => {
+    const handleRoleChanged = (evt: Event) => {
+      const customEvt = evt as CustomEvent<{
+        newRole?: string;
+        oldRole?: string;
+      }>;
+      const { newRole } = customEvt.detail || {};
+      const roleTitle = newRole ? newRole.charAt(0).toUpperCase() + newRole.slice(1) : 'Team Member';
+
+      setIsRolePulsing(true);
+      setTimeout(() => setIsRolePulsing(false), 3500);
+
+      toast.info('Workspace Role Updated', {
+        description: `Your role was updated to ${roleTitle} by an administrator. Permissions refreshed.`,
+        duration: 5000,
+        id: 'realtime-role-changed-launchpad',
+      });
+
+      // If downgraded from administrative role, dismiss open administrative modals
+      if (newRole !== 'owner' && newRole !== 'manager') {
+        setIsMarketplaceOpen(false);
+        setActiveAppModal(null);
+      }
+    };
+
+    window.addEventListener('orvio:role-changed', handleRoleChanged);
+    return () => window.removeEventListener('orvio:role-changed', handleRoleChanged);
+  }, []);
+
+  // Listen for real-time organization suspension or removal
+  React.useEffect(() => {
+    const handleRevocation = (evt: Event) => {
+      const customEvt = evt as CustomEvent<{
+        type: string;
+        payload?: Record<string, unknown>;
+        orgId?: string;
+      }>;
+      const { type, payload } = customEvt.detail || {};
+      const targetUserId = payload?.userId as string | undefined;
+      const currentUserId = user?.id;
+
+      if (!targetUserId || !currentUserId || targetUserId !== currentUserId) {
+        return;
+      }
+
+      if (type === 'staff:suspended' || type === 'staff:removed') {
+        setRevocationModalOpen(true);
+      }
+    };
+
+    window.addEventListener('orvio:access-revoked', handleRevocation);
+    return () => window.removeEventListener('orvio:access-revoked', handleRevocation);
+  }, [user?.id]);
+
+  const handleProceedRevocation = () => {
+    clearSession();
+    window.location.href = `${getAccountsBaseUrl()}/login`;
+  };
 
   React.useEffect(() => {
     if (resendCooldown <= 0) return;
@@ -348,53 +412,73 @@ function TenantDashboardInner() {
                   />
                   <div className="absolute right-0 mt-2 w-56 rounded-2xl bg-[#181a20] border border-white/10 shadow-2xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150">
                     <div className="px-3 py-2 border-b border-white/5 mb-1">
-                      <div className="text-xs font-bold text-white truncate">
-                        {user?.fullName || 'Tenant Admin'}
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-xs font-bold text-white truncate">
+                          {user?.fullName || 'Tenant Admin'}
+                        </div>
+                        {userRole && (
+                          <span
+                            className={`text-[9px] uppercase tracking-wider font-extrabold px-1.5 py-0.5 rounded-full bg-[#fbb945]/15 text-[#fbb945] border border-[#fbb945]/30 transition-all ${
+                              isRolePulsing ? 'animate-bounce ring-2 ring-[#fbb945]' : ''
+                            }`}
+                          >
+                            {userRole}
+                          </span>
+                        )}
                       </div>
-                      <div className="text-[10px] text-slate-400 font-mono truncate">
+                      <div className="text-[10px] text-slate-400 font-mono truncate mt-0.5">
                         {user?.email || 'admin@orvio.app'}
                       </div>
                     </div>
 
-                    {isOwner && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setIsProfileMenuOpen(false);
-                          setIsMarketplaceOpen(true);
-                        }}
-                        className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-slate-300 hover:text-white hover:bg-white/5 transition-colors cursor-pointer text-left"
-                      >
-                        <Grid className="h-3.5 w-3.5 text-indigo-400" />
-                        <span>App Marketplace</span>
-                      </button>
-                    )}
-
-                    {isAdministrative && (
+                    {isLoading && !membership ? (
+                      <div data-testid="profile-dropdown-skeleton" className="py-2 px-3 space-y-2.5">
+                        <div className="h-3.5 bg-white/10 rounded-md animate-pulse w-3/4" />
+                        <div className="h-3.5 bg-white/10 rounded-md animate-pulse w-5/6" />
+                      </div>
+                    ) : (
                       <>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setIsProfileMenuOpen(false);
-                            showRedirectPopup('Settings', 'Opening organization settings...');
-                          }}
-                          className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-slate-300 hover:text-white hover:bg-white/5 transition-colors cursor-pointer text-left"
-                        >
-                          <Settings className="h-3.5 w-3.5 text-amber-400" />
-                          <span>Organization Settings</span>
-                        </button>
+                        {isOwner && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsProfileMenuOpen(false);
+                              setIsMarketplaceOpen(true);
+                            }}
+                            className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-slate-300 hover:text-white hover:bg-white/5 transition-colors cursor-pointer text-left"
+                          >
+                            <Grid className="h-3.5 w-3.5 text-indigo-400" />
+                            <span>App Marketplace</span>
+                          </button>
+                        )}
 
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setIsProfileMenuOpen(false);
-                            showRedirectPopup('Employees', 'Opening staff & role management...');
-                          }}
-                          className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-slate-300 hover:text-white hover:bg-white/5 transition-colors cursor-pointer text-left"
-                        >
-                          <Users className="h-3.5 w-3.5 text-purple-400" />
-                          <span>Manage Employees</span>
-                        </button>
+                        {isAdministrative && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIsProfileMenuOpen(false);
+                                showRedirectPopup('Settings', 'Opening organization settings...');
+                              }}
+                              className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-slate-300 hover:text-white hover:bg-white/5 transition-colors cursor-pointer text-left"
+                            >
+                              <Settings className="h-3.5 w-3.5 text-amber-400" />
+                              <span>Organization Settings</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIsProfileMenuOpen(false);
+                                showRedirectPopup('Employees', 'Opening staff & role management...');
+                              }}
+                              className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-slate-300 hover:text-white hover:bg-white/5 transition-colors cursor-pointer text-left"
+                            >
+                              <Users className="h-3.5 w-3.5 text-purple-400" />
+                              <span>Manage Employees</span>
+                            </button>
+                          </>
+                        )}
                       </>
                     )}
 
@@ -416,7 +500,7 @@ function TenantDashboardInner() {
         </header>
 
         {/* Email Verification Reminder if unverified */}
-        {isEmailUnverified && (
+        {!isLoading && isEmailUnverified && Boolean(user?.email) && (
           <div className="bg-amber-500/15 border-b border-amber-500/25 px-4 py-2 backdrop-blur-md">
             <div className="max-w-4xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2 text-center sm:text-left">
               <div className="flex items-center gap-2 text-xs text-amber-200">
@@ -443,39 +527,57 @@ function TenantDashboardInner() {
         <main className="flex-1 flex flex-col items-center justify-center py-12 px-4 sm:px-6 max-w-5xl mx-auto w-full">
           {/* Centered Launchpad with transparent icon graphics */}
           <div className="w-full max-w-3xl mx-auto">
-            <div className="flex flex-wrap items-center justify-center gap-8 sm:gap-12">
-              {allTiles.map((app) => {
-                const isSelected = selectedAppId === app.id;
-
-                return (
+            {isLoading && allTiles.length === 0 ? (
+              <div className="flex flex-wrap items-center justify-center gap-8 sm:gap-12 animate-in fade-in duration-300">
+                {[0, 1, 2, 3].map((i) => (
                   <div
-                    key={app.id}
-                    onClick={() => {
-                      setSelectedAppId(app.id);
-                      if (app.onClick) app.onClick();
-                    }}
-                    className="flex flex-col items-center group cursor-pointer select-none transition-all w-20"
+                    key={`skeleton-tile-${i}`}
+                    data-testid="launchpad-skeleton-tile"
+                    className="flex flex-col items-center select-none w-20"
                   >
-                    {/* Transparent icon container with smooth hover lift */}
-                    <div className="relative flex flex-col items-center">
-                      <div className="transition-transform duration-200 group-hover:-translate-y-2 group-hover:scale-105">
-                        {app.iconRenderer}
-                      </div>
+                    <div className="w-14 h-14 rounded-2xl bg-white/[0.06] border border-white/10 animate-pulse flex items-center justify-center shadow-lg relative overflow-hidden">
+                      <div className="absolute inset-0 bg-gradient-to-tr from-white/0 via-white/[0.05] to-white/0" />
+                      <div className="w-6 h-6 rounded-lg bg-white/10" />
                     </div>
-
-                    {/* App Label */}
-                    <span
-                      className={`text-xs font-medium mt-2.5 text-center transition-colors truncate max-w-[85px] ${isSelected
-                          ? 'text-white font-semibold'
-                          : 'text-slate-300 group-hover:text-white'
-                        }`}
-                    >
-                      {app.name}
-                    </span>
+                    <div className="h-2.5 w-12 bg-white/10 rounded-full mt-3 animate-pulse" />
                   </div>
-                );
-              })}
-            </div>
+                ))}
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center justify-center gap-8 sm:gap-12 animate-in fade-in duration-200">
+                {allTiles.map((app) => {
+                  const isSelected = selectedAppId === app.id;
+
+                  return (
+                    <div
+                      key={app.id}
+                      onClick={() => {
+                        setSelectedAppId(app.id);
+                        if (app.onClick) app.onClick();
+                      }}
+                      className="flex flex-col items-center group cursor-pointer select-none transition-all w-20"
+                    >
+                      {/* Transparent icon container with smooth hover lift */}
+                      <div className="relative flex flex-col items-center">
+                        <div className="transition-transform duration-200 group-hover:-translate-y-2 group-hover:scale-105">
+                          {app.iconRenderer}
+                        </div>
+                      </div>
+
+                      {/* App Label */}
+                      <span
+                        className={`text-xs font-medium mt-2.5 text-center transition-colors truncate max-w-[85px] ${isSelected
+                            ? 'text-white font-semibold'
+                            : 'text-slate-300 group-hover:text-white'
+                          }`}
+                      >
+                        {app.name}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </main>
       </div>
@@ -517,6 +619,14 @@ function TenantDashboardInner() {
           </div>
         </div>
       )}
+
+      {/* Real-time Organization Access Revocation / Ejection Modal */}
+      <AccessRevocationModal
+        isOpen={revocationModalOpen}
+        type="organization"
+        organizationName={orgName}
+        onProceed={handleProceedRevocation}
+      />
 
       {/* App Store & Marketplace Modal */}
       <AppMarketplaceModal

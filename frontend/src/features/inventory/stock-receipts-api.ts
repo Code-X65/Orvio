@@ -65,6 +65,8 @@ export interface ListStockReceiptsResponse {
   };
 }
 
+export type StockReceiptsResponse = ListStockReceiptsResponse;
+
 export interface CreateStockReceiptPayload {
   branchId: string;
   supplierId: string;

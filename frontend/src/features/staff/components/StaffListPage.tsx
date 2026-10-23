@@ -72,6 +72,8 @@ export function StaffListPage({
   const [isInviteModalOpen, setIsInviteModalOpen] = React.useState(false);
   const [editingMember, setEditingMember] = React.useState<StaffMember | null>(null);
   const [openActionMenuId, setOpenActionMenuId] = React.useState<string | null>(null);
+  const [confirmRemoveMember, setConfirmRemoveMember] = React.useState<StaffMember | null>(null);
+  const [isRemoving, setIsRemoving] = React.useState(false);
 
   const orgId = organization?.id || '';
 
@@ -94,6 +96,19 @@ export function StaffListPage({
 
   React.useEffect(() => {
     loadData();
+  }, [loadData]);
+
+  // Live-refresh staff table whenever an admin updates, suspends, or removes a member
+  React.useEffect(() => {
+    const handleRealtimeSync = () => {
+      loadData();
+    };
+    window.addEventListener('orvio:access-revoked', handleRealtimeSync);
+    window.addEventListener('orvio:staff-updated', handleRealtimeSync);
+    return () => {
+      window.removeEventListener('orvio:access-revoked', handleRealtimeSync);
+      window.removeEventListener('orvio:staff-updated', handleRealtimeSync);
+    };
   }, [loadData]);
 
   // Close kebab menu on outside click
@@ -140,6 +155,22 @@ export function StaffListPage({
       loadData();
     } catch (err: any) {
       toast.error(err.message || 'Failed to revoke invitation');
+    }
+  };
+
+  // Permanently remove staff member from organization
+  const handleConfirmRemove = async () => {
+    if (!confirmRemoveMember) return;
+    setIsRemoving(true);
+    try {
+      await staffApi.removeMember(orgId, confirmRemoveMember.membershipId);
+      toast.success(`Removed ${confirmRemoveMember.fullName} from organization`);
+      setConfirmRemoveMember(null);
+      loadData();
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to remove member');
+    } finally {
+      setIsRemoving(false);
     }
   };
 
@@ -340,7 +371,13 @@ export function StaffListPage({
                   </tr>
                 ) : (
                   filteredMembers.map((m) => {
-                    const badge = ROLE_BADGES[m.role] || ROLE_BADGES.storekeeper;
+                    const effectiveRole =
+                      activeBranchId && activeBranchId !== 'all'
+                        ? (m.branchRoles && m.branchRoles[activeBranchId]) ||
+                          m.branches.find((b) => b.id === activeBranchId)?.role ||
+                          m.role
+                        : m.role;
+                    const badge = ROLE_BADGES[effectiveRole] || ROLE_BADGES.storekeeper;
                     const initials = m.fullName
                       .split(' ')
                       .map((n) => n[0])
@@ -494,6 +531,22 @@ export function StaffListPage({
                                       <span>Reactivate Access</span>
                                     </button>
                                   )}
+
+                                  {m.role !== 'owner' && (
+                                    <>
+                                      <div className="border-t border-[#2b2f3a] my-1" />
+                                      <button
+                                        onClick={() => {
+                                          setConfirmRemoveMember(m);
+                                          setOpenActionMenuId(null);
+                                        }}
+                                        className="w-full px-3.5 py-2 text-left text-rose-400 hover:bg-rose-500/10 flex items-center gap-2 font-medium"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                                        <span>Remove from Org</span>
+                                      </button>
+                                    </>
+                                  )}
                                 </div>
                               )}
                             </div>
@@ -620,7 +673,84 @@ export function StaffListPage({
         member={editingMember}
         branches={branches}
         actorRole={actorRole}
+        contextBranchId={activeBranchId}
+        activeBranchId={activeBranchId}
+        activeBranchName={branches.find((b) => b.id === activeBranchId)?.name}
       />
+
+      {/* Remove Staff Confirmation Modal */}
+      {confirmRemoveMember && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-fade-in">
+          <div className="bg-[#181a20] border border-[#2b2f3a] rounded-xl w-full max-w-md overflow-hidden shadow-2xl animate-scale-in">
+            <div className="p-6 space-y-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-rose-500/15 border border-rose-500/30 flex items-center justify-center shrink-0">
+                  <Trash2 className="w-5 h-5 text-rose-400" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">Remove Staff Member</h3>
+                  <p className="text-xs text-slate-400">
+                    Permanently revoke organization access
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-3 text-xs text-slate-300 leading-relaxed">
+                <p>
+                  Are you sure you want to remove{' '}
+                  <span className="font-semibold text-white">
+                    {confirmRemoveMember.fullName}
+                  </span>{' '}
+                  (<span className="text-slate-400">{confirmRemoveMember.email}</span>) from{' '}
+                  <span className="font-medium text-white">{organization?.name || 'this organization'}</span>?
+                </p>
+
+                <div className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-lg text-[11px] text-rose-300 space-y-1">
+                  <div className="font-semibold text-rose-400 flex items-center gap-1.5">
+                    <span>Notice: Immediate Realtime Ejection</span>
+                  </div>
+                  <p>
+                    All branch authorization and membership privileges will be revoked immediately. If this staff member is actively logged in on any device or tab, they will be disconnected in real-time.
+                  </p>
+                </div>
+
+                <p className="text-[11px] text-slate-400 italic">
+                  Note: Their underlying personal account credentials will remain preserved and can still be used for personal profiles or other workspaces.
+                </p>
+              </div>
+
+              <div className="pt-2 flex items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setConfirmRemoveMember(null)}
+                  disabled={isRemoving}
+                  className="px-4 py-2 text-xs font-semibold text-slate-300 hover:text-white bg-transparent hover:bg-white/5 rounded-lg transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmRemove}
+                  disabled={isRemoving}
+                  className="px-4 py-2 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-lg shadow-md shadow-rose-600/30 disabled:opacity-50 transition-all flex items-center gap-1.5"
+                >
+                  {isRemoving ? (
+                    <>
+                      <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      <span>Removing...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Confirm Remove</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -53,11 +53,37 @@ export function hasPermission(role: org_role, capability: Capability): boolean {
 }
 
 /**
+ * Resolves the effective role for the current request, taking into account
+ * any target branch specified in headers (x-branch-id), query parameters, or route params.
+ */
+export function resolveEffectiveRole(request: FastifyRequest, targetBranchId?: string): org_role {
+  const membership = request.auth?.membership;
+  const baseRole = (membership?.org_role || 'member') as org_role;
+  if (baseRole === 'owner') return 'owner';
+
+  const branchId =
+    targetBranchId ||
+    (request.headers?.['x-branch-id'] as string) ||
+    ((request.query as any)?.branchId as string) ||
+    ((request.params as any)?.branchId as string);
+
+  if (branchId && membership?.branch_accesses) {
+    const branchAccess = membership.branch_accesses.find((ba) => ba.branch_id === branchId);
+    if (branchAccess?.role) {
+      return branchAccess.role;
+    }
+  }
+
+  return baseRole;
+}
+
+/**
  * Fastify preHandler to require one of the specified org roles.
+ * Resolves per-branch role if a target branch is specified in the request.
  */
 export function requireRole(...allowedRoles: org_role[]) {
   return async function (request: FastifyRequest): Promise<void> {
-    const role = request.auth?.membership?.org_role;
+    const role = resolveEffectiveRole(request);
     if (!role) {
       throw new AppError('UNAUTHORIZED', 'No active membership role found', 401);
     }
@@ -65,7 +91,7 @@ export function requireRole(...allowedRoles: org_role[]) {
     if (!allowedRoles.includes(role)) {
       throw new AppError(
         'FORBIDDEN',
-        `Role '${role}' is not authorized to perform this action`,
+        `Role '${role}' is not authorized to perform this action on this branch`,
         403
       );
     }
@@ -74,10 +100,11 @@ export function requireRole(...allowedRoles: org_role[]) {
 
 /**
  * Fastify preHandler to require a specific business capability.
+ * Resolves per-branch role if a target branch is specified in the request.
  */
 export function requirePermission(capability: Capability) {
   return async function (request: FastifyRequest): Promise<void> {
-    const role = request.auth?.membership?.org_role;
+    const role = resolveEffectiveRole(request);
     if (!role) {
       throw new AppError('UNAUTHORIZED', 'No active membership role found', 401);
     }
@@ -85,7 +112,7 @@ export function requirePermission(capability: Capability) {
     if (!hasPermission(role, capability)) {
       throw new AppError(
         'FORBIDDEN',
-        `Role '${role}' lacks the '${capability}' permission`,
+        `Role '${role}' lacks the '${capability}' permission on this branch`,
         403
       );
     }

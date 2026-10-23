@@ -69,15 +69,17 @@ export function InviteStaffModal({
   contextBranchId,
   installedApps = DEFAULT_WORKSPACE_APPS,
 }: InviteStaffModalProps) {
+  const isBranchContext = Boolean(contextBranchId && contextBranchId !== 'all');
   const [email, setEmail] = React.useState('');
   const [selectedRole, setSelectedRole] = React.useState<OrgRole>('storekeeper');
   const [scopeAll, setScopeAll] = React.useState(false);
   const [selectedBranchIds, setSelectedBranchIds] = React.useState<string[]>(() => {
-    if (contextBranchId) return [contextBranchId];
+    if (isBranchContext && contextBranchId) return [contextBranchId];
     return branches.length > 0 ? [branches[0].id] : [];
   });
+  const [branchRoles, setBranchRoles] = React.useState<Record<string, OrgRole>>({});
   const [defaultBranchId, setDefaultBranchId] = React.useState<string>(() => {
-    if (contextBranchId) return contextBranchId;
+    if (isBranchContext && contextBranchId) return contextBranchId;
     return branches.length > 0 ? branches[0].id : '';
   });
   const [selectedApps, setSelectedApps] = React.useState<string[]>(() => {
@@ -99,13 +101,13 @@ export function InviteStaffModal({
       setEmail('');
       setSelectedRole(availableRoles[0]?.role || 'storekeeper');
       setScopeAll(false);
-      const initialBranchIds = contextBranchId
+      const initialBranchIds = isBranchContext && contextBranchId
         ? [contextBranchId]
         : branches.length > 0
         ? [branches[0].id]
         : [];
       setSelectedBranchIds(initialBranchIds);
-      setDefaultBranchId(contextBranchId || (branches.length > 0 ? branches[0].id : ''));
+      setDefaultBranchId((isBranchContext && contextBranchId) || (branches.length > 0 ? branches[0].id : ''));
       setSelectedApps(
         contextApp
           ? [contextApp.toLowerCase()]
@@ -113,7 +115,7 @@ export function InviteStaffModal({
       );
       setErrorMsg(null);
     }
-  }, [isOpen, branches, availableRoles, contextApp, contextBranchId, installedApps]);
+  }, [isOpen, branches, availableRoles, contextApp, contextBranchId, isBranchContext, installedApps]);
 
   if (!isOpen) return null;
 
@@ -136,6 +138,10 @@ export function InviteStaffModal({
         next = prev.filter((id) => id !== branchId);
       } else {
         next = [...prev, branchId];
+        setBranchRoles((roles) => ({
+          ...roles,
+          [branchId]: roles[branchId] || selectedRole,
+        }));
       }
       if (!next.includes(defaultBranchId)) {
         setDefaultBranchId(next[0] || '');
@@ -166,12 +172,25 @@ export function InviteStaffModal({
 
     setIsSubmitting(true);
     try {
+      const finalBranchIds = isBranchContext && contextBranchId
+        ? [contextBranchId]
+        : scopeAll
+        ? undefined
+        : selectedBranchIds;
+      const finalBranchRoles = isBranchContext && contextBranchId
+        ? { [contextBranchId]: selectedRole }
+        : scopeAll
+        ? undefined
+        : branchRoles;
+      const finalDefaultBranchId = (isBranchContext && contextBranchId) || (scopeAll ? undefined : defaultBranchId);
+
       await staffApi.inviteStaff(orgId, {
         email: cleanEmail,
         role: selectedRole,
-        branchIds: scopeAll ? undefined : selectedBranchIds,
-        defaultBranchId: scopeAll ? undefined : defaultBranchId,
-        scopeAllBranches: scopeAll,
+        branchIds: finalBranchIds,
+        branchRoles: finalBranchRoles,
+        defaultBranchId: finalDefaultBranchId,
+        scopeAllBranches: isBranchContext ? false : scopeAll,
         appKeys: selectedApps,
       });
 
@@ -335,7 +354,7 @@ export function InviteStaffModal({
                 Branch Access Scoping
               </label>
 
-              {actorRole === 'owner' && (
+              {!isBranchContext && actorRole === 'owner' && (
                 <label className="inline-flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
                   <input
                     type="checkbox"
@@ -348,7 +367,33 @@ export function InviteStaffModal({
               )}
             </div>
 
-            {!scopeAll ? (
+            {isBranchContext ? (
+              <div className="bg-[#121418] border border-[#2b2f3a] rounded-lg p-3 flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-[#714b67]/20 border border-[#714b67]/30 flex items-center justify-center text-purple-300">
+                    <Building2 className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold text-slate-200">
+                        {branches.find((b) => b.id === contextBranchId)?.name || 'Active Branch'}
+                      </span>
+                      {branches.find((b) => b.id === contextBranchId)?.code && (
+                        <span className="text-[10px] text-slate-400 bg-white/5 px-1.5 py-0.5 rounded">
+                          {branches.find((b) => b.id === contextBranchId)?.code}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-slate-400 mt-0.5">
+                      Staff will be granted access exclusively to this branch upon accepting the invitation.
+                    </p>
+                  </div>
+                </div>
+                <span className="text-[10px] bg-purple-500/10 text-purple-400 border border-purple-500/20 px-2 py-0.5 rounded font-medium shrink-0">
+                  Active Context
+                </span>
+              </div>
+            ) : !scopeAll ? (
               <div className="bg-[#121418] border border-[#2b2f3a] rounded-lg p-3 space-y-2">
                 <div className="text-[11px] text-slate-400 mb-2 flex items-center justify-between">
                   <span>Select authorized branches:</span>
@@ -389,17 +434,36 @@ export function InviteStaffModal({
                         </label>
 
                         {isChecked && (
-                          <button
-                            type="button"
-                            onClick={() => setDefaultBranchId(b.id)}
-                            className={`text-[10px] px-2 py-0.5 rounded transition-all font-medium ${
-                              isDefault
-                                ? 'bg-[#714b67] text-white'
-                                : 'text-slate-400 hover:text-white bg-white/5'
-                            }`}
-                          >
-                            {isDefault ? 'Default Branch' : 'Set Default'}
-                          </button>
+                          <div className="flex items-center gap-2">
+                            <select
+                              value={branchRoles[b.id] || selectedRole}
+                              onChange={(e) => {
+                                const newRole = e.target.value as OrgRole;
+                                setBranchRoles((prev) => ({ ...prev, [b.id]: newRole }));
+                              }}
+                              className="bg-[#181a20] border border-[#2b2f3a] text-slate-200 text-[11px] rounded px-2 py-0.5 focus:outline-none focus:border-[#714b67]"
+                              title="Role for this branch"
+                              data-testid={`invite-branch-role-select-${b.id}`}
+                            >
+                              {availableRoles.map((r) => (
+                                <option key={r.role} value={r.role}>
+                                  {r.title}
+                                </option>
+                              ))}
+                            </select>
+
+                            <button
+                              type="button"
+                              onClick={() => setDefaultBranchId(b.id)}
+                              className={`text-[10px] px-2 py-0.5 rounded transition-all font-medium ${
+                                isDefault
+                                  ? 'bg-[#714b67] text-white'
+                                  : 'text-slate-400 hover:text-white bg-white/5'
+                              }`}
+                            >
+                              {isDefault ? 'Default Branch' : 'Set Default'}
+                            </button>
+                          </div>
                         )}
                       </div>
                     );

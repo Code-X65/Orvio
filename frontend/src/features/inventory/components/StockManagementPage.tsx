@@ -35,6 +35,7 @@ import {
   useStockSummary,
   useStockList,
   useStockMovements,
+  useStockReceipts,
 } from '../hooks/useStock';
 import { ReceiveStockModal } from './ReceiveStockModal';
 import { AdjustStockModal } from './AdjustStockModal';
@@ -100,12 +101,40 @@ export function StockManagementPage({
   const [receiptSearch, setReceiptSearch] = React.useState('');
   const [receiptSupplierFilter, setReceiptSupplierFilter] = React.useState<string>('all');
   const [receiptPage, setReceiptPage] = React.useState(1);
-  const [receiptsList, setReceiptsList] = React.useState<StockReceipt[]>([]);
-  const [receiptTotalPages, setReceiptTotalPages] = React.useState(1);
-  const [receiptTotalCount, setReceiptTotalCount] = React.useState(0);
-  const [isLoadingReceipts, setIsLoadingReceipts] = React.useState(false);
   const [inspectReceiptId, setInspectReceiptId] = React.useState<string | null>(null);
   const [suppliersList, setSuppliersList] = React.useState<Supplier[]>([]);
+
+  // Real-time stock update row pulse state
+  const [pulsedProductIds, setPulsedProductIds] = React.useState<Set<string>>(new Set());
+
+  React.useEffect(() => {
+    const handleStockUpdate = (e: Event) => {
+      const customEvent = e as CustomEvent<{ productIds?: string[]; branchId?: string }>;
+      const ids = customEvent.detail?.productIds || [];
+      if (ids.length === 0) return;
+
+      setPulsedProductIds((prev) => {
+        const next = new Set(prev);
+        ids.forEach((id) => next.add(id));
+        return next;
+      });
+
+      const timer = setTimeout(() => {
+        setPulsedProductIds((prev) => {
+          const next = new Set(prev);
+          ids.forEach((id) => next.delete(id));
+          return next;
+        });
+      }, 2500);
+
+      return () => clearTimeout(timer);
+    };
+
+    window.addEventListener('orvio:stock-updated', handleStockUpdate);
+    return () => {
+      window.removeEventListener('orvio:stock-updated', handleStockUpdate);
+    };
+  }, []);
 
   // URL Action State for deep-linking & session resumption
   const {
@@ -131,7 +160,7 @@ export function StockManagementPage({
     }
   }, [activeAction]);
 
-  // Queries
+  // Queries (with instant SWR hydration)
   const { data: summary, isLoading: isLoadingSummary, refetch: refetchSummary } = useStockSummary(effectiveBranchId);
 
   const {
@@ -157,25 +186,21 @@ export function StockManagementPage({
     limit: 20,
   });
 
-  const fetchReceipts = React.useCallback(async () => {
-    setIsLoadingReceipts(true);
-    try {
-      const res = await stockReceiptsApi.listReceipts({
-        branchId: effectiveBranchId,
-        supplierId: receiptSupplierFilter !== 'all' ? receiptSupplierFilter : undefined,
-        search: receiptSearch.trim() || undefined,
-        page: receiptPage,
-        limit: 20,
-      });
-      setReceiptsList(res.receipts);
-      setReceiptTotalPages(res.pagination.totalPages);
-      setReceiptTotalCount(res.pagination.total);
-    } catch {
-      // ignore
-    } finally {
-      setIsLoadingReceipts(false);
-    }
-  }, [effectiveBranchId, receiptSupplierFilter, receiptSearch, receiptPage]);
+  const {
+    data: receiptsData,
+    isLoading: isLoadingReceipts,
+    refetch: refetchReceipts,
+  } = useStockReceipts({
+    branchId: effectiveBranchId,
+    supplierId: receiptSupplierFilter !== 'all' ? receiptSupplierFilter : undefined,
+    search: receiptSearch.trim() || undefined,
+    page: receiptPage,
+    limit: 20,
+  });
+
+  const receiptsList = receiptsData?.receipts || [];
+  const receiptTotalPages = receiptsData?.pagination?.totalPages || 1;
+  const receiptTotalCount = receiptsData?.pagination?.total || 0;
 
   // Load suppliers list for receipt filtering
   React.useEffect(() => {
@@ -184,19 +209,11 @@ export function StockManagementPage({
     })?.catch(() => {});
   }, []);
 
-  React.useEffect(() => {
-    if (activeSubTab === 'receipts') {
-      fetchReceipts();
-    }
-  }, [activeSubTab, fetchReceipts]);
-
   const handleRefreshAll = () => {
     refetchSummary();
     refetchStock();
     refetchMovements();
-    if (activeSubTab === 'receipts') {
-      fetchReceipts();
-    }
+    refetchReceipts();
   };
 
   const effectiveBranchName = React.useMemo(() => {
@@ -283,6 +300,11 @@ export function StockManagementPage({
 
         {/* Global Stock Actions Toolbar */}
         <div className="flex items-center gap-2">
+          {/* Live Sync Status Pill */}
+          <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#181a20] border border-[#2d3139] text-[11px] text-slate-400">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            <span>Live Sync</span>
+          </div>
           <Button
             variant="outline"
             size="sm"
@@ -673,8 +695,18 @@ export function StockManagementPage({
                       </td>
                     </tr>
                   ) : (
-                    items.map((item) => (
-                      <tr key={item.id} className="hover:bg-[#1a1b22] transition-colors">
+                    items.map((item) => {
+                      const isPulsed = pulsedProductIds.has(item.productId);
+                      return (
+                        <tr
+                          key={item.id}
+                          data-testid={`stock-row-${item.productId}`}
+                          className={`transition-all duration-500 ${
+                            isPulsed
+                              ? 'bg-emerald-500/15 ring-1 ring-inset ring-emerald-500/60 animate-pulse'
+                              : 'hover:bg-[#1a1b22]'
+                          }`}
+                        >
                         <td className="py-3 px-4">
                           <div className="flex items-center gap-2">
                             <span className="font-semibold text-slate-200">{item.productName}</span>
@@ -749,8 +781,9 @@ export function StockManagementPage({
                             </Button>
                           </div>
                         </td>
-                      </tr>
-                    ))
+                        </tr>
+                      );
+                    })
                   )}
                 </tbody>
               </table>
@@ -986,7 +1019,7 @@ export function StockManagementPage({
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={fetchReceipts}
+                  onClick={() => refetchReceipts()}
                   className="h-8 text-xs border-[#2d3139] text-slate-300 hover:bg-white/5"
                   title="Refresh receipts"
                 >
@@ -1048,7 +1081,7 @@ export function StockManagementPage({
                         </td>
                       </tr>
                     ) : (
-                      receiptsList.map((rcpt) => (
+                      receiptsList.map((rcpt: StockReceipt) => (
                         <tr
                           key={rcpt.id}
                           className="hover:bg-[#181a20]/80 transition-colors cursor-pointer group"

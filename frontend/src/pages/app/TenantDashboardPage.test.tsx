@@ -113,4 +113,85 @@ describe('TenantDashboardPage Role-based Isolation', () => {
     expect(screen.getByText('Apps')).toBeInTheDocument();
     expect(screen.getByText('Settings')).toBeInTheDocument();
   });
+
+  it('renders 4 skeleton tiles on launchpad and hides admin tools during cold load', () => {
+    vi.mocked(workspaceModule.useWorkspace).mockReturnValue({
+      user: { id: 'u1', email: 'staff@example.com', fullName: 'Staff User', status: 'active' },
+      organization: { id: 'org1', name: 'Acme Supermarket', subdomain: 'acme', status: 'active' },
+      membership: null,
+      branch: null,
+      branches: [],
+      installedProducts: [],
+      isLoading: true,
+      isEmailVerified: false,
+      isEmailUnverified: true,
+      hasProduct: vi.fn(),
+      can: vi.fn(),
+      installApp: vi.fn(),
+      uninstallApp: vi.fn(),
+      setPrimaryApp: vi.fn(),
+      refreshWorkspace: vi.fn(),
+    });
+
+    render(
+      <BrowserRouter>
+        <TenantDashboardPage />
+      </BrowserRouter>
+    );
+
+    // Should display 4 pulsing skeleton tiles
+    const skeletonTiles = screen.getAllByTestId('launchpad-skeleton-tile');
+    expect(skeletonTiles).toHaveLength(4);
+
+    // Administrative tools and apps should not pop in prematurely
+    expect(screen.queryByText('Employees')).not.toBeInTheDocument();
+    expect(screen.queryByText('Apps')).not.toBeInTheDocument();
+    expect(screen.queryByText('Settings')).not.toBeInTheDocument();
+
+    // Email verification banner should not flash during loading
+    expect(screen.queryByText(/Please verify your organization email/i)).not.toBeInTheDocument();
+  });
+
+  it('renders skeleton items inside profile dropdown when opened during cold load', async () => {
+    vi.mocked(workspaceModule.useWorkspace).mockReturnValue({
+      user: { id: 'u1', email: 'staff@example.com', fullName: 'Staff User', status: 'active' },
+      organization: { id: 'org1', name: 'Acme Supermarket', subdomain: 'acme', status: 'active' },
+      membership: null,
+      branch: null,
+      branches: [],
+      installedProducts: [],
+      isLoading: true,
+      isEmailVerified: false,
+      isEmailUnverified: true,
+      hasProduct: vi.fn(),
+      can: vi.fn(),
+      installApp: vi.fn(),
+      uninstallApp: vi.fn(),
+      setPrimaryApp: vi.fn(),
+      refreshWorkspace: vi.fn(),
+    });
+
+    const { fireEvent } = await import('@testing-library/react');
+
+    render(
+      <BrowserRouter>
+        <TenantDashboardPage />
+      </BrowserRouter>
+    );
+
+    // Click avatar button to open dropdown (userInitials = 'SU' for 'Staff User')
+    const avatarButton = screen.getByText('SU');
+    fireEvent.click(avatarButton);
+
+    // Dropdown skeleton should be visible
+    expect(screen.getByTestId('profile-dropdown-skeleton')).toBeInTheDocument();
+
+    // Sensitive owner/administrative dropdown options must not be visible
+    expect(screen.queryByText('App Marketplace')).not.toBeInTheDocument();
+    expect(screen.queryByText('Organization Settings')).not.toBeInTheDocument();
+    expect(screen.queryByText('Manage Employees')).not.toBeInTheDocument();
+
+    // Sign out button should still be present
+    expect(screen.getByText('Sign Out')).toBeInTheDocument();
+  });
 });

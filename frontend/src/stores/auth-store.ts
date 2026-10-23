@@ -42,6 +42,7 @@ export interface AuthState {
   setSession: (accessToken: string, user: AuthUser, organization: AuthOrganization, status?: AuthStatus, fromSync?: boolean) => void;
   setAccessToken: (accessToken: string, fromSync?: boolean) => void;
   clearSession: (fromSync?: boolean, preserveDrafts?: boolean) => void;
+  refreshToken: () => Promise<void>;
   hydrate: (force?: boolean) => Promise<void>;
 }
 
@@ -271,6 +272,16 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       try {
         localStorage.removeItem(AUTH_STORAGE_KEY);
         sessionStorage.removeItem('orvio_session_state');
+        Object.keys(localStorage).forEach((key) => {
+          if (
+            key.startsWith('orvio_workspace_cache_') ||
+            key.startsWith('orvio_catalog_p1_') ||
+            key.startsWith('orvio_stock_') ||
+            key.startsWith('orvio_receipts_')
+          ) {
+            localStorage.removeItem(key);
+          }
+        });
       } catch {
         // Ignore storage errors
       }
@@ -281,6 +292,23 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       } catch {
         // Ignore broadcast errors
       }
+    }
+  },
+
+  refreshToken: async () => {
+    try {
+      const { refreshSession } = await import('../lib/api/auth');
+      const response = await refreshSession();
+      if (response.accessToken && response.user && response.organization) {
+        get().setSession(
+          response.accessToken,
+          response.user,
+          response.organization,
+          response.user.emailVerifiedAt ? 'authenticated' : 'pending-verification'
+        );
+      }
+    } catch {
+      // Ignore background refresh errors
     }
   },
 
